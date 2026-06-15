@@ -7,6 +7,11 @@ __pycache__/
 _selftest_out/
 _build_out/
 
+# 시험 렌더 생성물 (compare_mapping.py 재실행으로 재생성 가능, 무거움)
+grading_compare/*.pdf
+grading_compare/previewA/
+grading_compare/previewB/
+
 # 가상환경
 .venv/
 venv/
