@@ -1,0 +1,18 @@
+# Python 캐시 (자동 생성, 백업 불필요)
+__pycache__/
+*.pyc
+*.pyo
+
+# 엔진 실행 시 생성되는 임시 출력물 (재생성 가능)
+_selftest_out/
+_build_out/
+
+# 가상환경
+.venv/
+venv/
+env/
+
+# OS/에디터 부산물
+Thumbs.db
+.DS_Store
+*.swp
