@@ -1,0 +1,114 @@
+<!-- @dsCard group="grader · 정적 핸드오프" viewport="1080x900" name="정적 핸드오프 — 런처" subtitle="CLI 구현자용 정적 HTML/CSS 번들 안내 + 화면 링크" -->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>STIZ grader · 정적 핸드오프</title>
+<link rel="icon" href="../assets/logos/stiz-favicon-32.png" />
+<link rel="stylesheet" href="../styles.css" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-25..0" />
+<link rel="stylesheet" href="app.css" />
+<style>
+  body { background: var(--surface-canvas); }
+  .wrap { max-width: 1024px; margin: 0 auto; padding: 56px var(--space-8) 72px; }
+  .hero { border-bottom: 1px solid var(--border-subtle); padding-bottom: 28px; margin-bottom: 32px; }
+  .hero__row { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+  .hero__row img { height: 26px; }
+  .hero__row .tag { font: var(--text-overline); text-transform: uppercase; letter-spacing: var(--tracking-wider);
+    color: var(--text-subtle); border-left: 1px solid var(--border-default); padding-left: 12px; }
+  .hero h1 { font: var(--text-display); color: var(--text-strong); letter-spacing: var(--tracking-tight); margin-bottom: 10px; }
+  .hero p { font: var(--text-body); color: var(--text-muted); max-width: 64ch; }
+  .grp-label { font: var(--text-overline); text-transform: uppercase; letter-spacing: var(--tracking-wide);
+    color: var(--text-subtle); margin: 28px 0 12px; }
+  .cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  .lcard {
+    display: flex; gap: 14px; padding: 18px; text-decoration: none;
+    background: var(--surface-card); border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg); box-shadow: var(--shadow-xs); transition: var(--transition);
+  }
+  .lcard:hover { border-color: var(--border-strong); box-shadow: var(--shadow-sm); transform: translateY(-1px); text-decoration: none; }
+  .lcard__ic { width: 44px; height: 44px; flex: none; border-radius: var(--radius-md); display: flex;
+    align-items: center; justify-content: center; background: var(--stiz-black); color: #fff; }
+  .lcard__ic .material-symbols-outlined { font-size: 24px; }
+  .lcard__ic.alt { background: var(--surface-sunken); color: var(--text-body); }
+  .lcard__t { font: var(--text-body-strong); color: var(--text-strong); display: flex; align-items: center; gap: 8px; }
+  .lcard__d { font: var(--text-caption); color: var(--text-muted); margin-top: 4px; }
+  .specsheet { background: var(--surface-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);
+    padding: 6px 20px; margin-top: 28px; box-shadow: var(--shadow-xs); }
+  .specsheet .summary__row { padding: 12px 0; }
+  .specsheet .summary__val { color: var(--text-body); font: var(--text-sm); }
+  .specsheet .mono { font-family: var(--font-mono); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hero">
+    <div class="hero__row">
+      <img src="../assets/logos/stiz-logo-black.png" alt="STIZ" />
+      <span class="tag">grader · 정적 핸드오프</span>
+    </div>
+    <h1>CLI 구현자용 정적 화면</h1>
+    <p>프레임워크·빌드 없이 동작하는 순수 HTML + CSS + vanilla JS. 디자인 시스템 토큰(<span class="mono" style="font-size:13px;">../styles.css</span>)만 링크하면 FastAPI 정적 파일로 바로 붙습니다.</p>
+  </header>
+
+  <div class="grp-label">화면 3개</div>
+  <div class="cards">
+    <a class="lcard" href="work.html">
+      <div class="lcard__ic"><span class="material-symbols-outlined">add_box</span></div>
+      <div>
+        <div class="lcard__t">작업 화면 <span class="badge badge--brand badge--sm">메인</span></div>
+        <div class="lcard__d">패턴 선택 → 디자인 업로드(투명도 경고) → 추출 표 → 생성 → 검수 → ZIP. 5단계 흐름·점진적 노출.</div>
+      </div>
+    </a>
+    <a class="lcard" href="patterns.html">
+      <div class="lcard__ic"><span class="material-symbols-outlined">dashboard_customize</span></div>
+      <div>
+        <div class="lcard__t">패턴 관리</div>
+        <div class="lcard__d">프리셋 목록 + 신규 등록. 드래그로 배번·이름 영역 지정 (그리기·이동·크기·정렬).</div>
+      </div>
+    </a>
+    <a class="lcard" href="history.html">
+      <div class="lcard__ic"><span class="material-symbols-outlined">history</span></div>
+      <div>
+        <div class="lcard__t">작업 기록</div>
+        <div class="lcard__d">지난 주문 표 · 탭 필터 · 재다운로드 / 같은 설정으로 재생성 · 빈 상태.</div>
+      </div>
+    </a>
+    <a class="lcard" href="states.html">
+      <div class="lcard__ic alt"><span class="material-symbols-outlined">widgets</span></div>
+      <div>
+        <div class="lcard__t">상태 · 엣지케이스 명세</div>
+        <div class="lcard__d">빈 상태 · 로딩 · 업로드 4종 · 추출 실패 · 검증 · 경고 모달 · 토스트 · 버튼.</div>
+      </div>
+    </a>
+  </div>
+
+  <div class="grp-label">문서</div>
+  <div class="cards">
+    <a class="lcard" href="flow.html">
+      <div class="lcard__ic alt"><span class="material-symbols-outlined">account_tree</span></div>
+      <div>
+        <div class="lcard__t">UX 플로우 다이어그램</div>
+        <div class="lcard__d">3개 화면 이동 + 작업 화면 6단계 흐름 + 엣지케이스 분기.</div>
+      </div>
+    </a>
+    <a class="lcard" href="../README.md">
+      <div class="lcard__ic alt"><span class="material-symbols-outlined">description</span></div>
+      <div>
+        <div class="lcard__t">README · 결합 가이드</div>
+        <div class="lcard__d">폴더 구조 · FastAPI 정적 마운트 · API 매핑 지점.</div>
+      </div>
+    </a>
+  </div>
+
+  <div class="specsheet">
+    <div class="summary__row"><span class="summary__label">스택</span><span class="summary__val">순수 HTML · CSS · vanilla JS — 빌드·프레임워크 없음</span></div>
+    <div class="summary__row"><span class="summary__label">의존</span><span class="summary__val mono">../styles.css · Material Symbols (CDN)</span></div>
+    <div class="summary__row"><span class="summary__label">컴포넌트 CSS</span><span class="summary__val mono">app.css</span></div>
+    <div class="summary__row"><span class="summary__label">데이터</span><span class="summary__val">각 화면 상단 JS의 mock 배열 — API 응답 모양과 동일</span></div>
+    <div class="summary__row"><span class="summary__label">한글 카피 톤</span><span class="summary__val">친절하지만 단호하게 — 무엇이 문제인지 + 어떻게 푸는지</span></div>
+  </div>
+</div>
+</body>
+</html>

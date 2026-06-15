@@ -1,0 +1,130 @@
+<!-- @dsCard group="grader · 정적 핸드오프" viewport="1280x780" name="작업 기록 (정적)" subtitle="탭 필터 · 재다운로드 / 재생성 · 빈 상태" -->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>STIZ grader · 작업 기록</title>
+<link rel="icon" href="../assets/logos/stiz-favicon-32.png" />
+<link rel="stylesheet" href="../styles.css" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-25..0" />
+<link rel="stylesheet" href="app.css" />
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="sidebar__brand">
+      <img src="../assets/logos/stiz-logo-black.png" alt="STIZ" />
+      <span class="tag">grader</span>
+    </div>
+    <nav class="nav">
+      <a class="nav__item" href="work.html"><span class="material-symbols-outlined">add_box</span>작업</a>
+      <a class="nav__item" href="patterns.html"><span class="material-symbols-outlined">dashboard_customize</span>패턴 관리</a>
+      <a class="nav__item is-active" href="history.html"><span class="material-symbols-outlined">history</span>작업 기록</a>
+    </nav>
+    <div class="sidebar__foot">
+      <div class="server-pill"><span class="dot"></span>서버 연결됨 · :8000</div>
+      <div class="sidebar__note">스티즈 전사유니폼 출력 자동화</div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar__left"><h1 class="page-title">작업 기록</h1></div>
+      <div class="topbar__right">
+        <button class="icon-btn" aria-label="도움말"><span class="material-symbols-outlined">help_outline</span></button>
+        <div class="user-pill"><span class="name">출력 1팀</span><span class="avatar">S</span></div>
+      </div>
+    </header>
+
+    <main class="content stack-5">
+      <div class="tabs" id="tabs">
+        <button class="tab is-active" data-tab="all">전체<span class="tab__count">5</span></button>
+        <button class="tab" data-tab="done">완료<span class="tab__count">4</span></button>
+        <button class="tab" data-tab="warn">확인 필요<span class="tab__count">1</span></button>
+      </div>
+
+      <div id="tableSlot"></div>
+    </main>
+  </div>
+</div>
+
+<div class="toaster" id="toaster"></div>
+
+<script>
+const JOBS = [
+  { id:"j-240612", date:"2026·06·12", name:"성동구 클럽 리그", pattern:"U넥 양면 스탠다드", count:48, status:"done" },
+  { id:"j-240610", date:"2026·06·10", name:"다산 유스 농구",   pattern:"라운드넥 단면",     count:22, status:"done" },
+  { id:"j-240608", date:"2026·06·08", name:"스포라운드 풋살",  pattern:"나시 양면",         count:16, status:"warn" },
+  { id:"j-240605", date:"2026·06·05", name:"BDR 대학부 결승",  pattern:"V넥 양면 프로",     count:30, status:"done" },
+  { id:"j-240601", date:"2026·06·01", name:"여름캠프 단체티",  pattern:"라운드넥 단면",     count:64, status:"done" },
+];
+const $ = (s) => document.querySelector(s);
+let tab = "all";
+
+function render() {
+  const rows = tab === "all" ? JOBS : JOBS.filter((j) => j.status === tab);
+  const slot = $("#tableSlot");
+  if (rows.length === 0) {
+    slot.innerHTML = `
+      <div class="card">
+        <div class="empty">
+          <div class="empty__icon"><span class="material-symbols-outlined">history</span></div>
+          <div class="empty__title">작업 기록이 없습니다</div>
+          <div class="empty__desc">주문을 생성하면 여기에 기록됩니다.</div>
+        </div>
+      </div>`;
+    return;
+  }
+  slot.innerHTML = `
+    <div class="tablewrap tablewrap--lg">
+      <table class="dtable">
+        <thead><tr>
+          <th>날짜</th><th>주문명</th><th>패턴</th><th class="num">파일</th><th>상태</th><th class="num">작업</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map((j) => `
+            <tr class="row-hover">
+              <td class="muted mono">${j.date}</td>
+              <td class="name-strong">${j.name}</td>
+              <td>${j.pattern}</td>
+              <td class="num">${j.count}</td>
+              <td>${j.status === "done"
+                ? '<span class="badge badge--pass badge--sm"><span class="material-symbols-outlined">check_circle</span>완료</span>'
+                : '<span class="badge badge--warn badge--sm"><span class="material-symbols-outlined">warning</span>확인 필요</span>'}</td>
+              <td class="num">
+                <span class="row" style="display:inline-flex; gap:2px;">
+                  <button class="icon-btn icon-btn--sm" data-act="download" data-name="${j.name}" aria-label="재다운로드"><span class="material-symbols-outlined">download</span></button>
+                  <button class="icon-btn icon-btn--sm" data-act="regen" data-name="${j.name}" aria-label="같은 설정으로 재생성"><span class="material-symbols-outlined">refresh</span></button>
+                  <button class="icon-btn icon-btn--sm" aria-label="더보기"><span class="material-symbols-outlined">more_vert</span></button>
+                </span>
+              </td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
+  slot.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => {
+    if (b.dataset.act === "download") toast("info", "download", "ZIP 다운로드 준비 중", `${b.dataset.name} · 잠시만 기다리세요`);
+    else toast("info", "refresh", "같은 설정으로 재생성", `${b.dataset.name} · 작업 화면으로 이동합니다`);
+  }));
+}
+
+$("#tabs").querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => {
+  tab = t.dataset.tab;
+  $("#tabs").querySelectorAll(".tab").forEach((x) => x.classList.toggle("is-active", x === t));
+  render();
+}));
+
+function toast(tone, icon, title, body) {
+  const el = document.createElement("div");
+  el.className = "toast toast--" + tone;
+  el.innerHTML = `<span class="material-symbols-outlined toast__icon">${icon}</span><div><div class="toast__title">${title}</div><div class="toast__body">${body}</div></div>`;
+  $("#toaster").appendChild(el);
+  setTimeout(() => el.remove(), 3200);
+}
+
+render();
+</script>
+</body>
+</html>

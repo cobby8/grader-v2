@@ -1,0 +1,122 @@
+/* ============================================================
+   STIZ · Color tokens
+   Brand anchors: STIZ Black (#111111) + STIZ Red (#E63946),
+   lifted from stiz.co.kr's Tailwind brand config.
+
+   The grader-v2 tool applies them with restraint: a cool slate
+   neutral ramp carries the surfaces, black is the primary action,
+   red is reserved for brand energy + destructive/alert moments,
+   and a calm semantic set communicates factory-output validation
+   ("전달 가능 / 투명도 / 오류 / 정보").
+   ============================================================ */
+
+:root {
+  /* ---- Brand ---- */
+  --stiz-black: #111111;
+  --stiz-black-soft: #1d2125;
+  --stiz-red: #e63946;
+  --stiz-red-strong: #c8202f;
+  --stiz-red-soft: #fbe7e9;
+
+  /* ---- Neutral ramp (cool slate) ---- */
+  --ink-950: #0e1114;
+  --ink-900: #161a1e;
+  --ink-800: #21262c;
+  --ink-700: #333a42;
+  --ink-600: #4a525b;
+  --ink-500: #687079; /* mid grey text */
+  --ink-400: #8b939d;
+  --ink-300: #b1b9c2;
+  --ink-200: #d4dae0;
+  --ink-150: #e1e6eb;
+  --ink-100: #eaeef2;
+  --ink-50: #f3f6f8;
+  --paper: #ffffff;
+  --canvas: #f6f8fa; /* app background */
+
+  /* ---- Semantic: success (factory-ready / 전달 가능) ---- */
+  --green-700: #0f6b40;
+  --green-600: #16915b;
+  --green-500: #1faa6a;
+  --green-bg: #e6f4ec;
+  --green-border: #b9e0c9;
+
+  /* ---- Semantic: warning (transparency / 투명도) ---- */
+  --amber-700: #95620a;
+  --amber-600: #c2820b;
+  --amber-500: #e0a019;
+  --amber-bg: #fbf1d8;
+  --amber-border: #f0d49a;
+
+  /* ---- Semantic: danger / error (오류 / FAIL) ---- */
+  --red-700: #b21f2c;
+  --red-600: #e63946; /* shares STIZ red */
+  --red-500: #f0535f;
+  --red-bg: #fce8ea;
+  --red-border: #f6c2c7;
+
+  /* ---- Semantic: info (안내) ---- */
+  --blue-700: #1f52c2;
+  --blue-600: #2f6fed;
+  --blue-500: #4f86f2;
+  --blue-bg: #e7eefd;
+  --blue-border: #c2d6fb;
+
+  /* ============================================================
+     Semantic aliases — reference these in components, not the
+     raw scale values above.
+     ============================================================ */
+
+  /* Surfaces */
+  --surface-canvas: var(--canvas);
+  --surface-card: var(--paper);
+  --surface-sunken: var(--ink-50);
+  --surface-raised: var(--paper);
+  --surface-inverse: var(--stiz-black);
+  --surface-hover: var(--ink-50);
+  --surface-active: var(--ink-100);
+  --surface-selected: var(--blue-bg);
+
+  /* Text */
+  --text-strong: var(--ink-950);
+  --text-body: var(--ink-800);
+  --text-muted: var(--ink-500);
+  --text-subtle: var(--ink-400);
+  --text-inverse: var(--paper);
+  --text-on-accent: var(--paper);
+  --text-link: var(--blue-700);
+
+  /* Borders */
+  --border-subtle: var(--ink-150);
+  --border-default: var(--ink-200);
+  --border-strong: var(--ink-300);
+  --border-focus: var(--stiz-black);
+
+  /* Primary action (black, per stiz.co.kr) */
+  --accent: var(--stiz-black);
+  --accent-hover: #000000;
+  --accent-active: #000000;
+  --accent-text: var(--paper);
+
+  /* Brand red accent (energy / active step / destructive) */
+  --brand: var(--stiz-red);
+  --brand-hover: var(--stiz-red-strong);
+  --brand-soft: var(--stiz-red-soft);
+
+  /* Status (validation) */
+  --status-pass: var(--green-600);
+  --status-pass-bg: var(--green-bg);
+  --status-pass-border: var(--green-border);
+  --status-warn: var(--amber-600);
+  --status-warn-bg: var(--amber-bg);
+  --status-warn-border: var(--amber-border);
+  --status-fail: var(--red-600);
+  --status-fail-bg: var(--red-bg);
+  --status-fail-border: var(--red-border);
+  --status-info: var(--blue-600);
+  --status-info-bg: var(--blue-bg);
+  --status-info-border: var(--blue-border);
+
+  /* Focus ring */
+  --ring: color-mix(in srgb, var(--stiz-black) 35%, transparent);
+}

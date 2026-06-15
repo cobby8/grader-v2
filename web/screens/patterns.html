@@ -1,0 +1,631 @@
+<!-- @dsCard group="grader · 정적 핸드오프" viewport="1280x900" name="패턴 관리 (정적)" subtitle="목록 · 3단계 등록(파일 → 디자인↔조각 매핑 → 배번/이름) · 드래그 영역 에디터" -->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>STIZ grader · 패턴 관리</title>
+<link rel="icon" href="../assets/logos/stiz-favicon-32.png" />
+<link rel="stylesheet" href="../styles.css" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-25..0" />
+<link rel="stylesheet" href="app.css" />
+<style>
+  /* Region-designation editor (grader-specific complex widget) */
+  .canvas {
+    position: relative; background: var(--surface-card); border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    background-image: radial-gradient(var(--ink-150) 1px, transparent 1px);
+    background-size: 14px 14px; overflow: hidden; user-select: none;
+  }
+  .canvas.is-drawing { cursor: crosshair; }
+  .canvas__jersey { position: absolute; inset: 10%; width: 80%; height: 80%; opacity: .16; pointer-events: none; }
+  /* design artwork placeholder (mapping canvas) */
+  .canvas__art { position: absolute; inset: 0; pointer-events: none; }
+  .canvas__art .blk {
+    position: absolute; border-radius: 3px;
+    background: repeating-linear-gradient(45deg, var(--ink-100), var(--ink-100) 7px, var(--ink-50) 7px, var(--ink-50) 14px);
+    border: 1px solid var(--border-subtle);
+    display: flex; align-items: center; justify-content: center;
+    font: var(--text-caption); color: var(--text-subtle); font-family: var(--font-mono);
+  }
+  .origin-tag {
+    position: absolute; z-index: 1; font: 9px/1 var(--font-mono); color: var(--text-subtle);
+    background: color-mix(in srgb, var(--paper) 80%, transparent); padding: 2px 5px; border-radius: 3px; pointer-events: none;
+  }
+  .region { position: absolute; border: 1.5px solid; border-radius: 4px; cursor: move; box-sizing: border-box; }
+  .region__label {
+    position: absolute; top: 0; left: 0; z-index: 2;
+    font: 10px/1 var(--font-sans); font-weight: 700; color: #fff;
+    padding: 3px 6px; border-radius: 3px 0 4px 0; white-space: nowrap;
+  }
+  .region__sample {
+    position: absolute; inset: 0; display: flex; align-items: center;
+    font-weight: 800; line-height: 1; overflow: hidden; opacity: .6; padding: 0 4px;
+  }
+  .region__handle {
+    position: absolute; right: -6px; bottom: -6px; width: 12px; height: 12px;
+    border-radius: 3px; background: #fff; border: 1.5px solid; cursor: nwse-resize; z-index: 3;
+  }
+  .region__del {
+    position: absolute; top: -9px; right: -9px; width: 19px; height: 19px; z-index: 3;
+    border-radius: 50%; background: #fff; border: 1px solid var(--border-strong);
+    display: none; align-items: center; justify-content: center; cursor: pointer; color: var(--text-muted);
+  }
+  .region__del .material-symbols-outlined { font-size: 13px; }
+  .region.is-selected { box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 35%, transparent); z-index: 4; }
+  .region.is-selected .region__del { display: flex; }
+  .region--number { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 12%, transparent); color: var(--brand); }
+  .region--number .region__label { background: var(--brand); }
+  .region--number .region__handle { background: #fff; border-color: var(--brand); }
+  .region--name { border-color: var(--blue-600); background: color-mix(in srgb, var(--blue-600) 12%, transparent); color: var(--blue-600); }
+  .region--name .region__label { background: var(--blue-600); }
+  .region--name .region__handle { background: #fff; border-color: var(--blue-600); }
+  .toolbtn {
+    display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px;
+    border: 1px solid var(--border-default); background: var(--surface-card);
+    border-radius: var(--radius-md); cursor: pointer; font: var(--text-sm-strong); color: var(--text-body);
+    transition: var(--transition);
+  }
+  .toolbtn .swatch { width: 10px; height: 10px; border-radius: 3px; }
+  .toolbtn:hover { border-color: var(--border-strong); }
+  .toolbtn.is-active { border-color: var(--accent); background: var(--surface-active); color: var(--text-strong); }
+  .seg { display: inline-flex; border: 1px solid var(--border-default); border-radius: var(--radius-md); overflow: hidden; }
+  .seg button { height: 30px; padding: 0 12px; border: none; background: var(--surface-card); cursor: pointer;
+    font: var(--text-sm); color: var(--text-muted); border-right: 1px solid var(--border-subtle); }
+  .seg button:last-child { border-right: none; }
+  .seg button.is-active { background: var(--surface-active); color: var(--text-strong); font: var(--text-sm-strong); }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="sidebar__brand">
+      <img src="../assets/logos/stiz-logo-black.png" alt="STIZ" />
+      <span class="tag">grader</span>
+    </div>
+    <nav class="nav">
+      <a class="nav__item" href="work.html"><span class="material-symbols-outlined">add_box</span>작업</a>
+      <a class="nav__item is-active" href="patterns.html"><span class="material-symbols-outlined">dashboard_customize</span>패턴 관리</a>
+      <a class="nav__item" href="history.html"><span class="material-symbols-outlined">history</span>작업 기록</a>
+    </nav>
+    <div class="sidebar__foot">
+      <div class="server-pill"><span class="dot"></span>서버 연결됨 · :8000</div>
+      <div class="sidebar__note">스티즈 전사유니폼 출력 자동화</div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar__left"><h1 class="page-title">패턴 관리</h1></div>
+      <div class="topbar__right">
+        <button class="icon-btn" aria-label="도움말"><span class="material-symbols-outlined">help_outline</span></button>
+        <div class="user-pill"><span class="name">출력 1팀</span><span class="avatar">S</span></div>
+      </div>
+    </header>
+
+    <main class="content">
+
+      <!-- ===== LIST MODE ===== -->
+      <section id="listMode" class="stack-5">
+        <div class="row-between">
+          <span class="muted" style="font:var(--text-sm);">4개 패턴 프리셋</span>
+          <button class="btn btn--primary" id="btnRegister"><span class="material-symbols-outlined">add</span>패턴 등록</button>
+        </div>
+        <div class="grid-3" id="patternGrid"></div>
+      </section>
+
+      <!-- ===== REGISTER MODE ===== -->
+      <section id="registerMode" class="hidden stack-5">
+        <div class="row-between">
+          <button class="linkbtn" id="btnBack" style="color:var(--text-muted);"><span class="material-symbols-outlined">arrow_back</span>패턴 목록</button>
+          <div class="substep" id="subStepper"></div>
+        </div>
+
+        <!-- Substep A · 파일 업로드 -->
+        <div id="subA" class="stack-6" style="max-width:680px;">
+          <div class="field">
+            <label class="field__label" for="pname">패턴 이름</label>
+            <input class="input" id="pname" value="농구 U넥 양면" placeholder="예: 농구 U넥 양면" />
+          </div>
+          <div>
+            <div class="field__label" style="margin-bottom:8px;">사이즈별 패턴 파일</div>
+            <div class="wrap-2" id="sizeChips"></div>
+            <div class="muted" style="font:var(--text-caption); margin-top:8px;">SVG 또는 DXF · 4 / 7 업로드됨 · 기준 사이즈 XL</div>
+          </div>
+          <div class="alert alert--info">
+            <span class="material-symbols-outlined alert__icon">info</span>
+            <div>
+              <div class="alert__title">다음 단계: 디자인↔조각 매핑</div>
+              <div class="alert__body">패턴 윤곽은 업로드 즉시 조각(앞판·뒤판·소매)으로 분류됩니다. 다음 단계에서 각 조각이 기준 디자인의 어느 영역을 쓰는지 지정합니다.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Substep B · 디자인↔조각 매핑 (신규) -->
+        <div id="subB" class="hidden" style="display:grid; grid-template-columns:340px 1fr; gap:24px; align-items:start;">
+          <div class="stack-5">
+            <div>
+              <div class="field__label" style="margin-bottom:4px;">조각 → 디자인 영역</div>
+              <div class="section-sub">조각을 고른 뒤 오른쪽 디자인 위에 드래그해 그 조각이 쓸 영역을 그립니다.</div>
+            </div>
+            <div class="stack-3" id="pieceList"></div>
+            <div class="card card--pad stack-3">
+              <div class="row-between">
+                <span class="field__label">content_box</span>
+                <button class="linkbtn" id="cbAuto"><span class="material-symbols-outlined">auto_fix_high</span>자동 제안</button>
+              </div>
+              <div class="section-sub" style="margin:0;">전 조각 영역의 합집합. 필요하면 캔버스에서 직접 조정하세요.</div>
+              <div class="coord" id="cbCoord">—</div>
+            </div>
+            <div id="mapWarn"></div>
+          </div>
+          <div>
+            <div class="row-between" style="margin-bottom:8px;">
+              <span class="field__label">기준 디자인 · design_XL.ai</span>
+              <span class="coord" id="pageCoord"></span>
+            </div>
+            <div class="canvas" id="mapCanvas" style="aspect-ratio:4478.74 / 5669.29; max-height:560px;">
+              <div class="canvas__art">
+                <div class="blk" style="left:10.5%; top:6.7%; width:36.4%; height:42.5%;">앞면 아트</div>
+                <div class="blk" style="left:51.6%; top:6.7%; width:37.7%; height:42.5%;">뒷면 아트</div>
+                <div class="blk" style="left:10.5%; top:1.5%; width:39.2%; height:4.6%;">소매</div>
+              </div>
+              <span class="origin-tag" style="left:6px; bottom:6px;">pt 원점 (0,0) · 좌하단</span>
+              <span class="origin-tag" style="left:6px; top:6px;">이미지 원점 · 좌상단</span>
+            </div>
+            <div class="note" style="margin-top:8px;"><span class="material-symbols-outlined">swap_vert</span><span id="mapHint">좌표는 디자인 페이지 pt(좌하단 원점)로 환산되어 저장됩니다. 화면은 좌상단 원점이라 y축이 뒤집힙니다.</span></div>
+          </div>
+        </div>
+
+        <!-- Substep C · 배번 / 이름 영역 (기존) -->
+        <div id="subC" class="hidden" style="display:grid; grid-template-columns:340px 1fr; gap:24px; align-items:start;">
+          <div class="stack-5">
+            <div>
+              <div class="field__label" style="margin-bottom:4px;">배번 · 이름 위치</div>
+              <div class="section-sub">뒤판 기준. 도구를 고른 뒤 미리보기 위에 드래그해 영역을 그립니다.</div>
+            </div>
+            <div class="row" style="gap:8px;">
+              <button class="toolbtn" data-tool="number"><span class="swatch" style="background:var(--brand);"></span>배번 영역</button>
+              <button class="toolbtn" data-tool="name"><span class="swatch" style="background:var(--blue-600);"></span>이름 영역</button>
+            </div>
+            <div id="regionOpts" class="card card--pad hidden stack-4">
+              <div class="row-between">
+                <span class="field__label" id="optTitle">배번 영역</span>
+                <span class="badge badge--sm badge--neutral tnum mono" id="optSize">32% × 20%</span>
+              </div>
+              <div class="row-between">
+                <span class="muted" style="font:var(--text-sm);">정렬</span>
+                <div class="seg" id="optAlign">
+                  <button data-align="flex-start">좌</button>
+                  <button data-align="center" class="is-active">중</button>
+                  <button data-align="flex-end">우</button>
+                </div>
+              </div>
+              <div class="coord" id="optRel">rel_bbox —</div>
+            </div>
+            <div class="note"><span class="material-symbols-outlined">drag_indicator</span><span id="rgnHint">영역을 끌어 옮기거나 모서리로 크기를 조절하세요.</span></div>
+          </div>
+          <div>
+            <div class="field__label" style="margin-bottom:8px;">뒤판 미리보기</div>
+            <div class="canvas" id="rgnCanvas" style="aspect-ratio:3 / 4; max-height:560px;">
+              <svg class="canvas__jersey" viewBox="0 0 100 130" preserveAspectRatio="none">
+                <path d="M30 8 L42 4 Q50 10 58 4 L70 8 L86 22 L78 36 L70 30 V120 H30 V30 L22 36 L14 22 Z" fill="none" stroke="var(--ink-700)" stroke-width="2"/>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- register footer nav -->
+        <div class="actionbar">
+          <button class="btn btn--ghost" id="regPrev"><span class="material-symbols-outlined">arrow_back</span>이전</button>
+          <button class="btn btn--primary" id="regNext">다음 단계<span class="material-symbols-outlined">arrow_forward</span></button>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<div class="toaster" id="toaster"></div>
+
+<script>
+const PATTERNS = [
+  { id:"u-neck-double", name:"농구 U넥 양면",  sizes:["XS","S","M","L","XL","2XL","3XL"], pieces:8, icon:"checkroom" },
+  { id:"round-single",  name:"라운드넥 단면",   sizes:["S","M","L","XL","2XL"],            pieces:5, icon:"apparel" },
+  { id:"sleeveless",    name:"나시 양면",       sizes:["S","M","L","XL"],                  pieces:6, icon:"dry_cleaning" },
+  { id:"v-neck",        name:"V넥 양면 프로",   sizes:["XS","S","M","L","XL","2XL","3XL","4XL"], pieces:9, icon:"checkroom" },
+];
+const PAGE = [4478.74, 5669.29];          // design.page_size_pt
+const PIECES = [
+  { id:"front",  name:"앞판", color:"#2F6BD8", seed:{x:10.5, y:6.7,  w:36.4, h:42.5} },
+  { id:"back",   name:"뒤판", color:"#1F9D63", seed:{x:51.6, y:6.7,  w:37.7, h:42.5} },
+  { id:"sleeve", name:"소매", color:"#C25A2E", seed:null },   // 미매핑 — 검증 경고 시연
+];
+const $ = (s) => document.querySelector(s);
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+function toast(tone, icon, title, body) {
+  const t = document.createElement("div");
+  t.className = "toast toast--" + tone;
+  t.innerHTML = `<span class="material-symbols-outlined toast__icon">${icon}</span><div><div class="toast__title">${title}</div><div class="toast__body">${body}</div></div>`;
+  $("#toaster").appendChild(t);
+  setTimeout(() => t.remove(), 3600);
+}
+
+// ---- list grid ----
+$("#patternGrid").innerHTML = PATTERNS.map((p) => `
+  <div class="card card--interactive" style="padding:0;">
+    <div style="aspect-ratio:16/10; background:var(--surface-sunken); display:flex; align-items:center; justify-content:center; border-bottom:1px solid var(--border-subtle); position:relative;">
+      <span class="material-symbols-outlined" style="font-size:40px; color:var(--ink-300);">${p.icon}</span>
+      <span style="position:absolute; top:10px; right:10px;"><span class="badge badge--neutral badge--sm tnum">${p.pieces}조각</span></span>
+    </div>
+    <div style="padding:14px;">
+      <div class="row-between" style="align-items:flex-start;">
+        <div>
+          <div style="font:var(--text-body-strong); color:var(--text-strong);">${p.name}</div>
+          <div class="tnum" style="font:var(--text-caption); color:var(--text-muted); margin-top:3px;">${p.sizes[0]} – ${p.sizes[p.sizes.length-1]} · ${p.sizes.length}개 사이즈</div>
+        </div>
+        <div class="row" style="gap:2px;">
+          <button class="icon-btn icon-btn--sm" aria-label="수정"><span class="material-symbols-outlined">edit</span></button>
+          <button class="icon-btn icon-btn--sm icon-btn--danger" aria-label="삭제"><span class="material-symbols-outlined">delete</span></button>
+        </div>
+      </div>
+    </div>
+  </div>`).join("");
+
+// ---- size chips ----
+const SIZES = ["XS","S","M","L","XL","2XL","3XL"];
+$("#sizeChips").innerHTML = SIZES.map((s, i) => {
+  const done = i < 4;
+  return `<div style="display:flex; align-items:center; gap:7px; padding:7px 10px 7px 12px; border-radius:var(--radius-md);
+    border:1px solid ${done ? "var(--status-pass-border)" : "var(--border-default)"}; background:${done ? "var(--status-pass-bg)" : "var(--surface-card)"};">
+    <span style="font:var(--text-sm-strong); color:var(--text-strong);">${s}</span>
+    <span class="material-symbols-outlined" style="font-size:16px; color:${done ? "var(--green-600)" : "var(--text-subtle)"};">${done ? "check_circle" : "upload"}</span>
+  </div>`;
+}).join("");
+
+// =====================================================================
+//  Generic region editor core — shared by mapping(B) and number/name(C)
+// =====================================================================
+function relPct(canvas, cx, cy) {
+  const r = canvas.getBoundingClientRect();
+  return { x: (cx - r.left) / r.width * 100, y: (cy - r.top) / r.height * 100 };
+}
+function fitSample(el) {
+  const s = el.querySelector(".region__sample");
+  if (!s) return;
+  s.style.fontSize = Math.max(8, el.getBoundingClientRect().height * 0.42) + "px";
+  s.style.justifyContent = el.dataset.align || "center";
+}
+function addRegion(canvas, cfg) {
+  const el = document.createElement("div");
+  el.className = "region " + cfg.cls;
+  if (cfg.color) el.style.setProperty("--pc", cfg.color);
+  el.dataset.align = cfg.align || "center";
+  Object.entries(cfg.data || {}).forEach(([k, v]) => el.dataset[k] = v);
+  Object.assign(el.style, { left: cfg.x + "%", top: cfg.y + "%", width: cfg.w + "%", height: cfg.h + "%" });
+  el.innerHTML =
+    `<span class="region__label">${cfg.label}</span>` +
+    `<span class="region__sample">${cfg.sample || ""}</span>` +
+    (cfg.deletable ? `<button class="region__del" aria-label="삭제"><span class="material-symbols-outlined">close</span></button>` : "") +
+    `<span class="region__handle"></span>`;
+  canvas.appendChild(el);
+  wireRegion(canvas, el, cfg);
+  fitSample(el);
+  return el;
+}
+function wireRegion(canvas, el, cfg) {
+  const ed = canvas.__ed;
+  el.addEventListener("pointerdown", (e) => {
+    if (e.target.closest(".region__handle") || e.target.closest(".region__del")) return;
+    e.stopPropagation();
+    ed.select(el);
+    const start = relPct(canvas, e.clientX, e.clientY);
+    const ox = start.x - parseFloat(el.style.left), oy = start.y - parseFloat(el.style.top);
+    const w = parseFloat(el.style.width), h = parseFloat(el.style.height);
+    const move = (ev) => {
+      const p = relPct(canvas, ev.clientX, ev.clientY);
+      el.style.left = clamp(p.x - ox, 0, 100 - w) + "%";
+      el.style.top  = clamp(p.y - oy, 0, 100 - h) + "%";
+      cfg.onChange && cfg.onChange(el);
+    };
+    const up = () => { document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", up); };
+    document.addEventListener("pointermove", move); document.addEventListener("pointerup", up);
+  });
+  el.querySelector(".region__handle").addEventListener("pointerdown", (e) => {
+    e.stopPropagation(); ed.select(el);
+    const left = parseFloat(el.style.left), top = parseFloat(el.style.top);
+    const move = (ev) => {
+      const p = relPct(canvas, ev.clientX, ev.clientY);
+      el.style.width  = clamp(p.x - left, 5, 100 - left) + "%";
+      el.style.height = clamp(p.y - top, 4, 100 - top) + "%";
+      fitSample(el);
+      cfg.onChange && cfg.onChange(el);
+    };
+    const up = () => { document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", up); };
+    document.addEventListener("pointermove", move); document.addEventListener("pointerup", up);
+  });
+  const del = el.querySelector(".region__del");
+  if (del) del.addEventListener("click", (e) => {
+    e.stopPropagation();
+    cfg.onDelete && cfg.onDelete(el);
+    el.remove();
+  });
+}
+
+// =====================================================================
+//  B · 디자인↔조각 매핑
+// =====================================================================
+const mapCanvas = $("#mapCanvas");
+let armedPiece = null;          // piece.id being drawn
+const pieceRegions = {};        // id -> region element
+$("#pageCoord").textContent = `page ${PAGE[0]} × ${PAGE[1]} pt`;
+
+// px(%) rect -> design_region_pt [x0,y0,x1,y1] (bottom-left origin)
+function toPt(el) {
+  const x = parseFloat(el.style.left) / 100, y = parseFloat(el.style.top) / 100;
+  const w = parseFloat(el.style.width) / 100, h = parseFloat(el.style.height) / 100;
+  const x0 = x * PAGE[0], x1 = (x + w) * PAGE[0];
+  const yTop = PAGE[1] - y * PAGE[1];          // larger pt (top)
+  const yBot = PAGE[1] - (y + h) * PAGE[1];    // smaller pt (bottom)
+  return [x0, yBot, x1, yTop].map((v) => Math.round(v));
+}
+mapCanvas.__ed = {
+  select(el) {
+    mapCanvas.querySelectorAll(".region").forEach((r) => r.classList.toggle("is-selected", r === el));
+  },
+};
+function renderPieceList() {
+  $("#pieceList").innerHTML = PIECES.map((p) => {
+    const set = !!pieceRegions[p.id];
+    const coord = set ? toPt(pieceRegions[p.id]).join(", ") : "미지정";
+    const armed = armedPiece === p.id;
+    return `
+      <div class="piecerow ${armed ? "is-armed" : ""}" data-piece="${p.id}">
+        <span class="piecerow__dot" style="background:${p.color};"></span>
+        <div style="flex:1; min-width:0;">
+          <div class="piecerow__name">${p.name}</div>
+          <div class="coord" style="margin-top:4px; display:inline-block;">[${coord}]</div>
+        </div>
+        <span class="piecerow__state ${set ? "is-set" : ""}">
+          <span class="material-symbols-outlined">${set ? "check_circle" : (armed ? "edit" : "radio_button_unchecked")}</span>${set ? "지정됨" : (armed ? "그리는 중" : "지정")}
+        </span>
+      </div>`;
+  }).join("");
+  $("#pieceList").querySelectorAll("[data-piece]").forEach((row) => {
+    row.addEventListener("click", () => armPiece(row.dataset.piece));
+  });
+}
+function armPiece(id) {
+  armedPiece = armedPiece === id ? null : id;
+  mapCanvas.classList.toggle("is-drawing", !!armedPiece);
+  $("#mapHint").textContent = armedPiece
+    ? `${PIECES.find((p) => p.id === armedPiece).name} 영역을 디자인 위에 드래그하세요.`
+    : "좌표는 디자인 페이지 pt(좌하단 원점)로 환산되어 저장됩니다. 화면은 좌상단 원점이라 y축이 뒤집힙니다.";
+  renderPieceList();
+}
+function drawPieceRegion(p, x, y, w, h) {
+  if (pieceRegions[p.id]) pieceRegions[p.id].remove();
+  const el = addRegion(mapCanvas, {
+    cls: "region--piece", color: p.color, x, y, w, h,
+    label: p.name, data: { piece: p.id }, deletable: true,
+    onChange: () => { renderPieceList(); recomputeContentBox(false); },
+    onDelete: () => { delete pieceRegions[p.id]; renderPieceList(); recomputeContentBox(false); validateMap(); },
+  });
+  pieceRegions[p.id] = el;
+}
+let cbManual = false;
+let contentRegion = null;
+function recomputeContentBox(force) {
+  const els = Object.values(pieceRegions);
+  if (!els.length) { $("#cbCoord").textContent = "—"; return; }
+  if (cbManual && !force) { updateCbCoord(); return; }
+  let minX = 100, minY = 100, maxX = 0, maxY = 0;
+  els.forEach((el) => {
+    const x = parseFloat(el.style.left), y = parseFloat(el.style.top);
+    const w = parseFloat(el.style.width), h = parseFloat(el.style.height);
+    minX = Math.min(minX, x); minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x + w); maxY = Math.max(maxY, y + h);
+  });
+  if (contentRegion) contentRegion.remove();
+  contentRegion = addRegion(mapCanvas, {
+    cls: "region--content", x: minX, y: minY, w: maxX - minX, h: maxY - minY,
+    label: "content_box", deletable: false,
+    onChange: () => { cbManual = true; updateCbCoord(); },
+  });
+  cbManual = force ? false : cbManual;
+  updateCbCoord();
+}
+function updateCbCoord() {
+  if (!contentRegion) { $("#cbCoord").textContent = "—"; return; }
+  $("#cbCoord").textContent = "[" + toPt(contentRegion).join(", ") + "]";
+}
+function validateMap() {
+  const unset = PIECES.filter((p) => !pieceRegions[p.id]);
+  if (unset.length) {
+    $("#mapWarn").innerHTML = `
+      <div class="alert alert--warn">
+        <span class="material-symbols-outlined alert__icon">warning</span>
+        <div><div class="alert__title">미매핑 조각 ${unset.length}개</div>
+        <div class="alert__body">${unset.map((p) => p.name).join(" · ")} 영역을 지정해야 다음 단계로 진행할 수 있습니다.</div></div>
+      </div>`;
+  } else {
+    $("#mapWarn").innerHTML = `
+      <div class="alert alert--pass">
+        <span class="material-symbols-outlined alert__icon">check_circle</span>
+        <div><div class="alert__title">모든 조각이 매핑되었습니다</div></div>
+      </div>`;
+  }
+  return unset.length === 0;
+}
+mapCanvas.addEventListener("pointerdown", (e) => {
+  if (!armedPiece || e.target.closest(".region")) return;
+  const p = PIECES.find((x) => x.id === armedPiece);
+  const start = relPct(mapCanvas, e.clientX, e.clientY);
+  drawPieceRegion(p, start.x, start.y, 0.1, 0.1);
+  const el = pieceRegions[p.id];
+  const move = (ev) => {
+    const cur = relPct(mapCanvas, ev.clientX, ev.clientY);
+    const x = Math.min(start.x, cur.x), y = Math.min(start.y, cur.y);
+    Object.assign(el.style, {
+      left: x + "%", top: y + "%",
+      width: clamp(Math.abs(cur.x - start.x), 0, 100 - x) + "%",
+      height: clamp(Math.abs(cur.y - start.y), 0, 100 - y) + "%",
+    });
+    fitSample(el);
+  };
+  const up = () => {
+    document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", up);
+    if (parseFloat(el.style.width) < 5 || parseFloat(el.style.height) < 4) { el.remove(); delete pieceRegions[p.id]; }
+    armedPiece = null; mapCanvas.classList.remove("is-drawing");
+    renderPieceList(); recomputeContentBox(false); validateMap();
+  };
+  document.addEventListener("pointermove", move); document.addEventListener("pointerup", up);
+});
+$("#cbAuto").addEventListener("click", () => { cbManual = false; recomputeContentBox(true); });
+
+// seed mapping (front + back mapped, sleeve unmapped → warning)
+function seedMap() {
+  PIECES.forEach((p) => { if (p.seed) drawPieceRegion(p, p.seed.x, p.seed.y, p.seed.w, p.seed.h); });
+  renderPieceList(); recomputeContentBox(true); validateMap();
+}
+
+// =====================================================================
+//  C · 배번 / 이름 영역
+// =====================================================================
+const rgnCanvas = $("#rgnCanvas");
+const LABELS = { number: "배번", name: "이름" };
+const SAMPLE = { number: "07", name: "이름" };
+let activeTool = null, rgnSelected = null;
+rgnCanvas.__ed = {
+  select(el) {
+    rgnCanvas.querySelectorAll(".region").forEach((r) => r.classList.toggle("is-selected", r === el));
+    rgnSelected = el; showRgnOpts(el);
+  },
+};
+function relBbox(el) {
+  // rel to back piece preview (the canvas) — preset name/number rel_bbox
+  const x = parseFloat(el.style.left) / 100, y = parseFloat(el.style.top) / 100;
+  const w = parseFloat(el.style.width) / 100, h = parseFloat(el.style.height) / 100;
+  return [x, y, x + w, y + h].map((v) => v.toFixed(2));
+}
+function showRgnOpts(el) {
+  if (!el) { $("#regionOpts").classList.add("hidden"); return; }
+  $("#regionOpts").classList.remove("hidden");
+  $("#optTitle").textContent = LABELS[el.dataset.kind] + " 영역";
+  $("#optSize").textContent = Math.round(parseFloat(el.style.width)) + "% × " + Math.round(parseFloat(el.style.height)) + "%";
+  $("#optRel").textContent = "rel_bbox [" + relBbox(el).join(", ") + "]";
+  $("#optAlign").querySelectorAll("button").forEach((b) => b.classList.toggle("is-active", b.dataset.align === el.dataset.align));
+}
+function makeRgn(kind, x, y, w, h, align) {
+  return addRegion(rgnCanvas, {
+    cls: "region--" + kind, x, y, w, h, align: align || "center",
+    label: LABELS[kind], sample: SAMPLE[kind], data: { kind }, deletable: true,
+    onChange: (el) => { if (el === rgnSelected) showRgnOpts(el); },
+    onDelete: (el) => { if (el === rgnSelected) { rgnSelected = null; showRgnOpts(null); } },
+  });
+}
+document.querySelectorAll(".toolbtn").forEach((b) => {
+  b.addEventListener("click", () => {
+    const t = b.dataset.tool;
+    activeTool = activeTool === t ? null : t;
+    document.querySelectorAll(".toolbtn").forEach((x) => x.classList.toggle("is-active", x.dataset.tool === activeTool));
+    rgnCanvas.classList.toggle("is-drawing", !!activeTool);
+    $("#rgnHint").textContent = activeTool ? `${LABELS[activeTool]} 영역을 그릴 위치에서 드래그하세요.` : "영역을 끌어 옮기거나 모서리로 크기를 조절하세요.";
+  });
+});
+rgnCanvas.addEventListener("pointerdown", (e) => {
+  if (!activeTool || e.target.closest(".region")) {
+    if (!e.target.closest(".region")) rgnCanvas.__ed.select(null);
+    return;
+  }
+  const start = relPct(rgnCanvas, e.clientX, e.clientY);
+  const el = makeRgn(activeTool, start.x, start.y, 0.1, 0.1, "center");
+  rgnCanvas.__ed.select(el);
+  const move = (ev) => {
+    const p = relPct(rgnCanvas, ev.clientX, ev.clientY);
+    const x = Math.min(start.x, p.x), y = Math.min(start.y, p.y);
+    Object.assign(el.style, { left: x + "%", top: y + "%", width: clamp(Math.abs(p.x - start.x), 0, 100 - x) + "%", height: clamp(Math.abs(p.y - start.y), 0, 100 - y) + "%" });
+    fitSample(el); showRgnOpts(el);
+  };
+  const up = () => {
+    document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", up);
+    if (parseFloat(el.style.width) < 5 || parseFloat(el.style.height) < 4) { el.remove(); rgnCanvas.__ed.select(null); }
+    activeTool = null;
+    document.querySelectorAll(".toolbtn").forEach((x) => x.classList.remove("is-active"));
+    rgnCanvas.classList.remove("is-drawing");
+    $("#rgnHint").textContent = "영역을 끌어 옮기거나 모서리로 크기를 조절하세요. 새 영역은 도구를 다시 선택하세요.";
+  };
+  document.addEventListener("pointermove", move); document.addEventListener("pointerup", up);
+});
+$("#optAlign").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
+  if (!rgnSelected) return;
+  rgnSelected.dataset.align = b.dataset.align; fitSample(rgnSelected); showRgnOpts(rgnSelected);
+}));
+function seedRgn() {
+  makeRgn("number", 34, 22, 32, 20, "center");
+  makeRgn("name", 28, 50, 44, 11, "center");
+}
+
+// =====================================================================
+//  Register flow (substeps A · B · C)
+// =====================================================================
+const SUB = ["파일 업로드", "디자인 매핑", "배번/이름"];
+let rs = 0, seeded = { B: false, C: false };
+function renderSubStepper() {
+  let h = "";
+  SUB.forEach((s, i) => {
+    const cls = i < rs ? "is-done" : i === rs ? "is-active" : "";
+    const inner = i < rs ? '<span class="material-symbols-outlined">check</span>' : (i + 1);
+    h += `<span class="substep ${cls}"><span class="substep__dot">${inner}</span><span class="substep__label">${s}</span></span>`;
+    if (i < SUB.length - 1) h += '<span class="substep__line"></span>';
+  });
+  $("#subStepper").innerHTML = h;
+}
+function showSub() {
+  $("#subA").classList.toggle("hidden", rs !== 0);
+  $("#subB").classList.toggle("hidden", rs !== 1);
+  $("#subC").classList.toggle("hidden", rs !== 2);
+  renderSubStepper();
+  if (rs === 1 && !seeded.B) { seedMap(); seeded.B = true; }
+  if (rs === 2 && !seeded.C) { seedRgn(); seeded.C = true; }
+  $("#regPrev").innerHTML = rs === 0
+    ? '<span class="material-symbols-outlined">close</span>취소'
+    : '<span class="material-symbols-outlined">arrow_back</span>이전';
+  $("#regNext").innerHTML = rs === 2
+    ? '<span class="material-symbols-outlined">save</span>패턴 저장'
+    : '다음 단계<span class="material-symbols-outlined">arrow_forward</span>';
+}
+function regForward() {
+  if (rs === 1 && !validateMap()) {
+    toast("warn", "warning", "미매핑 조각이 있습니다", "모든 조각의 디자인 영역을 지정하세요.");
+    return;
+  }
+  if (rs === 2) {
+    const n = rgnCanvas.querySelectorAll(".region--number").length;
+    const m = rgnCanvas.querySelectorAll(".region--name").length;
+    toast("pass", "check_circle", "패턴이 저장되었습니다", `조각 ${PIECES.length} · 배번 ${n} · 이름 ${m} · 사이즈 4/7`);
+    return;
+  }
+  rs++; showSub();
+}
+function regBack() {
+  if (rs === 0) { backToList(); return; }
+  rs--; showSub();
+}
+$("#regNext").addEventListener("click", regForward);
+$("#regPrev").addEventListener("click", regBack);
+
+// ---- mode switching ----
+$("#btnRegister").addEventListener("click", () => {
+  $("#listMode").classList.add("hidden"); $("#registerMode").classList.remove("hidden");
+  rs = 0; showSub();
+});
+$("#btnBack").addEventListener("click", backToList);
+function backToList() { $("#registerMode").classList.add("hidden"); $("#listMode").classList.remove("hidden"); }
+
+window.addEventListener("resize", () => document.querySelectorAll(".region").forEach(fitSample));
+showSub();
+</script>
+</body>
+</html>

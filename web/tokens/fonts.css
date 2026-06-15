@@ -1,0 +1,42 @@
+/* ============================================================
+   STIZ · Fonts
+   Pretendard — the brand's primary typeface (Korean + Latin).
+   Used across stiz.co.kr; OFL-licensed, no substitution needed.
+   Variable font served from the brand's pinned CDN.
+   ============================================================ */
+
+@font-face {
+  font-family: "Pretendard";
+  font-style: normal;
+  font-weight: 45 920;
+  font-display: swap;
+  src: url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/woff2/PretendardVariable.woff2")
+    format("woff2-variations");
+}
+
+/* Static weights kept as explicit fallbacks for environments that
+   ignore the variable axis. */
+@font-face {
+  font-family: "Pretendard Static";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/woff2/Pretendard-Regular.woff2")
+    format("woff2");
+}
+@font-face {
+  font-family: "Pretendard Static";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/woff2/Pretendard-SemiBold.woff2")
+    format("woff2");
+}
+@font-face {
+  font-family: "Pretendard Static";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/woff2/Pretendard-Bold.woff2")
+    format("woff2");
+}
