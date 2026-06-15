@@ -10,6 +10,9 @@
 
   python -m engine parse --pattern P.svg
       패턴 SVG 파싱 결과(조각 수/크기) 요약 출력.
+
+  python -m engine grade --preset PRESET.json --design D.ai [--out DIR]
+      preset.json + 디자인으로 전 사이즈를 자동 합성(방식 A: 앵커 정합) → 검증 → 미리보기.
 """
 from __future__ import annotations
 
@@ -19,6 +22,7 @@ import sys
 
 from . import fixtures, pattern, preview, verify
 from .compose import Piece, SizeLayout, compose, grid_layout
+from .grade import grade as grade_run  # preset.json 기반 전 사이즈 합성(방식 A)
 from .pdfutil import scale_translate
 
 
@@ -118,6 +122,26 @@ def cmd_parse(args) -> int:
     return 0
 
 
+def cmd_grade(args) -> int:
+    """preset.json + 디자인으로 전 사이즈를 자동 합성(방식 A) → 검증 → 미리보기."""
+    out_dir = args.out
+    os.makedirs(out_dir, exist_ok=True)
+    out_pdf = os.path.join(out_dir, "grade_composed.pdf")
+
+    # ── 핵심: grade.py 가 preset 을 읽어 방식 A 로 전 사이즈를 합성한다(engine.compose 호출). ──
+    placements = grade_run(args.preset, args.design, out_pdf)
+    print(f"그레이딩 합성 완료: 배치 {placements}회 -> {out_pdf}")
+
+    # ── 출력물 검증(무손실/단일임베드/색공간 등). 디자인 원본과 대조한다. ──
+    checks = verify.verify_output(out_pdf, args.design, placements)
+    print(verify.format_report(checks))
+
+    # ── 검수용 PNG 미리보기(눈으로 확인용, 출력 적합성 판정 아님). ──
+    previews = preview.render_previews(out_pdf, out_dir, prefix="grade")
+    print(f"미리보기 {len(previews)}장 저장: {out_dir}")
+    return 0 if verify.all_passed(checks) else 1
+
+
 def _force_utf8_console() -> None:
     """한글 Win 기본 콘솔(cp949)에서 '—'(U+2014) 등 비-cp949 문자 출력 시
     UnicodeEncodeError 크래시를 막기 위해 stdout/stderr를 UTF-8로 고정한다.
@@ -149,6 +173,12 @@ def main(argv=None) -> int:
     pp = sub.add_parser("parse", help="패턴 SVG 파싱 요약")
     pp.add_argument("--pattern", required=True)
     pp.set_defaults(func=cmd_parse)
+
+    gp = sub.add_parser("grade", help="preset.json+디자인으로 전 사이즈 합성(방식 A)")
+    gp.add_argument("--preset", required=True, help="패턴 폴더의 preset.json 경로")
+    gp.add_argument("--design", required=True, help="기준 디자인 파일(.ai/.pdf)")
+    gp.add_argument("--out", default="_grade_out")
+    gp.set_defaults(func=cmd_grade)
 
     args = p.parse_args(argv)
     return args.func(args)

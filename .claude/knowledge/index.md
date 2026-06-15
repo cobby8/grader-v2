@@ -5,7 +5,7 @@
 |------|--------|------------|
 | architecture.md | 2 | 2026-06-15 |
 | errors.md | 1 | 2026-06-15 |
-| conventions.md | 0 | - |
+| conventions.md | 3 | 2026-06-15 |
 | decisions.md | 4 | 2026-06-15 |
 | lessons.md | 1 | 2026-06-15 |
 
