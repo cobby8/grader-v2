@@ -129,8 +129,15 @@ def cmd_grade(args) -> int:
     out_pdf = os.path.join(out_dir, "grade_composed.pdf")
 
     # ── 핵심: grade.py 가 preset 을 읽어 방식 A 로 전 사이즈를 합성한다(engine.compose 호출). ──
-    placements = grade_run(args.preset, args.design, out_pdf)
+    #    --number/--name 을 주면 뒤판에 배번/이름을 벡터 글자로 그린다(없으면 글자 없이 기존과 동일). ──
+    warnings = []
+    placements = grade_run(args.preset, args.design, out_pdf,
+                           number=args.number, name=args.name, warnings=warnings)
     print(f"그레이딩 합성 완료: 배치 {placements}회 -> {out_pdf}")
+
+    # ── 글자 렌더 경고(글리프 누락·칸 오류 등)가 있으면 화면에 안내. ──
+    for w in warnings:
+        print(w)
 
     # ── 출력물 검증(무손실/단일임베드/색공간 등). 디자인 원본과 대조한다. ──
     checks = verify.verify_output(out_pdf, args.design, placements)
@@ -178,6 +185,8 @@ def main(argv=None) -> int:
     gp.add_argument("--preset", required=True, help="패턴 폴더의 preset.json 경로")
     gp.add_argument("--design", required=True, help="기준 디자인 파일(.ai/.pdf)")
     gp.add_argument("--out", default="_grade_out")
+    gp.add_argument("--number", default=None, help="(선택) 뒤판에 그릴 배번(예: 7)")
+    gp.add_argument("--name", default=None, help="(선택) 뒤판에 그릴 이름(예: 김민수)")
     gp.set_defaults(func=cmd_grade)
 
     args = p.parse_args(argv)

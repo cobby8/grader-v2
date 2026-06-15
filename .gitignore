@@ -14,7 +14,8 @@ grading_compare/previewB/
 grading_compare/_measure/
 
 # grade 합성 결과물 (python -m engine grade 재실행으로 재생성)
-_grade_out/
+# _grade_out, _grade_out_text2, _grade_out_reg 등 모든 grade 출력 폴더 포함
+_grade_out*/
 
 # 가상환경
 .venv/

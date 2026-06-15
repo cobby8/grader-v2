@@ -31,10 +31,14 @@ class Piece:
     transform : 디자인 좌표를 시트 좌표로 옮기는 cm 행렬 (a b c d e f).
                 기본 헬퍼 scale_translate(scale, ox, oy)로 만든다.
     name      : 식별용 (예: '앞판', '뒤판').
+    extra_ops : 디자인 배치 위에 더 그릴 추가 벡터 PDF 연산자(예: 배번·이름 글자 경로).
+                기본 빈 문자열 → 기존 호출은 전부 그대로 동작(무손실 확장). 디자인 Form 은
+                건드리지 않고 페이지 콘텐츠에만 덧그린다(device CMYK·verify PASS 유지).
     """
     outline: Sequence[Point]
     transform: Matrix
     name: str = ""
+    extra_ops: str = ""
 
 
 @dataclass
@@ -72,6 +76,10 @@ def compose(design_pdf: str, layouts: Sequence[SizeLayout], out_path: str,
             for piece in layout.pieces:
                 blocks.append(place_block(piece.outline, piece.transform, str(name)))
                 placements += 1
+                # 디자인 배치(q…Do…Q) 뒤에 추가 벡터(글자 등)를 얹는다 — 디자인 위에 그려짐.
+                # extra_ops 는 Do 를 쓰지 않으므로 placements(=Do 개수)는 변하지 않는다.
+                if piece.extra_ops:
+                    blocks.append(piece.extra_ops)
             content = "\n".join(blocks).encode("ascii")
             page.obj["/Contents"] = out.make_stream(content)
 

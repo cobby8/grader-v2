@@ -2,6 +2,24 @@
 <!-- 담당: planner-architect | 최대 30항목 -->
 <!-- "왜 A 대신 B를 선택했는지" 기술 결정의 배경과 이유를 기록 -->
 
+### [2026-06-15] A-2 패턴 로딩 계층 분리: engine/pattern_loader.py 신설 (pattern.py 추가 X)
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: 다중 사이즈 SVG 로딩(사이즈 순회→경로탐색→parse_svg→Piece 변환)을 grade.py `build_layouts`에서 떼어 **응용 계층 신규 모듈 `engine/pattern_loader.py`**로 분리. pattern.py에 함수 추가하지 않는 이유: pattern.py는 `parse_svg/Polyline`을 제공하는 engine 공개 모듈로 preset을 몰라야 함(계층 분리). preset 규약을 아는 코드는 grade.py와 같은 응용 계층에 둔다. 방식A transform(_piece_transform)은 A-1 확정 자산이라 grade.py에 그대로 유지하고 loader가 import. 공개 API(parse_svg 등) 불변 제약 준수.
+- **참조횟수**: 0
+
+### [2026-06-15] A-4 글자 결합 방식: Piece.extra_ops 필드(기본값 "") + 글리프 큐빅 경로
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: 배번/이름 벡터 렌더(engine/text.py)에서 글자를 디자인에 얹는 방법으로 (A)페이지 콘텐츠에 글자블록 append vs (B)Piece에 extra_ops 필드 추가 중 **(B) 채택**. 이유: 글자는 "특정 조각의 특정 칸"에 종속된 정보라 Piece에 묶는 게 의미상 맞고, compose 변경이 루프 안 1줄(`if piece.extra_ops: blocks.append(...)`)로 끝나 가장 작다. Piece dataclass에 `extra_ops: str = ""` **기본값 빈문자열**로 추가 → 공개 API "기존 인자 불변+신규는 기본값" 원칙 유지(기존 호출 전부 무수정 동작), compose 시그니처 자체는 불변. 디자인 Form은 손대지 않으므로 바이트동일/단일임베드 검증 영향 0. 글자는 CMYK `k` fill·투명도 미사용·이미지 0생성·`Do` 미사용 → verify_output 전항목(래스터미추가·CMYK유지·배치횟수==placements) 그대로 PASS. **폰트 확정**: Pretendard-Black/Bold.otf는 CFF(큐빅 베지어) 아웃라인(glyf 아님), unitsPerEm=2048 → 펜의 curveTo가 PDF `c`(큐빅)에 1:1 대응(곡선 근사 불필요). 한글은 글리프 경로 좌표로 펴지므로 ascii 콘텐츠에 한글 바이트가 안 들어감(compose가 .encode("ascii")라도 안전). 글리프 누락 시 해당 텍스트(선수) 전체 미출력+경고(부분 글자 누락이 이름 깨짐보다 위험). 단독 테스트는 CLI `--number`/`--name` 플래그(job 단계 전이므로).
+- **참조횟수**: 0
+
+### [2026-06-15] A-2 사이즈 SVG 탐색 규약 + 누락 부분성공 정책
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: 사이즈별 SVG 경로 탐색은 2단계 폴백 — ①`size.pattern_file` 명시 시 그대로(현행) ②없으면 파일명 컨벤션 `<size.name>.svg` 자동 탐색. → 신규 사이즈는 SVG 파일 넣고 sizes에 `{"name":"S"}` 한 줄만 추가하면 코드수정 0으로 동작(사용자 요구). preset.json 구조 변경 없음(pattern_file을 필수→선택으로 문서 완화만). 누락 사이즈는 **에러 대신 경고+건너뜀(부분 성공)**: 있는 사이즈만 합성, 전부 누락일 때만 에러. 높이정렬(svg_index) 역전 위험은 A-2에서 (a)조각 개수 검증 (b)종횡비 교차검증 경고로 방어하되, piece_id↔SVG id 근본매칭은 현 SVG에 조각 id가 없어 보류(백로그⑤ 별도 결정).
+- **참조횟수**: 0
+
 ### [2026-06-10] 공장 출력 포맷: EPS → PDF 전환
 - **분류**: decision
 - **발견자**: pm / planner-architect

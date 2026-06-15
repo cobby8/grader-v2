@@ -42,11 +42,17 @@
   },
   "number_area": {
     "piece_id": "back",
-    "rel_bbox": [0.30, 0.35, 0.70, 0.60]
+    "rel_bbox": [0.30, 0.35, 0.70, 0.60],
+    "font": "data/fonts/Pretendard-Black.otf",
+    "color_cmyk": [0, 0, 0, 0],
+    "align": "center"
   },
   "name_area": {
     "piece_id": "back",
-    "rel_bbox": [0.25, 0.62, 0.75, 0.74]
+    "rel_bbox": [0.25, 0.62, 0.75, 0.74],
+    "font": "data/fonts/Pretendard-Bold.otf",
+    "color_cmyk": [0, 0, 0, 0],
+    "align": "center"
   },
   "shrink": {
     "x": 1.0,
