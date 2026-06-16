@@ -8,6 +8,12 @@
 - **내용**: 시스템엔 서로 다른 좌표계 3개가 존재한다. ①디자인 AI(기준 XL) MediaBox `4478×5669pt`(세로 긴 양면펼침 페이지) ②패턴 SVG(예 XS) viewBox `4337×3401`(가로 긴 조각나열 마커시트, y아래로 증가) ③출력 대지 158×200cm 고정(일러 기준). engine은 ①을 통짜 Form XObject 1개로 임베드하고 ②의 조각 윤곽으로 클리핑(W n)+cm 변환해 무손실 합성. preset.json은 이 셋을 잇는 변환정보를 담는다. **매핑 경로**: preset의 조각 outline → parse_svg()→Polyline.points → `Piece.outline`(PDF좌표, y뒤집음) / preset의 design_mapping(조각별 fit·anchor·scale) → `Piece.transform`(=scale_translate cm행렬) / page_size → `SizeLayout.page_size` / number_area·name_area(조각 상대비율) → A-4 text.py가 절대좌표 환산. engine 공개 API는 불변(주어진 것).
 - **참조횟수**: 0
 
+### [2026-06-15] A-5 주문서 파싱 경로 (engine/order.py, 입력 파서·코어 독립) + STIZ 표준 주문서 양식 2종
+- **분류**: architecture
+- **발견자**: planner-architect
+- **내용**: order.py는 xlsx→`[{name,number,size,qty}]`로 변환하는 **순수 입력 파서**로, engine 코어(compose/Piece/parse_svg)와 완전 독립(conventions "import만/코어 불건드림" 준수). 흐름: parse_order(xlsx)→[행dict] → (차기)job.py가 사이즈로 레이아웃 선택 + name/number를 A-4 text.py extra_ops로 연결. 폴더+JSON 원칙상 결과를 작업폴더 order.json으로 덤프 권장(검수·수정). **실데이터 86개 전수 분석 결과 STIZ 표준 템플릿 2종 확정**: ①「선수별 행」(81/86, 메인) — A=이니셜(이름) B=배번 C=상의사이즈 D=하의사이즈, 1선수=1행, 헤더 텍스트 '이니셜/배 번/사이즈'가 **2행 또는 3행**(신구 버전, 행 고정 금지·키워드 탐색), 헤더 아래 부제행(상의/하의) 건너뛰고 +2행부터 빈행까지가 데이터. ②「사이즈 집계」(5/86, 연습복·슈팅저지·추가주문) — '이니셜' 헤더 없이 A=사이즈 세로나열 B=수량, 이름·배번 없음(기존 grader order_parser.py 규칙으로 처리). 종목(농구/배구/축구/피구/줄넘기) 차이는 거의 없고 차이는 양식 버전에서 옴. 첫 시트=최신 접수일(시트명=날짜6자리), 과거 시트 다수 → 첫시트+사이즈최다시트 폴백. data_only=True 필수(배번이 수식/숫자). H~N열=시안이미지(무시). 사이즈 토큰에 **아동 호수 8/10/12/14호**(피구·줄넘기 76건) 포함, "○○호"는 이름끝 '호' 오탐 차단(^\d{1,2}호$). openpyxl Custom Properties 버그는 현 86개 전부 미발생(custom.xml 0개)이나 기존 grader StringProperty name=None→"" 몽키패치는 외부 xlsx 대비 방어 이식 권장.
+- **참조횟수**: 0
+
 ### [2026-06-15] A-4 배번·이름 벡터 렌더 경로 (engine/text.py → Piece.extra_ops → compose 콘텐츠)
 - **분류**: architecture
 - **발견자**: planner-architect

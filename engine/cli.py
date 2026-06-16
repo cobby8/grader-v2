@@ -13,6 +13,10 @@
 
   python -m engine grade --preset PRESET.json --design D.ai [--out DIR]
       preset.json + 디자인으로 전 사이즈를 자동 합성(방식 A: 앵커 정합) → 검증 → 미리보기.
+
+  python -m engine order ORDER.xlsx [--json OUT.json]
+      주문서 xlsx 를 파싱해 [{name,number,size,qty}] 행을 추출 → 행수·샘플 출력.
+      --json 을 주면 결과를 그 경로에 JSON 으로 저장(job 단계에서 읽을 order.json).
 """
 from __future__ import annotations
 
@@ -23,6 +27,7 @@ import sys
 from . import fixtures, pattern, preview, verify
 from .compose import Piece, SizeLayout, compose, grid_layout
 from .grade import grade as grade_run  # preset.json 기반 전 사이즈 합성(방식 A)
+from .order import parse_order  # 주문서 xlsx → [{name,number,size,qty}] 파서(코어 독립)
 from .pdfutil import scale_translate
 
 
@@ -149,6 +154,44 @@ def cmd_grade(args) -> int:
     return 0 if verify.all_passed(checks) else 1
 
 
+def cmd_order(args) -> int:
+    """주문서 xlsx 를 파싱해 행수·샘플을 출력하고(옵션) JSON 으로 덤프한다."""
+    # ── 핵심: order.parse_order 가 xlsx 를 표준 행 리스트로 바꾼다(engine 코어 무관). ──
+    warnings: list = []
+    rows = parse_order(args.xlsx, warnings=warnings)
+
+    # ── 경고(열기 실패·사이즈 누락 등)를 먼저 안내한다. ──
+    for w in warnings:
+        print(w)
+
+    print(f"파싱된 행 수: {len(rows)}개  (파일: {args.xlsx})")
+
+    # ── 사이즈 분포 요약(어떤 사이즈가 몇 개인지 한눈에). ──
+    dist: dict = {}
+    for r in rows:
+        key = r["size"] if r["size"] else "(빈사이즈)"
+        dist[key] = dist.get(key, 0) + 1
+    if dist:
+        summary = ", ".join(f"{k}:{v}" for k, v in sorted(dist.items()))
+        print(f"사이즈 분포: {summary}")
+
+    # ── 앞 10행 샘플 출력(사람이 눈으로 검수). ──
+    print("샘플(최대 10행):")
+    for r in rows[:10]:
+        print(f"  이름='{r['name']}' 배번='{r['number']}' "
+              f"사이즈='{r['size']}' 수량='{r['qty']}'")
+
+    # ── --json 지정 시 결과를 파일로 저장(job 단계가 읽을 order.json). ──
+    if args.json:
+        import json
+        with open(args.json, "w", encoding="utf-8") as f:
+            json.dump(rows, f, ensure_ascii=False, indent=2)
+        print(f"JSON 저장: {args.json}")
+
+    # 행을 하나라도 찾으면 성공으로 본다(빈 결과면 1 — 사용자가 알아채게).
+    return 0 if rows else 1
+
+
 def _force_utf8_console() -> None:
     """한글 Win 기본 콘솔(cp949)에서 '—'(U+2014) 등 비-cp949 문자 출력 시
     UnicodeEncodeError 크래시를 막기 위해 stdout/stderr를 UTF-8로 고정한다.
@@ -188,6 +231,11 @@ def main(argv=None) -> int:
     gp.add_argument("--number", default=None, help="(선택) 뒤판에 그릴 배번(예: 7)")
     gp.add_argument("--name", default=None, help="(선택) 뒤판에 그릴 이름(예: 김민수)")
     gp.set_defaults(func=cmd_grade)
+
+    op = sub.add_parser("order", help="주문서 xlsx 파싱(행수·샘플 출력)")
+    op.add_argument("xlsx", help="주문서 엑셀 파일 경로(.xlsx)")
+    op.add_argument("--json", default=None, help="(선택) 결과를 저장할 JSON 경로")
+    op.set_defaults(func=cmd_order)
 
     args = p.parse_args(argv)
     return args.func(args)

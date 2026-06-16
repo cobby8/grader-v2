@@ -1,381 +1,304 @@
 # 작업 스크래치패드
 
 ## 현재 작업
-- **요청**: 코워크 새 의뢰서(A-1 이후 잔여) — 우선순위 재정의. 추천 순서대로 진행 확정.
-- **상태**: A-4 구현 중 (설계 승인 완료)
-- **현재 담당**: developer
-- **A-4 결정 확정(2026-06-15)**: R-A 좌하단 기준 / R-B em중앙 근사 / R-C stroke 1차 제외(fill만) / R-E 검증시 임시검정→흰색복원 / R-F 글리프 누락 시 텍스트 통째 생략+경고 / 결합=Piece.extra_ops 필드 추가(compose 시그니처 불변) / 단독테스트=grade+build_layouts에 number/name 인자 + CLI --number/--name
+- **요청**: 코워크 새 의뢰서(A-1 이후 잔여) — 우선순위 재정의. 추천 순서대로 진행 중.
+- **상태**: A-5 되돌림 루프 1회차 — developer 시트선택 수정 **완료**(표식시트>첫시트>행최다). 재검증 PASS → tester 재검증 대기
+- **현재 담당**: tester (수정본 재검증) 대기
+- **🔴 수정 의뢰(되돌림1)**: order.py 시트 선택이 "행 최다 폴백" 탓에 과거 대량 접수분 시트를 잘못 채택. → "첫 시트(이번 주문) 우선 → 주문번호/수량 명시 시트 → 행 최다는 최후 폴백"으로 변경. 재검증 시 다중시트 표본(줄넘기/중앙고/LG반팔 등 13개) 포함 필수.
+- **A-5 결정 확정(2026-06-16)**: R1 양식①(선수별행 81개) 메인 완성+양식②(집계 5개) best-effort, 나머지 빈값+경고 / R2 상의 사이즈 기준(하의 백로그) / R3 qty="1" 고정 / R4 아동 호수(N호) 사이즈 사전 포함 / R5 Custom Properties 방어패치 이식(try/except)
+- **A-5 실데이터**: `G:/공유 드라이브/CHINA FACTORY/프랭크웨어 주문서/0.중국 프랭크웨어 주문서/` 하위 — 종목별(농구/배구/축구/줄넘기/피구/번아웃) xlsx 86개. 각 주문서는 `<종목>주문서/<이름>.xlsx` 형태.
 
-### 새 우선순위 (의뢰서 2026-06-15, 사용자 "추천순서대로" 승인)
-1. **A-4** 배번/이름 렌더 engine/text.py (폰트 확보됨 → 착수) ⬅️ **지금**
-2. **A-5** 주문서 파싱 engine/order.py (xlsx→행, 폰트 불필요)
+### 새 우선순위 (의뢰서 2026-06-15, "추천순서대로" 승인)
+1. ~~A-4 배번/이름 렌더 engine/text.py~~ ✅완료(c1d0048)
+2. **A-5 주문서 파싱 engine/order.py** (xlsx→[{size,qty,name,number}], 폰트 불필요) ⬅️ **다음**
 3. **job** 선수별 통합 engine/job.py (주문행×디자인→선수별 출력, A-4·A-5 선행)
-4. **A-2** 전 사이즈 (실제 XS~5XL 패턴 파일 사용자 확보 대기 / 설계는 완료됨)
-5. **B** 웹앱 FastAPI + web/ 결합
+4. **A-2** 전 사이즈 (실제 XS~5XL 패턴 파일 사용자 확보 대기 / 설계 완료·코드 0%)
+5. **B** 웹앱 FastAPI + web/ 결합 (web/ 시안 커밋됨 c7fc068)
 
-### A-4 재료 (확보 완료)
-- 폰트: data/fonts/Pretendard-Black.otf(배번), Pretendard-Bold.otf(이름). 둘 다 한글+숫자+영문, OFL 상업인쇄 가능.
-- fontTools 4.63.0 설치 완료(requirements.txt 등재).
-- preset number_area(piece_id=back, rel_bbox[0.30,0.35,0.70,0.60], Black, cmyk[0,0,0,0]흰색, center) / name_area(back, rel_bbox[0.25,0.62,0.75,0.74], Bold, 흰색, center) 이미 완비.
-- A-4 방식(의뢰서): fontTools 글리프→윤곽→PDF 경로연산자(m/l/c…f) CMYK 단색 fill. 폰트 임베드 X(아웃라인화). verify_output 여전히 PASS(래스터 미추가·CMYK 유지)여야 함.
-
-### A-2 메모 (보류, 설계 완료)
-- A-2 코드는 미작성(0%). 설계만 "## 기획설계" 섹션에 보존. R1 piece_id매칭 보류 / R2 종횡비30% / R3 _piece_transform grade.py유지 / R4 바이트동일. 실제 전 사이즈 패턴 파일 확보 시 재개.
-
-### A-2 핵심 변수 (2026-06-15 확인)
-- **실데이터에 pattern_XS.svg 1개뿐**. S/M/L/XL/XXL SVG 없음. (config: baseSize=XL디자인 / targetSize=XS패턴)
-- → A-2 "전 사이즈 SVG 로딩"은 **구조만 일반화**하고 현재는 XS로 검증, 나머지 사이즈 SVG는 추후 투입 시 동작하도록 설계 필요.
-
-### 로드맵
-A-1 preset스키마+좌표정합 ✅ → **A-2 패턴로딩** → A-3 전사이즈 일괄합성 → A-4 text.py 배번/이름 → A-5 order.py 주문서 → A-6 투명도차단 → B 웹앱
+### A-5 의뢰서 명세 (착수 시 참고)
+- 목표: xlsx → `[{size, qty, name, number}]`. 웹 업로드/CLI 양쪽 호출. `parse_order(xlsx_path) -> list[dict]`.
+- 이식 지식(기존 grader 규칙만): 사이즈 키워드 **긴 것부터** 매칭(5XL→…→XL→…→S) / 셀 **전체 스캔**(가로형·세로형·표형) / openpyxl Custom Properties 버그 워크어라운드.
+- 추출 실패 셀=빈 문자열(크래시 X, 웹에서 붉게 강조). 완료기준: 실제 주문서 2~3종으로 행 추출 검증.
+- ⚠️ 사용자 준비물: 실제 주문서 양식(xlsx) 2~3종 — 없으면 샘플 만들어 파이프라인 검증.
 
 ### 불변 제약
-engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_output) 불변 / device CMYK 무손실(바이트동일) / 빌드0·순수HTML+vanillaJS / 폴더+JSON 저장 / CLI 단독 테스트 가능
+engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_output) 불변(신규 인자는 기본값 확장만) / device CMYK 무손실 / 빌드0·순수HTML+vanillaJS / 폴더+JSON 저장 / CLI 단독 테스트 가능
 
 ### 확정 사실 (방식A 앵커 정합)
-- 좌표정합 = 방식A(앵커, bottom-left, 등방 contain) 확정. grade.py `_piece_transform`이 정답 공식.
-- 실측 디자인영역(design_XL.ai pt): 앞판 x[468..2098]y[2877..5287]→svg_index1 / 뒤판 x[2310..3997]y[2877..5287]→idx0 / 소매 x[468..2225]y[5301..5562]→idx2. (parse_svg 높이 내림차순 정렬: 0=뒤판,1=앞판,2=소매)
-- 출력=다페이지 1PDF / 패턴=전사이즈 SVG 보유 예정
+- 좌표정합 = 방식A(앵커 bottom-left, 등방 contain). grade.py `_piece_transform`이 정답 공식.
+- 디자인영역(design_XL.ai pt): 앞판 x[468..2098]y[2877..5287]→svg_idx1 / 뒤판 x[2310..3997]y[2877..5287]→idx0 / 소매 x[468..2225]y[5301..5562]→idx2. (parse_svg 높이 내림차순: 0=뒤판,1=앞판,2=소매)
+- 출력=다페이지 1PDF. A-4 글자: Piece.extra_ops에 CMYK경로 주입(디자인 Form 불변, verify PASS 유지).
+- ⚠️ pikepdf 출력 비결정적(XObject 이름 랜덤): 바이트동일 회귀는 "이름 정규화 후 콘텐츠 비교"로. (errors.md)
 
-### A-2~ 백로그 (reviewer 지적, 차단 아님)
-①verify.py cm 정규식 음수 미허용→방식A 오프셋 음수라 "스케일cm" FAIL(engine 수정 승인 필요) ②shrink 등방한계(가로/세로 다른 수축 미반영) ③preset sizes.scale 미사용(스키마/구현 불일치) ④number/name_area piece_id 유효성 검증 없음 ⑤svg_index 높이정렬 가정 사이즈확장 시 재확인
+### 백로그 (차단 아님)
+①verify.py cm 정규식 음수 미허용→방식A 오프셋 음수라 "스케일cm" FAIL(engine 수정 승인 필요) ②shrink 등방한계 ③preset sizes.scale 미사용 ④number/name_area piece_id 유효성 검증 없음 ⑤svg_index 높이정렬 가정 사이즈확장 시 재확인 ⑥A-4 이름 세로정렬 descent 무시로 받침 ~3.6pt 삐짐(흰글자라 거의 안보임)
 
-### 실데이터 경로
-../grader/illustrator-scripts/test/ (config.json, design_XL.ai, pattern_XS.svg, result.json, output_XS_ai.eps)
-원천 로직: ../grader/illustrator-scripts/grading.jsx (기존 좌표정합)
+### 설계 보존 (상세는 git c1d0048 scratchpad / decisions.md)
+- **A-2 패턴로딩**: pattern_loader.py 신설 / pattern_file→<name>.svg 폴백 / 개수·종횡비30% 안전망 / 누락 부분성공+경고 / R3 _piece_transform는 grade.py 유지. 코드 미작성(보류). 실제 전 사이즈 패턴 확보 시 재개.
+- **A-4 배번/이름**: 완료. text.py(글리프→PDF큐빅경로 m/l/c, CMYK k fill) + Piece.extra_ops.
 
-### git
-origin=cobby8/grader-v2, main. 미푸시 0개. 최신 b19c75c(A-1 완료).
+### 실데이터 / git
+- 실데이터: ../grader/illustrator-scripts/test/ (config.json, design_XL.ai, pattern_XS.svg, result.json)
+- git: origin=cobby8/grader-v2, main. **미푸시 2개**(c1d0048 A-4, c7fc068 자료). 최신 c7fc068.
 
 ## 기획설계 (planner-architect)
+(A-2/A-4 설계는 위 "설계 보존" 참조 + git c1d0048)
 
-### A-2 패턴 로딩 모듈 설계 (2026-06-15)
+### A-5 주문서 파싱 engine/order.py — 기획설계 (2026-06-15)
 
-🎯 목표: preset.sizes[]를 순회하며 사이즈별 패턴 SVG를 탐색·parse_svg 로딩하고, 각 사이즈를 engine의 Piece 리스트로 변환하는 "범용 로딩 계층"을 grade.py에서 분리한다. XS 1개로 검증, 나머지 사이즈 SVG는 코드수정 0으로 추후 합류. 누락 사이즈는 에러 아닌 경고.
+🎯 목표: xlsx → `[{size, qty, name, number}]` 리스트. 웹 업로드/CLI 양쪽 호출. 실패 셀=빈 문자열, 크래시 금지.
 
-#### 1. 책임 범위 — 무엇을 떼고 무엇을 추가하나
-현재 grade.py `build_layouts` 한 함수 안에 (A)사이즈 순회+SVG경로조립+parse_svg (B)조각별 transform(방식A) 계산 (C)페이지크기 계산 이 뒤섞여 있다. A-2는 이 중 **(A) "SVG를 찾아 읽어 조각으로 변환"하는 로딩 계층**만 떼어낸다. (B)방식A transform은 A-1 확정 자산이라 손대지 않는다.
+**1) 실제 주문서 양식 분석 (86개 전수 스캔 + 종목 5종 덤프)**
+- 양식이 **거의 통일**돼 있음(STIZ 표준 템플릿). 종목(농구/배구/축구/피구/줄넘기)별 차이 ≈ 없음. 차이는 "양식 버전"에서 옴.
+- **양식①「선수별 행」(81/86, 주류)**: A=이니셜(이름), B=배번, C=상의사이즈, D=하의사이즈, F=참고. **1선수=1행**. 헤더 텍스트=이니셜/배 번/사이즈, 헤더행 아래 `상의|하의` 부제행(C/D 병합). 데이터는 헤더+2행부터 빈행 만날 때까지.
+  - 헤더 행 위치: **3행(77개)** 또는 **2행(4개)** — 신/구 버전. → 행 고정 금지, "이니셜" 키워드로 헤더행 탐색.
+  - 레이아웃 (이니셜=A, 배번=B, 사이즈=C) 81개 전부 동일.
+- **양식②「사이즈 집계」(5/86)**: "이니셜" 헤더 없음. A=사이즈(세로 나열 5XS~5XL), B=상의수량, C=사이즈, D=하의수량. **이름·배번 없음**(연습복/슈팅저지/추가주문). 기존 grader 파서가 처리하던 형태.
+- 사이즈 토큰 실측 빈도: L428 M404 XL238 S238 2XL115 3XL67 XS44 4XL7 5XL4 + **아동 호수 "8호/10호/12호/14호"**(피구/줄넘기, 누적 76건). "○○호"는 이름 끝글자가 '호'인 오탐 주의(예 장현호).
+- 시트: 첫 시트가 최신 접수일(시트명=날짜 6자리), 과거 접수분 시트 다수. **첫 시트 기준 + 사이즈 가장 많은 시트 폴백**.
+- 병합셀 다수(헤더 C3:D3 등 부제), 데이터 영역엔 병합 거의 없음. H~N열은 시안 이미지 영역(무시).
+- 사이즈 셀 타입 혼재: 문자열('XL') / 숫자(배번이 int/float). 배번 0·00 존재(빈값 아님, "0번"). data_only=True로 읽어야 수식 결과 취득.
 
-- **파일 결정: `engine/pattern_loader.py` 신설** (pattern.py에 함수 추가 X).
-  - 이유1(공개 API 불변 제약): pattern.py는 `parse_svg/Polyline`을 제공하는 engine 공개 모듈. 거기에 preset 의존 로직(폴더규약·사이즈탐색)을 넣으면 "engine은 preset을 모른다"는 계층 분리가 깨진다. preset을 아는 코드는 grade.py와 같은 "응용 계층"에 둔다.
-  - 이유2(비유): pattern.py = "SVG 글자를 읽는 법을 아는 사전". pattern_loader.py = "어느 책(사이즈)의 몇 페이지를 펴서 사전으로 읽을지 아는 사서". 사전에 사서 업무를 섞지 않는다.
-- pattern_loader.py가 가지는 공개 함수(제안):
-  - `resolve_size_svg(preset, size) -> (경로|None, 출처설명)` : 한 사이즈의 SVG 경로를 규약대로 찾는다(없으면 None).
-  - `load_size_pieces(preset, size) -> list[Piece]` : 한 사이즈의 SVG를 parse_svg→piece_id 매칭→Piece 리스트. (방식A transform 계산은 grade.py의 `_piece_transform`를 import해 사용.)
-  - `load_all(preset) -> (results, warnings)` : 전 사이즈 순회. results=[(size, list[Piece]) ...], warnings=[안내문자열...]. 누락 사이즈는 results에서 빠지고 warnings에 기록.
-- grade.py 변경: `build_layouts`는 로딩을 pattern_loader.load_all에 위임하고, 받은 pieces로 page_size 계산(C)만 수행해 SizeLayout 조립. transform(B)는 그대로 유지.
-
-#### 2. 다중 사이즈 SVG 파일 탐색 규칙
-현 preset `sizes[]`에 이미 `pattern_file` 필드 존재(XS는 "XS.svg"). → **새 필드 추가 불필요.** 탐색 규약을 2단계 폴백으로 명문화:
-1. `size.pattern_file`이 명시돼 있으면 그 파일(`_dir` 기준 상대) 사용. (현행 유지)
-2. `pattern_file`이 없으면 **파일명 컨벤션 `<size.name>.svg`** 로 자동 탐색(예 name="S"→ S.svg). → 추후 사이즈 추가 시 sizes에 `{"name":"S"}` 한 줄만 넣어도 동작(코드수정 0 충족).
-- 경로는 항상 `preset["_dir"]` 기준 상대 → 외부 절대경로 의존 0(기존 conventions 준수).
-
-#### 3. svg_index 높이정렬 가정 방어 (백로그⑤)
-위험: parse_svg는 조각을 "높이 내림차순"으로 정렬→ preset의 `svg_index`(0=뒤판,1=앞판,2=소매)는 XS에서 실측한 순서. 사이즈가 커지면 조각 높이 대소가 역전돼 index가 엉뚱한 조각을 가리킬 수 있음.
-- A-2 방어책(최소·단순):
-  - (a) **개수 검증**: parse_svg 결과 조각 수 ≠ preset.pieces 수면 그 사이즈는 경고 후 skip(잘못 매칭하느니 명시적 실패).
-  - (b) **종횡비 교차검증(경고)**: 각 piece의 `design_region_pt` 종횡비와 svg_index가 가리킨 조각 bbox 종횡비가 크게 다르면(예 30%+ 차이) "index 매칭 의심" 경고를 띄운다(차단 아님, 사람이 보게).
-  - (c) **근본해결은 A-2 범위 밖으로 명시**: piece_id 명시 매칭(SVG 요소 id ↔ preset piece.id)은 SVG에 조각 id가 없어(현 SVG는 무명 polyline 3개) 지금은 불가. → 백로그⑤를 "별도 결정사항"으로 남기고(아래 8번), A-2는 (a)(b) 안전망만 깐다.
-
-#### 4. 누락 사이즈 처리 정책
-- **부분 성공 허용**: 한 사이즈 SVG가 없거나 파싱 0조각이어도 전체를 죽이지 않고, 있는 사이즈만 합성. (사용자 결정: 친절한 경고)
-- 경고 메시지 형식(한국어, 비개발자용):
-  - 누락: `⚠️ [건너뜀] 사이즈 'M' — 패턴 파일을 찾지 못했습니다(찾은 경로: .../M.svg). 이 사이즈는 출력에서 빠집니다.`
-  - 개수 불일치: `⚠️ [건너뜀] 사이즈 'L' — SVG 조각 5개 ≠ 정의된 조각 3개. 패턴 파일을 확인하세요.`
-  - 종횡비 의심: `🟡 [경고] 사이즈 'XS' 조각 '소매' — svg_index=2 가 가리킨 조각 비율이 예상과 달라요(의심). 결과 미리보기를 꼭 확인하세요.`
-- 전부 누락이면(results 0개) → 그때만 에러: `❌ 합성할 사이즈가 하나도 없습니다.`
-- 경고는 stdout으로 모아 cmd_grade가 출력. grade()/load_all은 warnings 리스트로 반환(웹앱 B단계에서 재사용 가능하게 텍스트만).
-
-#### 5. preset.json 스키마 변경
-- **변경 거의 없음.** `pattern_file`은 이미 있고 그대로 사용. 컨벤션 폴백(`<name>.svg`)은 코드 규약이라 스키마 변경 아님.
-- (선택) `pattern_file`을 **필수→선택**으로 문서상 완화(README에 "없으면 <사이즈>.svg 로 자동 탐색" 한 줄 추가). JSON 구조 자체는 before==after.
-  - before: `{"name":"XS","pattern_file":"XS.svg","scale":1.0}`
-  - after(동일, 단 신규 사이즈는 생략 가능): `{"name":"S"}` ← pattern_file 없이도 S.svg 자동 탐색.
-
-#### 6. A-3 인터페이스 (전 사이즈 일괄합성)
-- A-2 `load_all(preset)` 반환: `(results: list[(size_dict, list[Piece])], warnings: list[str])`.
-- A-3(build_layouts)는 results를 받아 각 (size, pieces)→ page_size 계산 후 `SizeLayout(name, page_size, pieces)` 생성 → compose에 리스트로 전달. **A-2가 Piece까지 완성해 주므로 A-3는 페이지 포장만 하면 됨.**
-- design_pdf_path 존재검증은 grade()에 유지(로딩 계층은 SVG만 책임, 디자인 PDF는 compose 책임).
-
-#### 7. 구현 단계 쪼개기 (developer용)
-1. `engine/pattern_loader.py` 신설 + `resolve_size_svg()` (pattern_file 우선 → <name>.svg 폴백 → 없으면 None).
-2. `load_size_pieces()` : parse_svg 호출 + 개수검증(3a) + svg_index 범위검증 + grade._piece_transform로 Piece 생성.
-3. 종횡비 교차검증(3b) 경고 함수 추가(차단 아님).
-4. `load_all()` : sizes 순회, 성공/누락 분기, warnings 수집, 부분성공.
-5. grade.py `build_layouts` 리팩토링: 로딩부 제거→load_all 위임, page_size 계산만 남김. (transform·방식A 로직 그대로 보존, 출력 바이트 동일 회귀 확인 필수).
-6. cli.py cmd_grade: load_all warnings를 화면에 출력(있으면).
-7. 검증: `python -m engine grade --preset ... --design design_XL.ai` → XS 정상 합성 + previewA와 바이트 동일(A-1 회귀) + (가짜 M 사이즈 한 줄 추가 테스트로 누락경고 동작 확인).
-
-#### 8. 리스크 / 미결정 (PM 결정 필요)
-- (R1) **백로그⑤ 근본해결 보류 승인**: A-2는 개수+종횡비 안전망만. piece_id↔SVG 매칭은 SVG에 조각 id가 없어 불가 → 추후 SVG에 id를 넣게 디자이너에게 요청할지, 아니면 종횡비 자동매칭을 도입할지는 별도 결정. (현재는 svg_index 수동 유지)
-- (R2) **종횡비 의심 임계값**(30% 제안) 값 확정 필요 — 너무 낮으면 정상도 경고 남발.
-- (R3) `_piece_transform`를 grade.py에 둔 채 pattern_loader가 import할지, 아니면 pattern_loader로 이동할지 — 제안: **transform은 grade.py 유지**(방식A 자산 응집), loader는 "어떤 조각을 어떤 윤곽에 얹을지"까지만. PM 확인.
-- (R4) 회귀 기준: A-1 previewA/outA.pdf와 **바이트 동일**을 통과 기준으로 삼는다(좌표/로딩만 바뀌므로 출력 불변이어야 함). 확인.
-
-### A-4 배번·이름 벡터 렌더 설계 (engine/text.py 신설) — 2026-06-15
-
-🎯 목표: preset의 number_area/name_area(조각 기준 rel_bbox 0~1)에 배번(숫자)·이름(한글)을
-**벡터 경로(아웃라인)**로 그려 넣는다. 폰트 임베드 없이 글리프를 PDF 경로연산자(m/l/c…f)로
-펴서 CMYK 단색으로 칠한다(공장 호환). 디자인 Form 자체는 **건드리지 않고**, 글자는 페이지
-콘텐츠에 별도 추가 → device CMYK 무손실·verify PASS 유지.
-
-#### 0. 사전 조사로 확정한 사실 (직접 검증함)
-- Pretendard-Black/Bold.otf 는 **CFF(큐빅 베지어) 아웃라인**, **glyf 아님**. unitsPerEm=2048.
-  - → 펜이 주는 곡선이 **cubic(curveTo, 3점)** 이라 PDF `c`(큐빅) 연산자에 **1:1 대응**(평탄화·근사 불필요). 가장 단순한 경로다.
-- getGlyphSet()[glyphname] 은 `.draw(pen)`(윤곽) + `.width`(advance, 폰트단위) 둘 다 제공.
-- cmap 에 0~9, 김/이/박, A 모두 존재. 이모지(U+1F600) 같은 건 없음 → 글리프 누락 처리 대상.
-- 펜 명령 집합: moveTo / lineTo / curveTo(큐빅) / closePath. (qCurveTo 없음 — TTF였다면 쿼드라틱이라 변환 필요했을 것)
-- compose.py: 페이지마다 `page.obj["/Contents"] = out.make_stream(블록.encode("ascii"))` 로
-  **페이지 콘텐츠를 통째로 새로 만든다.** 디자인은 Form XObject 1개로 임베드 후 `q…Do…Q` 로 참조.
-  → 글자 연산자를 이 콘텐츠 문자열 **뒤에 이어 붙이면** 디자인 위에 글자가 얹힌다. Form 바이트는 불변.
-- verify_output 의 PASS 기준(핵심): ①Form 바이트가 원본과 동일(글자는 페이지 콘텐츠라 Form 불변→영향 0)
-  ②동일 Form 정확히 1개 ③RGB/Lab 색공간 유입 0(글자는 CMYK `k` 로만 칠함→OK) ④투명도 0(글자에 ca/CA·SMask 안 씀→OK)
-  ⑤이미지 추가 0(`count_images` 가 /Subtype /Image 셈 — **글자는 벡터 경로라 이미지 0 추가→OK**)
-  ⑥`b" Do"` 카운트 == expected_placements. **여기 함정**: 글자 연산자에 ` Do` 가 들어가면 카운트가 틀어진다.
-  → 글자 경로는 `Do` 를 절대 쓰지 않으므로(m/l/c/f/k/q/Q만) 안전. (developer가 글자 ops에 'Do' 문자열 안 넣도록 주의)
-  ⑦`b"W n"`(클립)·`cm`(스케일) 존재는 기존 디자인 배치가 이미 충족.
-
-#### 1. text.py 공개 함수 시그니처 (입출력 명확)
+**2) parse_order 시그니처 + 반환 스키마**
 ```
-# 메인 — 글자 1줄을 bbox 안에 맞춘 PDF 콘텐츠 연산자 문자열로 반환
-render_text_ops(
-    text: str,                 # 그릴 글자("7", "김민수")
-    font_path: str,            # otf/ttf 절대경로(없으면 친절 에러)
-    bbox_pt: tuple,            # (x0,y0,x1,y1) 시트(PDF) 절대좌표 — 글자가 들어갈 칸
-    color_cmyk: tuple,         # (c,m,y,k) 0~1 또는 0~100 → 내부서 0~1 정규화
-    align: str = "center",     # "left"|"center"|"right" 가로정렬(세로는 항상 중앙)
-) -> str
-# 반환: "q … k  <경로 m/l/c h> f … Q" 형태 PDF 연산자(ascii). 빈 문자열이면 그릴 것 없음.
-# 글리프 누락/빈 텍스트면 "" 반환 + 경고는 호출측이 수집(아래 7번).
-
-# 보조(내부, 필요 최소)
-_load_glyphset(font_path) -> (glyphset, cmap, units_per_em)   # 폰트 1회 로드(캐시 가능)
-_glyph_path_ops(glyphset, glyph_name, scale, dx, dy) -> str   # 글리프1개 → m/l/c h (스케일·이동 적용)
-_text_metrics(text, glyphset, cmap, units_per_em) -> (advances, missing)
-                                                   # 글자별 advance 폭 합 + 누락 글자 목록
+parse_order(xlsx_path: str) -> list[dict]
 ```
-- **반환을 "문자열"로** 둔 이유: compose 가 이미 "콘텐츠=문자열 join" 구조라 그대로 이어붙이면 됨(추상화 최소).
+- 반환: 선수 행 리스트. 각 dict 필드(전부 str, 실패=""):
+  - `name`(이니셜/이름, A열), `number`(배번, B열 — "0"/"00" 보존 위해 str), `size`(상의 사이즈 C열 기본), `qty`(수량 "1" 기본; 양식②는 집계 수량).
+- 양식①: 행마다 {name,number,size(상의),qty:"1"}. (상하의 사이즈가 다를 수 있음 → R1 결정: 1차는 **상의 사이즈** 기준, 하의는 백로그)
+- 양식②: name/number="" , size=사이즈, qty=수량 문자열.
+- 부분 실패: 특정 셀만 빈값(""), 행 자체는 유지 → 웹에서 붉게 강조해 수기 입력.
 
-#### 2. fontTools → PDF 경로연산자 변환 파이프라인 (단계별)
-1. `TTFont(font_path)` → `getGlyphSet()`, `getBestCmap()`(코드포인트→glyphname), `head.unitsPerEm`(2048).
-2. 글자 1개: `gname = cmap.get(ord(ch))`. 없으면 **누락**(7번). advance = `glyphset[gname].width`.
-3. `RecordingPen()` 에 `glyphset[gname].draw(pen)` → 명령 리스트.
-4. **폰트단위→pt 스케일** `u = scale / unitsPerEm`(scale=목표 글자높이 pt). 각 좌표에 곱하고 (dx,dy) 더함.
-5. 명령 매핑(PDF 연산자):
-   - `moveTo (x,y)`            → `x y m`
-   - `lineTo (x,y)`            → `x y l`
-   - `curveTo (c1,c2,end)`     → `c1x c1y c2x c2y ex ey c`   (큐빅 1:1 — Pretendard는 CFF라 항상 이 형태)
-   - `closePath`              → `h`
-   - (qCurveTo 나오면 — TTF 폰트 대비 — 쿼드라틱→큐빅 승격 공식 적용: CP1=P0+2/3(QC-P0), CP2=P2+2/3(QC-P2). Pretendard엔 안 나오지만 방어코드로 둠)
-6. 글리프 채우기: 한 글자의 모든 서브패스를 모은 뒤, 글자 전체를 1번 `f`(non-zero winding fill)로 칠함.
-   - 구멍(예 '0','8','9','이'의 안쪽)은 **even-odd 아닌 non-zero**가 폰트 윤곽 방향과 맞음. CFF/TTF 윤곽은 nonzero 기준 → `f` 사용(=`f*` 아님). 구멍 자동 처리됨.
-7. 색: 글자 앞에 `c m y k k`(소문자 k=비획·fill용 CMYK). 예 흰색[0,0,0,0]→`0 0 0 0 k`. stroke 미사용(fill만, 의뢰서 "선택 stroke"는 A-4 범위서 보류).
-8. 전체를 `q`…`Q` 로 감싸 그래픽 상태 격리(색·CTM 누수 방지).
+**3) 파싱 전략 (셀 전체 스캔 + 헤더 앵커)**
+- (a) 시트 순회, 각 시트에서 **"이니셜" 헤더 셀 탐색**(1~12행, A~G열) → 있으면 양식①.
+  - 헤더행 r, 이니셜=헤더열, 배번=옆 "배 번"열, 사이즈=다음 "사이즈"열. **부제행(상의/하의) 건너뛰고 r+2부터** 데이터.
+  - 빈 행(A·B·C 모두 빈값) 또는 "배송 정보" 등 푸터 키워드 만나면 데이터 종료.
+- (b) "이니셜" 없으면 **양식②(집계)**: 사이즈 키워드 셀 전체 스캔 → 세로형/가로형/표형 판별(기존 grader 규칙 이식) → 인접 셀 수량.
+- (c) **사이즈 정규화 = 긴 것부터 매칭**(SIZE_KEYWORDS 길이 내림차순). 사전: 5XS 4XS 3XS 2XS XS S M L XL 2XL 3XL 4XL 5XL + **아동 호수 N호(8/10/12/14...)**. "2 XL"/"2-XL"→"2XL" 공백·하이픈 흡수. 못 맞추면 원문 보존 X → 빈값 처리 후 경고(웹 강조).
+  - ⚠️ "○○호" 오탐 차단: '호'로 끝나도 **앞이 1~2자리 숫자일 때만** 사이즈로 인정(`^\d{1,2}\s*호$`). 한글 이름 끝 '호'는 사이즈 아님.
+- (d) 가장 많은 선수/사이즈를 찾은 시트를 최종 채택.
 
-#### 3. bbox 맞춤 로직 (rel_bbox → 절대좌표 → 스케일·정렬·세로중앙)
-- **(가) rel_bbox(0~1) → 조각 outline bbox 절대좌표 환산**:
-  - number_area.piece_id="back" → preset.pieces 에서 id=back 조각을 찾고, 그 조각이 layout 에 만든 Piece.outline 의 bbox 를 구함.
-  - Piece.outline 의 bbox = `pdfutil.bbox(piece.outline)` → (px0,py0,px1,py1). (이미 시트 절대좌표·y위로)
-  - 절대 칸: `x0 = px0 + rel_x0*(px1-px0)`, `y0 = py0 + rel_y0*(py1-py0)`, x1/y1 동일. (rel 은 좌하단기준 0~1)
-  - ⚠️ rel_bbox 가 "좌상단 기준"인지 "좌하단 기준"인지 확정 필요(미결정 R-A). preset 주석상 흰글자/center라 좌우 대칭이지만 **세로 위치**는 기준에 따라 위/아래 뒤집힘. → 방식A 좌표가 y위로(좌하단원점)이므로 **rel 도 좌하단기준 y위로**로 통일 권고. (developer 미리보기로 검증)
-- **(나) 텍스트 자연 크기 측정**: unitsPerEm 기준 글자높이=폰트 ascent~descent 대신 **cap/em 기준 단순화**: 글자높이 1em=unitsPerEm 로 보고, 폭=Σadvance.
-  - em높이 1.0 환산 시 폭_em = Σadvance/unitsPerEm, 높이_em = 1.0 (보수적). 
-- **(다) bbox 맞춤 스케일(contain)**: 칸폭 bw=x1-x0, 칸높이 bh=y1-y0.
-  - `scale_by_w = bw / 폭_em`, `scale_by_h = bh / 높이_em`, **scale = min(둘)** (칸 밖으로 안 나가게 contain).
-  - 실제 글자높이 pt = scale * 높이_em(=scale), 글자폭 pt = scale*폭_em.
-- **(라) 가로정렬**: 남는 가로공간 `gap_x = bw - 글자폭pt`. left→dx=x0 / center→dx=x0+gap_x/2 / right→dx=x0+gap_x.
-- **(마) 세로중앙**: `gap_y = bh - 글자높이pt`; baseline_y = y0 + gap_y/2 (+ descent 보정). 폰트 baseline 이 0 이므로 dy=baseline_y.
-  - 단순화: descent 무시하고 글자높이=em*scale 로 중앙. 미세 어긋남은 미리보기 보고 preset rel_bbox 로 조정(비개발자가 숫자만 만짐).
-- **(바) 글자 누적**: 각 글자 그릴 때 dx 를 advance*u 만큼 전진(글자 사이 간격=폰트 advance 그대로).
+**4) openpyxl Custom Properties 버그**
+- **실측: 86개 전부 custom.xml 0개, 패치 없이 로드 실패 0건.** 현 데이터셋엔 미발생.
+- 그래도 **방어코드 이식**(기존 grader order_parser.py L18~30): `StringProperty.__init__` 몽키패치로 name=None→"" 치환. 외부서 받은 xlsx 대비 안전망(try/except로 감싸 실패해도 무해). 비용 거의 0.
 
-#### 4. compose 결합 방식 결정 — (A) vs (B)
-- **(A) 페이지 콘텐츠 스트림에 텍스트 블록 추가** (compose 가 글자 ops 를 콘텐츠 끝에 append)
-  - 장점: 디자인 Form 완전 불변(바이트동일 보장 자명). 구현 단순(문자열 이어붙이기). verify 영향 분석 쉬움.
-  - 단점: compose 시그니처에 "조각별 글자 ops" 를 넘길 통로가 필요.
-- **(B) Piece.extra_ops 필드 추가** (Piece 에 글자 ops 를 담아 compose 가 q…Q 뒤에 그림)
-  - 장점: "이 조각에 이 글자" 가 데이터로 묶임(자연스러움). compose 루프가 piece 단위라 끼우기 좋음.
-  - 단점: dataclass 필드 추가=공개 API 표면 변경(단 **기본값 ""** 면 기존 호출 전부 그대로 동작).
-- **✅ 권고: (B) Piece.extra_ops (기본값 "")** — 이유: 글자는 "특정 조각의 특정 칸"에 종속된 정보라
-  Piece 에 붙는 게 의미상 맞고, compose 변경이 **루프 안 1줄**로 끝나 가장 작다. 공개 API 는 "기존 인자 불변+신규는 기본값" 원칙을 지킴(호출부 무수정).
+**5) 실패/엣지 처리 (부분 실패 허용)**
+- load_workbook 자체 실패 → 빈 리스트 + 경고 리턴(크래시 X). `data_only=True`(수식값), `read_only=True`(대용량·속도).
+- 빈 셀: 해당 필드만 "" (행 유지). 병합셀: 좌상단에만 값 → 데이터영역엔 거의 없으나 헤더 부제만 주의.
+- 배번 0/00: 빈값 아님 → str로 보존("0","00"). 숫자형은 int화("24.0"→"24").
+- 사이즈 오타/변형: 정규화 실패 시 size="" + 경고(행은 살림). 아동 호수 지원.
+- 상의·하의 사이즈 다름: 1차는 상의(C열). (백로그: top/bottom 분리 출력)
+- 한 주문서에 상의+하의 혼재: 동일 행에 C(상의)/D(하의) 병기 → 1차 상의만. job에서 상/하 분리 필요시 확장.
+- 이름 영문/한글/이니셜 혼재: 그대로 문자열 보존(렌더는 A-4 text.py 책임).
 
-  **정확한 변경 지점 (before → after)**:
-  - `engine/compose.py` Piece dataclass:
-    - before: `outline; transform; name: str = ""`
-    - after : `outline; transform; name: str = ""; extra_ops: str = ""`  ← 필드 1개 추가(기본값 빈문자열, 무손실)
-  - `engine/compose.py` compose() 내부 루프:
-    - before:
-      ```
-      for piece in layout.pieces:
-          blocks.append(place_block(piece.outline, piece.transform, str(name)))
-          placements += 1
-      ```
-    - after (글자 블록을 디자인 배치 **뒤에** 추가 → 디자인 위에 글자):
-      ```
-      for piece in layout.pieces:
-          blocks.append(place_block(piece.outline, piece.transform, str(name)))
-          placements += 1
-          if piece.extra_ops:           # 글자 등 추가 벡터(있을 때만)
-              blocks.append(piece.extra_ops)
-      ```
-  - **compose() 시그니처는 불변.** placements(=Do 개수)는 글자가 Do 를 안 쓰므로 그대로 디자인 배치수 → verify "배치 횟수 일치" 안 깨짐.
-  - 주의: compose 가 콘텐츠를 `.encode("ascii")` 한다 → 글자 ops 도 **ascii(숫자·연산자뿐)**라 OK. (한글은 *글리프 경로 좌표*로 바뀌므로 콘텐츠엔 한글 바이트가 안 들어감 — 핵심 이점)
+**6) job(다음 단계)과의 인터페이스**
+- `parse_order(xlsx) -> list[dict]`는 **순수 입력 파서**(engine 코어 compose/Piece 불건드림, conventions "import만" 준수).
+- run_job(차기 engine/job.py)이 이 리스트를 받아 선수별로 (사이즈→레이아웃 선택 + name/number→A-4 text.py extra_ops) 매핑.
+- **폴더+JSON 저장 원칙**: parse 결과를 job 작업폴더에 `order.json`으로 덤프(사람이 검수·수정 가능) 후 run_job이 그 json을 읽는 흐름 권장. parse_order 자체는 리스트 반환(저장은 호출측/CLI가).
 
-#### 5. grade.py 연결 (어느 시점에 글자를 그리나 / 값은 어디서)
-- 그리는 시점: `build_layouts` 가 각 사이즈의 Piece 들을 만든 **직후**, number_area/name_area 가 가리키는
-  piece(back)의 Piece 를 찾아 `extra_ops` 를 채운다.
-- 값 출처: **A-4는 job 단계 전**이라 실제 선수 데이터가 없음 → **CLI 플래그 `--number`/`--name` 단독 테스트 경로** 신설.
-  - grade(preset_path, design_pdf_path, out, *, number=None, name=None) 로 **키워드 인자 추가(기본 None=안 그림)**.
-    기존 호출(grade_run(preset, design, out))은 그대로 동작(API 무손실 확장).
-  - build_layouts(preset, design_pdf_path, *, number=None, name=None) 동일하게 키워드 추가.
-  - cli grade 에 `--number`(숫자), `--name`(한글) 옵션 추가(기본 None). 둘 다 없으면 글자 없이 기존과 동일 출력(A-1/A-2 회귀 보존).
-- 좌표 환산 위치: grade.py 가 piece outline bbox 를 알고 있으므로 grade.py에서 rel_bbox→절대 환산 후 text.render_text_ops 호출이 자연스러움. (text.py 는 "절대 bbox + 글자" 만 받음 = 순수/재사용 쉬움)
+**7) 구현 단계 쪼개기 (developer용)**
+1. engine/order.py 신설 + SIZE_KEYWORDS 사전(호수 포함) + Custom Properties 패치 이식(try/except).
+2. `_normalize_size` (긴것부터·공백/하이픈·N호, '호'오탐차단) + `_to_str`(숫자/0/00 보존) 헬퍼.
+3. 양식① 파서: 헤더 탐색→데이터 영역 추출→행 리스트. (호바스/명지/도봉으로 검증)
+4. 양식② 파서: 기존 grader 집계 규칙 이식(세로/가로/표). (슈팅저지로 검증)
+5. `parse_order` 통합(시트순회·양식 자동판별·best 시트 채택·실패 빈리스트).
+6. CLI 서브커맨드 `order <xlsx>` (결과 행수·샘플 출력, json 덤프 옵션). job 전이라 단독 테스트용.
+- **자체검증**: 호바스(농구)·명지(배구)·도봉(축구)·대방피구·슈팅저지 5개 파싱 → 행수/사이즈분포가 덤프와 일치하는지 수치 비교(예 호바스 첫시트 선수 N명, 사이즈 토큰 합).
 
-#### 6. verify PASS 유지 보장·검증 계획
-- 보장 논리: (a)디자인 Form 불변→"바이트동일/단일임베드" 영향0 (b)글자=CMYK `k` fill→"RGB/Lab 유입0" (c)글자에 투명도·SMask 미사용→"투명도0" (d)글자=벡터 경로(이미지 객체 0생성)→"래스터 미추가" (e)글자에 `Do` 미사용→"배치횟수==placements" 유지.
-- 검증 절차(developer 자체검증):
-  1. `--number 7 --name 김민수` 로 grade → verify_output 전항목 **PASS** 확인(특히 래스터미추가/CMYK유지/배치횟수).
-  2. number/name 둘 다 None(글자 없음) 으로 grade → **A-2 직전 출력과 바이트 동일**(회귀: 글자 미지정 시 변화0).
-  3. preview PNG 로 back 조각에 "7"·"김민수" 가 number_area/name_area 칸 안 정위치(중앙) 확인.
-  4. (선택) inkcov: 글자 흰색[0,0,0,0]은 잉크0이라 inkcov 거의 불변 — 색 보존 깨짐 없음 확인.
-
-#### 7. 엣지 케이스 처리
-- **글리프 누락**(폰트에 없는 글자, 예 한자·이모지): 해당 글자만 건너뛰지 말고 **그 텍스트(선수) 전체를 경고+미출력** 권고
-  (이름 중 1글자 빠지면 오히려 더 위험). 경고 텍스트로 수집: `🟡 '홍길동' 중 '동' 글자가 폰트에 없어 이름을 그리지 못했습니다(선수 확인).` → render_text_ops 가 missing 있으면 "" 반환 + 사유를 호출측에 전달(반환 튜플 or 예외 대신 경고리스트 콜백). **권고: render_text_ops 는 (ops_str, warnings:list) 튜플 반환**으로 명확화.
-- **빈 텍스트**(number/name None 또는 ""): 그냥 "" 반환(아무것도 안 그림). 정상 흐름.
-- **bbox 역전/0크기**(rel_x1<=rel_x0 등 preset 오타): bw/bh<=0 이면 경고 후 미출력(0나눗셈 방지).
-- **color_cmyk 범위**: 0~1 또는 0~100 입력 모두 수용(>1 값 있으면 /100 정규화) — 비개발자 입력 관대.
-- **폰트 파일 없음**: FileNotFoundError 친절 한글 메시지(conventions "입력 선검증" 준수).
-- **piece_id 불일치**(number_area.piece_id 가 pieces 에 없음 — 백로그④): 경고 후 글자 미출력(차단 아님).
-- **align 오타**: 모르는 값이면 center 로 폴백 + 경고.
-
-#### 8. 구현 단계 쪼개기 (developer용, 작은 스텝)
-1. `engine/text.py` 신설: `_load_glyphset` + `_glyph_path_ops`(글리프1개→m/l/c h, 큐빅 매핑) 먼저. 라틴 "7" 한 글자로 ops 문자열 눈 검증.
-2. `_text_metrics`(advance 합 + missing) + `render_text_ops`(스케일·정렬·세로중앙·여러글자 누적) 완성. "김민수" 다글자 검증.
-3. compose.py: Piece 에 `extra_ops=""` 필드 + 루프에 `if piece.extra_ops: blocks.append(...)` (4번 변경지점 그대로).
-4. grade.py: build_layouts/grade 에 `number/name` 키워드 추가, back 조각 bbox→rel_bbox 절대환산→render_text_ops→해당 Piece.extra_ops 세팅. 경고 수집.
-5. cli.py cmd_grade: `--number/--name` 옵션 추가, grade 에 전달, 경고 출력.
-6. 자체검증: `python -m engine grade --preset data/patterns/농구_U넥_양면/preset.json --design <design.ai|pdf> --number 7 --name 김민수 --out _grade_out`
-   → ① verify 전항목 PASS ② preview PNG 에 "7"·"김민수" 정위치 ③ 글자 미지정 시 A-2 출력과 바이트동일.
-- 자체검증 한 줄: 위 CLI + `python -m engine grade ...(번호/이름 없이)` 두 번 돌려 PASS·회귀 확인.
-
-#### 9. 리스크 / 미결정 (PM 결정 필요)
-- (R-A) **rel_bbox 기준축**: 좌하단(y위로) vs 좌상단(y아래로). → **좌하단 y위로 권고**(방식A 좌표계와 일치). preview 로 위/아래 확정. PM 확인.
-- (R-B) **세로 정렬 정밀도**: descent/ascent 무시한 em중앙 근사 사용(단순) → 글자가 칸에서 살짝 위/아래로 보일 수 있음. preset rel_bbox 숫자 조정으로 흡수 권고. 정밀 baseline 보정은 후순위. PM 확인.
-- (R-C) **stroke(외곽선)**: 의뢰서 "선택 stroke" 는 A-4 1차 범위서 제외(fill만). 유니폼 글자에 테두리 필요 시 후속 작업. 동의 구함.
-- (R-D) **design `.ai` 입력**: compose/verify 는 pikepdf.open(design) 으로 .ai 를 PDF로 연다(A-1에서 이미 동작). A-4는 글자만 추가라 .ai 경로 영향 없음 — 확인용 메모.
-- (R-E) **글자 색 = 흰색[0,0,0,0]**: 잉크0이라 미리보기 PNG(흰 배경)에서 **안 보일 수** 있음 → 자체검증 때 임시로 검정[0,0,0,1] 로도 1회 렌더해 위치 확인 후, 최종은 preset 흰색 유지 권고. PM 확인.
-- (R-F) **글리프 누락 시 텍스트 전체 미출력 vs 가능한 글자만**: 권고=전체 미출력(이름 깨짐 방지). PM이 "있는 글자만이라도" 원하면 변경. 확인.
+**8) 리스트/미결정 (PM·사용자 결정 필요)**
+- 🔴 R1 **1차 지원 범위**: 양식①(선수별행, 81/86)을 **메인**으로 완성 + 양식②(집계, 5/86)는 기존규칙 이식으로 best-effort. **나머지 변형은 부분실패(빈값)+경고로 흘림.** → "86개 100% 자동" 욕심내지 말고 81개 우선 권장.
+- 🟡 R2 **상의/하의 사이즈 분리**: 1차 상의만 vs 행을 top/bottom 2건으로 분할. job 설계와 연동 → PM 결정.
+- 🟡 R3 **qty 의미**: 양식①은 1선수=1벌이라 qty="1" 고정 vs 참고사항(F열 "2상의…")의 추가벌 파싱? → 1차 "1" 고정 권장(F열은 자유텍스트라 위험).
+- 🟡 R4 **아동 호수**를 사이즈 사전에 정식 포함할지(피구/줄넘기 76건). → 포함 권장(없으면 그 행 size 누락).
+- 🟢 R5 Custom Properties 패치: 현 데이터 미발생이나 방어 이식 권장(무해).
 
 ## 구현 기록 (developer)
 
-### A-4 배번·이름 벡터 렌더 (2026-06-15, 설계대로 구현 완료)
+### A-5 주문서 파싱 engine/order.py (2026-06-16)
 
-📝 구현한 기능: preset.number_area/name_area 에 배번(숫자)·이름(한글)을 **폰트 임베드 없이
-벡터 경로(아웃라인)**로 그려 넣는다. 글자는 디자인 Form 과 분리된 페이지 콘텐츠에 CMYK `k`
-fill 로만 얹어 device CMYK 무손실·verify PASS 유지. CLI `--number`/`--name` 으로 단독 테스트.
+📝 구현한 기능: xlsx 주문서를 `[{name,number,size,qty}]` 표준 행 리스트로 변환하는 **순수 입력 파서**. engine 코어(compose/Piece 등) 미import·미수정(독립 모듈). CLI `order` 서브커맨드로 단독 테스트 가능.
 
 | 파일 경로 | 변경 내용 | 신규/수정 |
 |----------|----------|----------|
-| engine/text.py | 글리프→PDF큐빅경로(m/l/c h) 변환 + bbox맞춤(contain·정렬·em중앙) + CMYK k fill. render_text_ops(text,font,bbox_pt,color_cmyk,align)→(ops,warnings) | **신규** |
-| engine/compose.py | Piece에 `extra_ops: str=""` 필드 추가 + compose 루프에서 디자인 배치 뒤 `if piece.extra_ops: blocks.append(...)` 1줄. compose 시그니처 불변 | 수정 |
-| engine/grade.py | build_layouts/grade 에 키워드 `number/name/warnings` 추가. _resolve_font_path(폰트경로 풀기)+_apply_text_area(rel_bbox→절대bbox 환산→render_text_ops→Piece.extra_ops 주입) 헬퍼 신설 | 수정 |
-| engine/cli.py | cmd_grade 에 `--number`/`--name` 플래그 + render 경고 화면출력 | 수정 |
+| engine/order.py | 신규 파서: SIZE_KEYWORDS(+아동 N호)·Custom Properties 패치·_normalize_size·_to_str·양식①(_parse_form1)·양식②(_parse_form2)·parse_order | 신규 |
+| engine/cli.py | `order <xlsx> [--json]` 서브커맨드 + cmd_order + import 추가(기존 selftest/build/parse/grade 무변경) | 수정 |
 
-💡 핵심 로직:
-- **글리프→경로**: TTFont→getGlyphSet/getBestCmap/unitsPerEm(2048). RecordingPen 으로 윤곽 기록.
-  Pretendard=CFF(큐빅)라 curveTo→PDF `c` 1:1(평탄화 불필요). closePath→h. 한 글자 모든 서브패스 모아 `f`(non-zero)로 한 번에 채움→구멍(0,8,이 안쪽) 자동.
-  ⚠️ **단위 주의**: 글리프 좌표는 '폰트단위'라 `u=scale/upm` 을 곱한다(scale 직접 곱하면 2048배 폭주 — 첫 시도 때 발견·수정). advance 도 `adv*u` 로 전진.
-- **bbox 환산**: grade.py 가 대상 piece(back) outline 의 절대 bbox(pdfutil.bbox)를 구해
-  rel_bbox(0~1, 좌하단기준 R-A)→절대좌표 환산(y위로, 방식A 일치)→text.render_text_ops 에 절대 bbox 만 넘김(text.py 순수 유지).
-  contain 스케일 min(칸폭/글자폭, 칸높이/1em), align 가로정렬, gap_y/2 세로중앙(em근사 R-B).
-- **extra_ops 결합**: 글자 ops 를 해당 Piece.extra_ops 에 저장→compose 가 q…Do…Q(디자인) **뒤에** 이어붙여 디자인 위에 글자. 글자는 Do 미사용→placements(=Do개수) 불변.
+핵심 로직:
+- **양식 자동판별**: 시트 순회 → 상단 1~12행·A~G열에서 "이니셜" 헤더 탐색되면 양식①, 아니면 양식②(집계). 행 가장 많이 찾은 시트 채택(첫 시트가 최신이라 보통 첫 시트 승).
+- **양식①(선수별 행, 81/86 메인)**: 헤더행 키워드 탐색(2행/3행 양식버전 견딤) → 부제행(상의/하의) 자동 건너뜀 → 그 다음 행부터 데이터. A=이름 B=배번 C=상의사이즈. qty="1" 고정. **종료조건**: 사이즈 없고 배번도 '배번스럽지'(숫자 또는 ≤5자) 않으면 데이터 끝(도봉중 r20 "스타킹 필드용..." 긴 안내문 제외 처리).
+- **양식②(집계, 5/86 best-effort)**: grader 규칙 이식(세로/가로/표). **단 수정**: 세로형 수량은 '같은 행 오른쪽 1칸'만(아래 행 수량 훔침 버그 차단), 상의/하의 둘 다 세로나열 시 더 왼쪽(상의) 열 채택. 빈 수량=그 사이즈 0 → 제외.
+- **사이즈 정규화**(_normalize_size): 아동 호수 `^\d{1,2}\s*호$`만 인정(장현호/김민호/현호/100호 오탐 차단) → 그 외 공백/하이픈 흡수·'사이즈'접미 제거 후 SIZE_KEYWORDS와 **정확일치**(부분일치 거부, XLL/SS/24→""). 긴것부터 매칭(5XL이 XL로 안 잡힘).
+- **_to_str**: 0/00 배번 보존, "24.0"→"24", bool 분리. **실패 칸은 "" + 행 유지**(크래시 금지, 웹 강조용).
+- **Custom Properties 몽키패치**: StringProperty name=None→"" (try/except로 감싸 무해). 현 데이터 미발생이나 외부 xlsx 방어.
+- 로드: `data_only=True, read_only=True`. load 실패/빈시트 → 빈 리스트 + 경고(크래시 X).
+
+✅ 자체검증 결과 (대표 5개, openpyxl 직접 덤프와 대조 — 전부 일치):
+| 파일 | 행수 | 수량합 | 대조 | 비고 |
+|------|------|--------|------|------|
+| 호바스(농구) | 32 | 32 | 직접카운트 32 일치 ✓ | 빈이름·배번00 보존 |
+| 명지중(배구) | 14 | 14 | "상의 14EA" 일치 ✓ | 한글이름 보존·출력OK |
+| 도봉중(축구) | 15 | 15 | "상의 15EA" 일치 ✓ | r20 안내문 정상 제외 |
+| 대방초(피구) | 17 | 17 | "상의 17EA" 일치 ✓ | **10호2/12호1/14호1** 호수인식 |
+| 슈팅저지(집계) | 4 | 15 | "상의 15EA" 일치 ✓ | XS1/S5/M8/XL1 정확 |
+- 호수/오탐 단위: 8/10/12/14/7호→인식, 12 호→12호, 장현호·김민호·현호·100호→"" (오탐0).
+- 깨진/빈 입력: 없는경로·빈시트 → 빈 리스트+경고, 크래시0. warnings=None도 안전.
+- 회귀: `python -m engine selftest` 종합 **PASS** (inkcov 편차 0.000000, cli 수정이 기존 안 깸).
+- CLI: `python -m engine order "<xlsx>"` 행수·분포·샘플 정상, 한글 깨짐0, --json(ensure_ascii=False) 덤프 정상.
 
 💡 tester 참고:
-- 테스트 방법:
-  - 회귀: `python -m engine selftest` → 종합 PASS.
-  - 글자없이: `python -m engine grade --preset data/patterns/농구_U넥_양면/preset.json --design "C:/0. Programing/grader/illustrator-scripts/test/design_XL.ai" --out _grade_out` (number/name 미지정).
-  - 글자렌더: 위 명령에 `--number 7 --name 김민수 --out _grade_out_text` 추가 → 흰색이라 PNG 안보임(R-E). 보려면 임시 검정 preset 사본 만들어 color_cmyk=[0,0,0,1] 로 렌더(원본 preset은 흰색 유지!).
-- 정상 동작:
-  - selftest 종합 PASS. grade 는 알려진 FAIL 2건(투명도·스케일cm=백로그①②)만, **새 FAIL 없음**.
-  - 검정 미리보기(_grade_out_text/grade_p01.png): 뒤판에 배번 '7'(Black, 기존20영역)+이름 '김민수'(Bold, 위쪽 중앙) 정위치 그려짐 확인 완료.
-  - 글자없이 출력 = 글자 그리기 전과 **콘텐츠 동일**(아래 회귀 주의 참고).
-- ⚠️ **바이트동일 회귀 주의(중요)**: pikepdf 가 XObject 리소스 이름을 매 실행 랜덤 22자로 부여→순수 `cmp`/`md5sum` 은 코드 정상이어도 항상 다름. **올바른 검증**: pikepdf 로 열어 page.obj.Contents.read_bytes() 를 꺼내 Resources.XObject 이름을 '/X'로 통일 후 비교(A-4 검증서 콘텐츠 길이 4097 100% 일치 확인). 또는 verify 의 "Form 바이트동일/단일임베드/래스터미추가" PASS 로 무손실 간접증명. (errors.md 기록함)
-- 주의할 입력:
-  - 폰트에 없는 글자(이모지·한자): `--name 홍길😀` → 이름 통째 미출력 + 🟡경고, 크래시 없음(검증완료).
-  - 빈/None: 글자 안 그림(정상). CMYK 0~100 입력도 /100 정규화 수용.
+- 테스트 방법: `python -m engine order "<xlsx경로>"` (행수·사이즈분포·샘플10행 출력). `--json out.json`으로 결과 덤프 가능.
+- 정상 동작: 양식① 선수 1명=1행 {name,number,size,qty:"1"}. 양식② {name:"",number:"",size,qty:수량}. 수량합이 주문서 r2 "상의 NEA"와 일치하면 정확.
+- 주의할 입력: ①헤더가 2행/3행 양식버전 ②아동 호수(피구/줄넘기) ③이름끝 '호' 오탐 ④집계양식 빈 수량칸 ⑤푸터 안내문 행. 다른 종목(줄넘기/번아웃) xlsx로 추가 검증 권장.
 
 ⚠️ reviewer 참고:
-- 봐줬으면: ①scale vs u 단위 분리(_glyph_path_ops 에 u 전달) ②extra_ops 결합이 compose 시그니처/공개API 불변 지켰는지(Piece 신규 필드 기본값 "") ③글자 ops 에 Do/ca/CA/rg 없음(verify 무영향) — 검증 결과 콘텐츠에 Do=3(디자인만)·RGB 없음·글자투명도 없음 확인.
-- preset.json 의 number_area/name_area 에 font/color/align 필드는 **이전 폰트확보 단계에서 추가된 미커밋 변경**(내가 만든 것 아님). A-4가 사용하는 정당한 필드라 유지. 원본 color_cmyk 는 흰색[0,0,0,0] 그대로(R-E 원복, 검정은 임시사본으로만 검증).
-- qCurveTo 분기는 Pretendard(CFF)엔 안 쓰이는 TTF 대비 방어코드(직선 근사). 정밀필요 시 OTF 권장.
+- 봐줬으면 하는 부분: ①양식① 종료조건 `number_is_valid`(배번 ≤5자 휴리스틱) — 짧은 비배번 텍스트가 섞이면 1행 더 읽힐 수 있음(현 5개엔 문제없음). ②양식② 세로형 '오른쪽 1칸만' 규칙이 표형 변형에서 수량 놓칠 가능(best-effort 범위). ③engine 코어 미import 확인(독립성). ④실데이터 읽기전용만 — 저장/수정 코드 없음.
+- 백로그(설계대로): 하의 사이즈(D열) 분리, F열 추가벌 qty 파싱.
+
+#### 수정 이력
+| 회차 | 날짜 | 수정 내용 | 수정 파일 | 사유 |
+|------|------|----------|----------|------|
+| 1차 | 2026-06-16 | 시트 선택 로직 교체: '행 최다 폴백' → **표식(주문번호+수량) 시트 > 첫 데이터 시트 > 행 최다 폴백** 우선순위. `_has_order_mark` 헬퍼 + `_ORDER_MARK_*` 상수 신설. parse_order 시트 순회를 3후보(marked/first_nonempty/most_rows) 수집 후 우선순위 채택으로 재작성. 데이터 0행 시트(표지/폰트/안내)는 후보 제외. | engine/order.py | tester 요청: 다중접수분 시트에서 '행 최다 폴백'이 과거 대량 주문을 오선택(86개 중 13개=15% 오답) |
+
+**before/after 동작:**
+- before: `len(parsed) > len(best)` — 행 가장 많은 시트 무조건 채택 → 과거 접수분(인원 많음) 오선택.
+- after: STIZ 표준 표식 `주문번호 : <건명>` + `수량 : 상의 NEA`가 상단(1~5행)에 함께 있는 시트를 '이번 주문'으로 1순위 채택. 표식 없으면 데이터 나온 첫 시트(첫 시트가 항상 최신 접수분). 그래도 없으면 행 최다(최후 폴백).
+
+**실데이터 표식 분포(86개 전수 사전조사):** 첫 시트에 표식 82개 / 표식이 뒤 시트(퍼시픽 메인 idx7) 1개 / 표식 없음 3개(호바스·ATLAS·시티에디션, 전부 첫 시트가 정답). → 표식 우선 + 첫 시트 폴백이 전부 커버.
+
+**13개 오답 케이스 재검증(before 행최다 → after 채택, 전부 첫시트/표식시트로 교정):**
+| 케이스 | before(행최다) | after | 기대(첫시트r2 수량) | 판정 |
+|--------|------|-------|------|------|
+| 줄넘기 | 73(과거250430) | 49 | 49 | FIX✓ |
+| 중앙고 추가 | 24(과거) | 1 | 1 | FIX✓ |
+| LG반팔 | 16(과거260407) | 8 | 8 | FIX✓ |
+| 서울구일고 | 29 | 5 | — | 고침 |
+| 대방초축구 | 34(과거250516) | 24 | — | 고침(표식시트) |
+| kutime농구 | 23(과거250411) | 19 | — | 고침(표식시트) |
+| 울산마이스터고 | 10(과거250421) | 5 | — | 고침 |
+| FLEX | 33 | 11 | — | 고침 |
+| 그로우 | 12 | 11 | — | 고침 |
+| 장위중 | 12 | 11 | — | 고침 |
+| 새솔고 | 16 | 6 | — | 고침 |
+| 화진초 | 7 | 3 | — | 고침 |
+| 퍼시픽 메인(수정) | 18 | 18 | — | 표식시트(idx7) 정확채택. 첫시트(11)는 과거 → 첫시트우선만 했으면 오답이나 **표식 우선**으로 정답 |
+
+**광범위 회귀(86개 전수):** 크래시 0 / 채택불일치(이상) 0 / **행최다폴백 채택 0건**(=과거시트 오선택 소멸). 표식시트 채택 81개 + 첫데이터시트 채택 3개(표식없는 호바스류, 첫시트 정답). 0행 2개=싸이클론·SCOOP **추가주문서**(시트1개 '작성하기' 신양식, 양식①/② 미해당 — 시트선택 버그와 무관, R1상 변형 부분실패 범위. 기존에도 0행).
+- 대표 5개 회귀: 호바스32 / 명지중14 / 도봉중15 / 대방피구17 / 슈팅저지(4행 수량합15) — **전부 일치, 회귀 0**.
+- `python -m engine selftest` 종합 **PASS**(inkcov 편차 0.000000) 유지. 없는경로/빈입력/warnings=None → 빈리스트+경고, 크래시 0.
+- 불변 제약 준수: engine 코어 미import(re·openpyxl만), 실데이터 읽기전용(write/save 0), R1~R5 무변경, 시트선택만 수정.
 
 ## 테스트 결과 (tester)
 
-### A-4 배번·이름 벡터 렌더 검증 (2026-06-15, tester)
+### 재검증(되돌림1) — A-5 시트선택 수정본 (2026-06-16, tester)
 
-| 검증 항목 | 결과 | 객관 수치 / 근거 |
-|----------|------|----------------|
-| 1. selftest 회귀 | ✅ 통과 | `selftest` 종합 **PASS**, **exit 0**. 9개 항목 전부 PASS, inkcov 최대편차 0.000000 |
-| 2. 글자없이 회귀(핵심) | ✅ 통과 | XObject 이름 정규화 후 콘텐츠 **100% 동일**. `_grade_out_reg` ↔ `_grade_out`(A-1) raw길이 4160=4160, ↔ `grading_compare/outA.pdf` 도 4160=4160 동일 |
-| 3. 글자 렌더 | ✅ 통과 | 크래시 없음. 배번'7' 좌표 X[2941~3227]Y[1096~1484] ⊂ number_area칸 X[2778~3394]Y[1096~1644]. 이름'김민수' X[2753~3420]Y[1665~1898] ⊂ name_area칸 X[2701~3471]Y[1688~1951]. 검정/흰색 미리보기 모두 뒤판 정위치 렌더 시각확인 |
-| 4. verify PASS 유지 | ✅ 통과 | 글자없음/글자있음/이모지누락 **3케이스 verify 항목 100% 동일**. **새 FAIL 0건**. FAIL은 알려진 백로그 2건(투명도없음·스케일cm)뿐 |
-| 5. 글리프 누락 부분실패 | ✅ 통과 | `--name 홍길😀` → 이름 통째 미출력 + 🟡경고("'😀' 글자가 폰트에 없어...") + 크래시 없음. k연산자 1개(배번만)=이름 정확히 생략 |
-| 6. CMYK 무손실 | ✅ 통과 | 글자 ops에 `k`만(글자있음 k=2, 누락 k=1), **rg/RG/sc/scn=0**(RGB없음). **Do=3 전 케이스 불변**(글자가 Form/Do 미사용→디자인 Form개수 안늘음). ca/CA/SMask/Image=0 |
+✅ **종합 판정: 통과**. developer 되돌림1(표식시트>첫데이터시트>행최다폴백)이 1차에서 발견한 13개 오답을 **전부 교정**했고, 회귀·엣지·원본보호 모두 견고. 신규 버그 0.
 
-**추가 확인 사항**:
-- 글자 ops 연산자: m/l/c h f + k 만 사용(이미지·투명도·RGB 0). 글자 추가 바이트 1668(4160→5828). 디자인 배치 뒤 q…Q 블록으로 정상 결합.
-- cp949 콘솔 크래시 **없음**(🟡·— 등 유니코드 정상 출력).
-- 미세 메모(차단 아님): 이름 Y실측 1665가 칸하단 1688보다 23pt 아래 — R-B(em중앙근사·descent무시) 알려진 흡수범위. reviewer도 동일 한계 지적(🟡). 정상.
+**1) 직전 13개 오답 교정 확인 (핵심) — 13/13 전부 FIX✓** (before=1차 행최다 오선택 → after=현재 채택, 표식/첫시트로 교정)
+| 케이스 | before(틀린수) | after | 채택근거 | 판정 |
+|--------|------|-------|---------|------|
+| 줄넘기 | 73(과거250430,표식N) | **49** | 260417 표식Y·상단수량49 | FIX✓ |
+| 중앙고 추가 | 24(과거,표식N) | **1** | 260330 표식Y·상단수량1 | FIX✓ |
+| LG반팔 | 16(과거260407,표식N) | **8** | 260507 표식Y·상단수량8 | FIX✓ |
+| 서울구일고 | 29(과거250422) | **5** | 260421 표식Y·상단수량5 | FIX✓ |
+| 대방초축구 | 34(과거250516) | **24** | 260417 표식Y채택(상단수량21은 작성자 표기오기, 실데이터 24행) | FIX✓ |
+| kutime농구 | 23(과거250411) | **19** | 260410 표식Y·상단수량19 | FIX✓ |
+| 울산마이스터고 | 10(과거250421) | **5** | 260506 표식Y·상단수량5 | FIX✓ |
+| FLEX | 33(과거260313) | **11** | 260601 표식Y(불량재제작) | FIX✓ |
+| 그로우 | 12(과거260204) | **11** | 260428 표식Y·상단수량11 | FIX✓ |
+| 장위중 | 12(과거250403) | **11** | 260508 표식Y·상단수량11 | FIX✓ |
+| 새솔고 | 16(과거250418) | **6** | 260511 표식Y·상단수량6 | FIX✓ |
+| 화진초 | 7(과거260410) | **3** | 260512 표식Y·상단수량3 | FIX✓ |
+| 퍼시픽 메인 | (첫시트11 과거) | **18** | **8번째 시트 260527 표식Y 채택** | FIX✓ |
 
-📊 **종합: 6개 항목 전부 통과 (6/6) — A-4 검증 PASS**
-- 회귀 무손실(글자없이 콘텐츠 바이트동일), 글자 정위치 렌더, verify 새 FAIL 0, CMYK 무손실, 글리프누락 안전처리 모두 확인.
-- 수정 요청 **없음**.
+**2) 표식 우선의 함정(첫시트≠이번주문) — 통과**: 퍼시픽 메인은 첫시트(11,과거,표식N)가 아니라 **8번째 시트 '260527'(18,표식Y)**를 정확 채택. "첫시트 우선"만 했으면 오답이었을 케이스를 표식 우선이 정확히 잡음.
+
+**3) 대표 5개 회귀 — 회귀 0**: 호바스32(표식N→첫시트정확) / 명지중14 / 도봉중15 / 대방피구17 / 슈팅저지(양식②4행 수량합15) — 전부 1차와 동일.
+
+**4) 광범위 재확인(전수 86개) — 크래시0**: 채택분류 = 표식시트81 + 첫데이터시트3(호바스류 표식없음·첫시트정답) + 유효데이터0건. **행최다폴백으로 유효데이터 채택 0건**(=과거시트 오선택 소멸). 0행 2개 = SCOOP 추가주문서·싸이클론 슈팅저지 → 둘 다 시트1개 '작성하기' **신양식 추가주문서**(양식①/② 미해당, 알려진 R1 부분실패 범위, 시트선택과 무관·신규버그 아님). 추가 다종표본(강원대줄리어스17/관악배구12/구일중축구18/이호중16/당산중배구10/오주중12) 전부 표식시트 채택·상단수량 일치.
+
+**5) 회귀 안전 — 통과**: `python -m engine selftest` 종합 **PASS**(inkcov 편차 0.000000). 없는경로·빈xlsx·warnings=None → 빈리스트+경고, 크래시0. CLI order 한글출력 깨짐0.
+
+**6) 원본 보호 — 통과**: 호바스 파싱 전후 크기669318B·수정시각 완전불변. order.py에 save/write/remove/unlink 코드 0건(grep). G드라이브 읽기전용 준수.
+
+📊 종합: 6개 재검증 항목 전부 통과 / 신규 버그 0 / 1차 13개 오답 전부 교정. **되돌림1 수정 검증 통과 — A-5 시트선택 버그 해소 확인.**
+
+---
+
+### A-5 주문서 파싱 검증 (2026-06-16, tester)
+
+🔴 **종합 판정: 조건부 실패 — 시트 선택 버그 발견(86개 중 13개=15% 오답)**. 파서의 정규화/오탐차단/엣지/회귀/원본보호는 전부 견고하나, **여러 접수분 시트가 있는 주문서에서 "행 최다 시트 채택" 폴백이 과거 대량 접수분을 잘못 골라** 이번 주문이 아닌 데이터를 반환한다.
+
+| # | 검증 항목 | 결과 | 객관 수치 |
+|---|----------|------|----------|
+| 1 | 대표 5개 재현 | ✅ 통과 | 호바스32 / 명지중14 / 도봉중15 / 대방피구17(10호2·12호1·14호1) / 슈팅저지4행·수량합15(XS1S5M8XL1) — 보고와 전부 일치 |
+| 2 | 추가 강건성(무작위 8개) | ⚠️ 부분실패 | 크래시0·0행0. 직접덤프 대조: 강동중7·부산대10·울산배구25 **OK일치** / 줄넘기·중앙고·LG **MISMATCH(아래 버그)**. 동서대슈팅저지3행(첫시트 선수형) 정상 |
+| 3 | 오탐 차단('호') | ✅ 통과 | 장현호·김민호·현호·정윤호·최연호→"" (사이즈 아님). 8/10/12/14/7호·"12 호"→인식. 100호·120호→"" 차단 |
+| 4 | 배번 보존 | ✅ 통과 | "0"/"00" str보존(호바스 r7=00·r23=0 실파일 확인), 24.0→"24", int 24→"24", True분리, None→"" |
+| 5 | 엣지/실패 | ✅ 통과 | 없는경로·빈xlsx·깨진입력(텍스트)·warnings=None → 전부 빈리스트+경고, 크래시0. 빈결과 종료코드=1(정상) |
+| 6 | 회귀(selftest+기존cmd) | ✅ 통과 | selftest 종합PASS·inkcov편차0.000000. parse 정상, 서브커맨드 5개(selftest/build/parse/grade/order) 등록 정상 |
+| 7 | 원본 보호 | ✅ 통과 | order.py에 write/save/remove 코드 0건(grep). 호바스 파싱 전후 수정시각·크기(669318B) 불변 |
+| + | cp949 콘솔 | ✅ 통과 | PYTHONUTF8 미설정 환경에서도 한글이름 깨짐0·크래시0(진입점 reconfigure 동작) |
+
+📊 종합: 7항목 중 6항목 통과, 1항목(강건성)에서 **시트 선택 버그** 발견.
+
+**🔴 시트 선택 버그 상세 (수정 요청):**
+- 증상: STIZ 주문서는 한 xlsx에 **여러 접수일 시트**를 쌓아둠. 첫 시트가 이번 주문(폴더명과 `주문번호:` 일치, `수량:상의 NEA` 명시)이고 나머지는 **과거 다른 주문**. 파서는 `len(parsed)>len(best)` (행 최다 시트 채택)이라 **과거 대량 접수분을 잘못 채택**.
+- 전수 영향: **86개 중 13개(15%)** — 모두 첫시트 r1 수량과 첫시트 행수가 일치하는데 파서는 다른 시트를 고름.
+  - 줄넘기: 첫시트49(수량49) → 채택73(과거 250430). 중앙고: 첫시트1(불량재제작 수량1) → 채택24(과거). LG반팔: 첫시트8(수량8) → 채택16(과거 260407). 외 서울구일고/kutime농구/대방축구/퍼시픽/FLEX/그로우/울산농구/장위중/새솔고/화진초.
+- 대표5개가 통과한 건 우연히 첫시트가 행 최다였기 때문(함정). reviewer 정적분석도 이 버그는 미검출 — 실데이터 다종 표본으로만 드러남.
+- 권장 수정 방향(개발 판단): "첫 시트 우선" 또는 "첫시트 r1 `수량:상의 NEA`/`주문번호:`가 해당 건과 일치하는 시트 우선" 채택. 행 최다는 최후 폴백. → developer 결정.
+
+🟡 부수 관찰(차단 아님):
+- 동서대 슈팅저지는 양식② 집계가 아니라 **양식①(선수별)**로 들어와 3행 추출(이름 빈행 1개 포함) — 슈팅저지=집계 가정과 다른 변형이나 결과 자체는 정답.
+- _normalize_size가 "0호"/"99호"도 인정(1~2자리 정규식). 실데이터는 8~14호만 존재해 현재 무해(reviewer도 동일 지적).
 
 ## 리뷰 결과 (reviewer)
 
-### A-4 배번·이름 벡터 렌더 리뷰 (2026-06-15)
+### A-5 주문서 파싱 리뷰 (2026-06-16)
 
-📊 종합 판정: **통과** (치명 이슈 0건). 설계(R-A~R-F)·불변제약 정확히 반영. 🔴 0건 / 🟡 3건(전부 차단 아님).
+📊 **종합 판정: 통과** (치명 이슈 0, 권장 4건)
+
+근거: engine 코어 미import 확인(re·openpyxl만), selftest 회귀 PASS(inkcov 편차 0.000000), 정규식 경계값 직접 검증 통과, 파일 쓰기 코드 없음.
 
 ✅ 잘된 점:
-- **단위변환 정확**: `u=scale/upm`(폰트단위→pt) 분리가 정확. `_glyph_path_ops`에 u를 넘기고 advance도 `adv*u`로 전진. (실측: '7'→칸 0~100,0~50 안에 정확히 contain. 좌표 max 62.84로 칸 안.)
-- **큐빅 1:1 매핑**: CFF curveTo→PDF `c`(제어점2+끝점) 정확. closePath→h. qCurveTo는 TTF 대비 방어코드로 명시(직선 근사, 한계 주석 솔직).
-- **무손실/색보존 완벽**: 글자 ops 정적검증 결과 Do/rg/RG/ca/CA/gs/sh/BI/scn **전부 없음**, `k`(CMYK fill)+`f`(non-zero)+`q…Q`만 사용 → verify 전항목(래스터미추가·RGB유입0·투명도0·배치횟수==placements) 유지 보장. 디자인 Form 안 건드리고 페이지 콘텐츠에만 덧그림.
-- **공개 API 불변 준수**: Piece에 `extra_ops:str=""` 기본값만 추가(기존 호출 무수정 동작). compose 시그니처 불변, 루프 삽입 1줄(`if piece.extra_ops`). grade/build_layouts는 `number/name/warnings` 전부 키워드+기본 None → 글자 미지정 시 출력 불변(회귀 보존).
-- **엣지케이스 견고**(전부 실측 검증): 빈/None→""·크래시0 / bbox역전→경고+미출력(0나눗셈 방지) / 글리프누락→텍스트 통째 생략+🟡경고(R-F 정확) / align오타→center 폴백+경고 / 폰트없음→친절 한글 FileNotFoundError / CMYK 0~100·0~1 모두 정규화+clamp.
-- **지수표기 회피**: 아주 작은 칸(0.001pt)에서도 `fmt`(%.4f)라 `e-` 표기 안 나옴 → ascii 콘텐츠 안전.
-- **가독성**: 한글 주석·비유 풍부, 비개발자 친화, 과한 추상화 없음. text.py가 "절대 bbox+글자"만 받는 순수 함수라 grade.py와 책임 분리 깔끔.
-- **좌표기준 일치**: rel_bbox(좌하단 0~1)→절대 환산이 방식A(y위로)와 일치(R-A). bbox_of(outline)로 시트 절대좌표 사용.
+- **engine 독립성 완벽**(conventions "import만" 준수): AST로 import 추출 검증 → `__future__, re, openpyxl, openpyxl.packaging.custom`만. compose/Piece/parse_svg/verify 일절 미접촉. cli.py는 `order` 서브커맨드만 추가, selftest/build/parse/grade 무변경 → 회귀 PASS.
+- **데이터 안전**: 파일 열기 `read_only=True, data_only=True`만, write/save/delete 코드 0. G드라이브 원본 읽기전용 원칙 준수. JSON 저장은 호출측(cli)이 사용자 지정 경로에만.
+- **결정(R1~R5) 정확 반영**: R1 양식①메인+②best-effort(parse_order L350-352), R2 상의 C열(size_col), R3 qty="1" 고정(L222), R4 호수 사전포함(_HOSU_PATTERN), R5 custprop try/except 방어(L38-52).
+- **사이즈 정규화 견고**: 긴것부터 매칭(_SIZE_BY_LEN)으로 5XL→XL 오인 차단, "2 XL"/"2-XL" 공백·하이픈 흡수, 정확일치(부분일치 거부)로 XLL/SS/24→"". `^(\d{1,2})\s*호$`로 100호 차단·이름끝'호' 차단 직접 검증 통과.
+- **크래시 금지 일관**: load실패·빈시트·시트읽기실패 각각 try/except로 빈리스트+경고. warnings=None 기본값 안전. 실패칸=""+행유지.
+- **비개발자 친화**: 한글 주석 충실(왜>어떻게), 매직넘버(1~12행·A~G열) 주석 설명, 과한 추상화 없음.
 
-🟡 권장 수정 (차단 아님, 후순위):
-- [text.py 세로정렬, R-B 한계] descent 무시한 em중앙 근사 → 받침/디센더가 칸 **아래로 삐져나감**. 실측: '김민수'를 칸 y[0~40]에 넣으면 글자 y범위가 **-3.59 ~ 31.91**(아래로 3.6pt 초과). 설계상 인지된 한계(preset rel_bbox 숫자로 흡수)지만, 흰글자라 눈에 잘 안 띄어 칸 경계 넘는 게 늦게 발견될 수 있음. 향후 정밀화 시 글자높이를 1.0em 대신 실제 (ascent-descent)/upm 또는 글리프 yMax/yMin 기준으로 바꾸면 칸 안에 정확히 contain. (지금은 미리보기로 조정 권고 — 동작엔 문제 없음)
-- [text.py `_FONT_CACHE`] 폰트 캐시가 경로 key만 보고 파일 mtime을 안 봐서, 같은 세션에서 폰트 파일을 교체하면 옛 글리프가 남음. 실사용(폰트 고정)엔 무해하나, 개발 중 폰트 바꿔 테스트할 때 헷갈릴 수 있음. (사소)
-- [grade.py `_apply_text_area` color 기본값] `area.get("color_cmyk", [0,0,0,1])`는 검정 기본인데 render_text_ops 호출 시 area에 color_cmyk 없으면 검정. preset엔 항상 흰색[0,0,0,0] 명시돼 있어 실무영향 0. 일관성 메모만.
+🟡 권장 수정 (전부 후순위 — best-effort 범위, 현 5개 검증 통과):
+- [order.py L207 `number_is_valid`] 종료조건 `0 < len(number) <= 5` 휴리스틱: 5자 이하 비배번 텍스트(예 "추가주문")가 데이터 직후 오면 1행 더 읽힐 수 있음. 현 실데이터 무문제. → 향후 size·name 동시 공백도 종료조건에 추가 검토.
+- [order.py L121-124 호수] "0호"/"00호"가 사이즈로 인정됨(`^\d{1,2}호$`에 0 통과). 실제 아동 호수는 7~14 → 무해하나, 의미상 0호는 없음. 필요시 하한(`[1-9]`) 검토(현재 무해).
+- [order.py L289-297 양식② 가로형] 세로형이 우선(max_col>=max_row)이라 진짜 가로형이 드물게 세로로 오판될 여지. 양식②는 5/86 best-effort라 허용범위. 줄넘기/번아웃 추가 양식 확보 시 재검증 권장(developer도 동일 지적).
+- [order.py L271 get·L255 qty_of] 양식② 수량을 사이즈 '바로 오른쪽 1칸'만 봄(설계 D=하의수량 등 떨어진 열은 못 읽음). best-effort 의도된 단순화 — 표형 변형에서 일부 수량 누락 가능(developer 지적과 동일, 백로그).
 
-🔎 확인했고 문제 없음:
-- `_apply_text_area`가 `layout_pieces[target_idx]`로 대상 Piece를 찾음 — layout_pieces가 pieces_def와 동일 순서로 build되므로 인덱스 일치 정확(코드상 같은 루프). piece_id 불일치 시 🟡경고+미출력(백로그④ 방어됨).
-- build_layouts 루프 안에서 _apply_text_area 호출 위치(transform 계산 후, page_size 계산 전) 무손실 — extra_ops는 compose가 Do 뒤에 붙이므로 디자인 위에 올바르게 얹힘.
-- CLI `--number/--name` 기본 None → 기존 grade/selftest/build/parse 서브커맨드 영향 0.
+🔴 필수 수정: 없음.
+
+비고: 백로그(하의 D열 분리, F열 추가벌 qty)는 설계상 의도된 범위로 A-5 대상 아님. CLI `_force_utf8_console`로 콘솔 한글 출력 안전 처리됨(좋음).
 
 ## 수정 요청
 | 요청자 | 대상 파일 | 문제 설명 | 상태 |
 |--------|----------|----------|------|
-| reviewer | (없음) | A-4 필수 수정 0건. 🟡 권장 3건은 후순위(세로 em중앙 descent 한계·폰트캐시 mtime·color 기본값)로 리뷰 섹션에만 기록 | 차단 아님 |
+| tester | engine/order.py (parse_order L355 `len(parsed)>len(best)`) | **시트 선택 버그**: 여러 접수분 시트 중 '행 최다' 폴백이 과거 대량 접수분을 채택 → 이번 주문 아닌 과거 데이터 반환. 86개 중 13개(15%) 오답(줄넘기 49→73, 중앙고 1→24, LG 8→16 등). 첫시트가 `주문번호:`/`수량:상의 NEA`로 이번 주문을 명시하므로 '첫시트 우선' 또는 '주문번호 일치 시트 우선' 채택 권장(행최다는 최후 폴백). | **완료**(2026-06-16 developer 되돌림1: 표식시트>첫시트>행최다 우선순위로 교체. 13개 전부 교정, 전수 86개 행최다폴백 0건·크래시0·대표5개 회귀0·selftest PASS) |
 
 ## 작업 로그 (최근 10건만 유지)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |
 |------|---------|----------|------|
-| 2026-06-15 | pm | engine 환경세팅(pikepdf/PyMuPDF) + git 초기화/첫커밋(d5af10b) | 완료 |
-| 2026-06-15 | debugger | 한글 Win cp949 콘솔 UnicodeEncodeError 수정(stdout/stderr UTF-8 고정) | selftest PASS |
-| 2026-06-15 | planner-architect | A-1 preset.json 스키마 설계(일러 grading.jsx 좌표정합 규명+3옵션) | 완료(설계만) |
-| 2026-06-15 | developer | A-1 시험렌더(compare_mapping.py): 방식A(앵커) vs B(전체정렬+클립) 비교 | outA/B.pdf+previewA/B 생성, 방식A 확정 |
-| 2026-06-15 | developer | A-1 마무리: preset.json+README+grade.py(방식A 일반화)+cli grade서브커맨드 | transform·미리보기 previewA와 바이트동일, selftest 회귀PASS |
-| 2026-06-15 | tester | A-1 마무리 검증(6항목) | 통과 6/6, previewA 바이트동일, 예상밖FAIL 0 |
-| 2026-06-15 | reviewer | A-1 마무리 코드리뷰 | 통과(치명0), 🟡5건 A-2백로그 |
-| 2026-06-15 | pm | conventions 3패턴 승격 + A-1 커밋/푸시(b19c75c) | 완료(미푸시0) |
-| 2026-06-15 | planner-architect | A-2 패턴로딩 설계(pattern_loader.py 신설+<name>.svg 폴백+누락경고+높이정렬방어) | 완료(설계만) |
-| 2026-06-15 | planner-architect | A-4 text.py 설계(글리프→큐빅 PDF경로/Piece.extra_ops 결합/rel_bbox환산/CLI --number·--name/verify PASS유지) | 완료(설계만) |
-| 2026-06-15 | developer | A-4 구현(engine/text.py 신설 + compose extra_ops + grade/cli --number/--name). 글리프→큐빅경로·CMYK k fill·rel_bbox환산 | selftest PASS·글자없이 콘텐츠동일·검정미리보기 정위치·verify 새FAIL 0·글리프누락 경고OK |
-| 2026-06-15 | tester | A-4 검증(6항목: selftest회귀·글자없이 바이트동일·글자정위치·verify새FAIL0·글리프누락·CMYK무손실) | 통과 6/6, 콘텐츠 4160 100%동일, 새FAIL 0, 수정요청 없음 |
-| 2026-06-15 | reviewer | A-4 코드리뷰(text/compose/grade/cli). 단위변환·큐빅매핑·무손실(Do/rg/ca 없음)·공개API불변·엣지케이스 실측검증 | 통과(치명0), 🟡3건 후순위(세로 descent한계·폰트캐시·color기본값) |
+| 2026-06-15 | developer | A-1 마무리: preset.json+grade.py(방식A 일반화)+cli grade | previewA 바이트동일, 회귀PASS |
+| 2026-06-15 | tester/reviewer | A-1 마무리 검증·리뷰 | 통과(6/6, 치명0) |
+| 2026-06-15 | pm | A-1 커밋/푸시(b19c75c) | 완료 |
+| 2026-06-15 | planner-architect | A-2 패턴로딩 설계(pattern_loader.py) | 완료(코드 미착수·보류) |
+| 2026-06-15 | planner-architect | A-4 배번/이름 렌더 설계(text.py+extra_ops, Pretendard CFF 큐빅) | 완료(설계만) |
+| 2026-06-15 | developer | A-4 구현: text.py 신설+compose/grade/cli 확장 | 글자없이 콘텐츠100%동일·verify PASS유지 |
+| 2026-06-15 | tester | A-4 검증(6항목) | 통과 6/6(회귀·렌더·verify·글리프누락·CMYK) |
+| 2026-06-15 | reviewer | A-4 코드리뷰 | 통과(치명0, 🟡3건 후순위) |
+| 2026-06-15 | pm | A-4 커밋(c1d0048) + 코워크 자료 커밋(c7fc068) + fontTools 설치 | 완료(미푸시2) |
+| 2026-06-15 | pm | scratchpad 정리 + index decisions 6→7 갱신 | 완료 |
+| 2026-06-15 | planner-architect | A-5 주문서파싱 설계(order.py): 86개 전수스캔→양식①선수별행81개/②집계5개, 헤더앵커+긴것부터+N호, custprop버그 미발생 | 완료(설계만) |
+| 2026-06-16 | developer | A-5 구현: engine/order.py 신규(양식①/②파서·N호·오탐차단·custprop패치) + cli order 서브커맨드 | 대표5개 행수/수량합 덤프일치, selftest PASS유지 |
+| 2026-06-16 | reviewer | A-5 코드리뷰: engine독립성(import만)·R1~R5반영·정규식경계값·데이터안전·회귀 검증 | 통과(치명0, 권장4 후순위) |
+| 2026-06-16 | tester | A-5 검증(7항목+무작위8표본+전수스캔): 대표5재현·오탐차단·배번·엣지·회귀·원본보호 통과 / 시트선택 버그 발견 | 조건부실패(6/7, 🔴시트선택 86중13개=15%오답, 수정요청) |
+| 2026-06-16 | developer | A-5 되돌림1: 시트선택 로직 교체(표식시트>첫데이터시트>행최다폴백) + `_has_order_mark` 헬퍼. 전수86개 사전조사로 표식분포 확정 | 13개 오답 전부 교정·전수 행최다폴백0건·크래시0·대표5회귀0·selftest PASS |
+| 2026-06-16 | tester | A-5 되돌림1 재검증: 13개 오답 before→after 교정확인·퍼시픽함정(8번째시트)·전수86크래시0·selftest PASS·원본불변 | **통과**(13/13교정·신규버그0·회귀0) |
