@@ -2,6 +2,12 @@
 <!-- 담당: planner-architect | 최대 30항목 -->
 <!-- "왜 A 대신 B를 선택했는지" 기술 결정의 배경과 이유를 기록 -->
 
+### [2026-06-18] job split 기본값 per_player(파일별 PDF) 확정 + 사이즈필터=preset 복제 방식
+- **분류**: decision
+- **발견자**: planner-architect (split 기본값은 사용자 2026-06-18 확정)
+- **내용**: job(선수별 통합 출력) 설계 시 두 결정. **(1) split 기본값=per_player**(선수마다 별도 PDF) 채택, single(다페이지 1PDF)은 옵션 유지. 이유: 실작업 단위가 선수별(같은 사이즈도 이름·배번 다름)이고 공장/작업자가 선수 단위 파일·ZIP을 다루기 쉬움. 과거 A-1 결정의 "다페이지 1PDF"는 디자인1장 전사이즈 케이스라 job(선수 단위)과 층위가 다름 → 충돌 아님(single로 보존). **(2) 사이즈 필터를 build_layouts 신규 인자 대신 "preset dict 얕은복제 후 sizes 1개로 좁히기"로 구현** 채택. 대안(build_layouts에 size_filter 인자 추가)을 버린 이유: 불변 제약(engine/응용 공개 함수 시그니처 변경 금지, 신규 인자도 최소화)을 지키고, 선수는 자기 사이즈 1페이지만 필요한데 build_layouts는 preset.sizes 전체를 순회하므로 입력 데이터(preset)를 좁히는 게 코드 변경 0으로 가장 단순. `{**preset, "sizes":[one]}`로 복제하면 원본 preset·_dir·area 보존되고 build_layouts는 그대로 1개만 처리. **부가 결정**: ①폰트 인자(font_path)는 인터페이스 안정성 위해 받되 1차 미사용(area.font가 preset에 박힘) — 추후 area.font 오버라이드 훅으로 활용. ②미존재/빈 사이즈 행은 skip+사유기록(부분성공, 전부 실패일 때만 비정상 종료) — A-2 전사이즈 확보 전 흔하므로. ③원자적 쓰기 tmp→os.replace. ④폴더명 결정은 CLI, run_job은 out_dir만 채움. ⑤백로그⑦(상하의 분리)는 1차 범위 밖(상의만), order_rows에 top/bottom 분리 들어오면 run_job 루프를 행×garment로 확장(기본값 호환).
+- **참조횟수**: 0
+
 ### [2026-06-15] A-5 주문서 파싱 1차 범위: 「선수별 행」 양식 메인 + 「집계」 best-effort, 상의 사이즈 기준
 - **분류**: decision
 - **발견자**: planner-architect

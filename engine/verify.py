@@ -193,8 +193,11 @@ def verify_output(out_path: str, design_path: str, expected_placements: int) -> 
         # AC-3: 합성 정확 — 클립/스케일/배치 횟수/래스터 미추가
         all_content = b"\n".join(p.obj["/Contents"].read_bytes() for p in out.pages)
         checks.append(Check("클리핑(W n) 적용", b"W n" in all_content, ""))
+        # cm 행렬 'a 0 0 d e f cm' 에서 평행이동 e/f(때로 스케일 a/d)는 음수일 수 있다.
+        # 방식A 의 _piece_transform 은 ox = px0 - s*dx0 식이라 dx0 가 크면 e/f 가 흔히 음수가
+        # 된다(예: '0.86 0 0 0.86 184.8 -2159.9 cm'). 각 숫자에 선택적 '-' 를 허용한다(백로그①).
         checks.append(Check("스케일(cm) 적용",
-                            re.search(rb"[\d.]+ 0 0 [\d.]+ [\d.]+ [\d.]+ cm", all_content) is not None, ""))
+                            re.search(rb"-?[\d.]+ 0 0 -?[\d.]+ -?[\d.]+ -?[\d.]+ cm", all_content) is not None, ""))
         do_count = all_content.count(b" Do")
         checks.append(Check("배치 횟수 일치", do_count == expected_placements,
                             f"Do {do_count}회 (기대 {expected_placements})"))

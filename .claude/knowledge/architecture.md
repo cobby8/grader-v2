@@ -8,6 +8,12 @@
 - **내용**: 시스템엔 서로 다른 좌표계 3개가 존재한다. ①디자인 AI(기준 XL) MediaBox `4478×5669pt`(세로 긴 양면펼침 페이지) ②패턴 SVG(예 XS) viewBox `4337×3401`(가로 긴 조각나열 마커시트, y아래로 증가) ③출력 대지 158×200cm 고정(일러 기준). engine은 ①을 통짜 Form XObject 1개로 임베드하고 ②의 조각 윤곽으로 클리핑(W n)+cm 변환해 무손실 합성. preset.json은 이 셋을 잇는 변환정보를 담는다. **매핑 경로**: preset의 조각 outline → parse_svg()→Polyline.points → `Piece.outline`(PDF좌표, y뒤집음) / preset의 design_mapping(조각별 fit·anchor·scale) → `Piece.transform`(=scale_translate cm행렬) / page_size → `SizeLayout.page_size` / number_area·name_area(조각 상대비율) → A-4 text.py가 절대좌표 환산. engine 공개 API는 불변(주어진 것).
 - **참조횟수**: 0
 
+### [2026-06-18] job 선수별 통합 출력 경로 (engine/job.py, 응용 오케스트레이터 — grade.py와 동급)
+- **분류**: architecture
+- **발견자**: planner-architect
+- **내용**: job.py는 "주문서 행(선수) × 디자인 → 선수별 배번/이름 출력"을 묶는 **응용 계층 오케스트레이터**다(engine 코어 무수정, grade.py와 같은 층). 공개 함수 `run_job(preset, design_pdf, order_rows, out_dir, font_path, split="per_player") -> {outputs, summary}`. **핵심 구조 사실**: grade()는 number/name 단일값으로 **전 사이즈 1PDF**를 만들지만 실작업 단위는 **선수별 + 자기 사이즈 1페이지**라 grade()를 직접 못 쓴다. build_layouts/grade의 공개 시그니처는 불변이어야 하므로(신규 인자 금지), job은 **preset dict를 얕은 복제 후 sizes를 해당 1개로 좁혀**(`{**preset, "sizes":[one]}`, _dir·area 등 공유) build_layouts(sized, design, number=r.number, name=r.name, warnings=)를 호출 → SizeLayout 1개를 얻는다(공개 API 무수정으로 사이즈 필터 구현). **흐름**: load_preset → 사용가능 사이즈집합 S 추출 → order_rows 순회(빈/미존재 사이즈는 skip+사유기록) → 행마다 사이즈 좁힌 preset으로 build_layouts → compose(design,[layout],tmp,design_page=0)=placements → verify_output(final, design, placements) → (옵션)preview. split=per_player는 행마다 compose 1회(파일별 PDF), split=single은 layout을 모아 루프 후 compose 1회(다페이지 1PDF). **재사용 지점**: grade.load_preset/build_layouts, compose.compose, order.parse_order(CLI에서 xlsx→rows), verify.verify_output/all_passed, preview.render_previews. text.py는 직접 안 부르고 build_layouts 내부 _apply_text_area가 number/name으로 호출. **저장 규약**: out_dir(=data/jobs/<날짜_주문명>/) 아래 output/(선수별 또는 1PDF)·preview/·job.json(summary 덤프). 원자적 쓰기=tmp에 compose 후 os.replace로 final rename(부분물 방지). 파일명=<size>_<번호zeropad>_<safe이름>.pdf(경로 금지문자 _치환, 충돌 시 접미사). pikepdf 비결정 출력은 verify_output엔 무영향(바이트동일 Form 1개만 확인). 폴더명 결정은 CLI 책임(run_job은 받은 out_dir만 채움 — 역할 분리).
+- **참조횟수**: 0
+
 ### [2026-06-15] A-5 주문서 파싱 경로 (engine/order.py, 입력 파서·코어 독립) + STIZ 표준 주문서 양식 2종
 - **분류**: architecture
 - **발견자**: planner-architect

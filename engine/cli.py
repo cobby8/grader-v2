@@ -17,6 +17,11 @@
   python -m engine order ORDER.xlsx [--json OUT.json]
       주문서 xlsx 를 파싱해 [{name,number,size,qty}] 행을 추출 → 행수·샘플 출력.
       --json 을 주면 결과를 그 경로에 JSON 으로 저장(job 단계에서 읽을 order.json).
+
+  python -m engine job --preset PRESET.json --design D.ai --order ORDER.xlsx
+                       [--out DIR] [--split per_player|single] [--no-preview]
+      주문서(선수 명단) × 디자인 → 선수별 배번/이름 갈아끼운 PDF 한 벌 생성 → 검증.
+      --out 미지정 시 data/jobs/<날짜_주문서명>/ 자동 생성. 결과는 job.json 에 덤프.
 """
 from __future__ import annotations
 
@@ -26,7 +31,9 @@ import sys
 
 from . import fixtures, pattern, preview, verify
 from .compose import Piece, SizeLayout, compose, grid_layout
+from .flatten import flatten_transparency  # 투명도 벡터 평탄화(EPS 벡터 유지용)
 from .grade import grade as grade_run  # preset.json 기반 전 사이즈 합성(방식 A)
+from .job import run_job  # 주문서 × 디자인 → 선수별 통합 출력 오케스트레이터
 from .order import parse_order  # 주문서 xlsx → [{name,number,size,qty}] 파서(코어 독립)
 from .pdfutil import scale_translate
 
@@ -192,6 +199,82 @@ def cmd_order(args) -> int:
     return 0 if rows else 1
 
 
+def cmd_job(args) -> int:
+    """주문서 × 디자인 → 선수별 통합 출력. xlsx → parse_order → run_job → summary 출력."""
+    import datetime
+
+    # ── 1) 주문서 파싱(이름/배번/사이즈/수량). 경고 먼저 안내. ──
+    parse_warns: list = []
+    order_rows = parse_order(args.order, warnings=parse_warns)
+    for w in parse_warns:
+        print(w)
+    if not order_rows:
+        print(f"주문서에서 선수 행을 찾지 못했습니다: {args.order}", file=sys.stderr)
+        return 2
+    print(f"주문서 파싱: 선수 {len(order_rows)}명  (파일: {args.order})")
+
+    # ── 2) 작업 폴더 결정: --out 없으면 data/jobs/<날짜_주문서명>/ 자동 생성. ──
+    if args.out:
+        out_dir = args.out
+    else:
+        today = datetime.date.today().strftime("%y%m%d")
+        order_stem = os.path.splitext(os.path.basename(args.order))[0]
+        out_dir = os.path.join("data", "jobs", f"{today}_{order_stem}")
+    os.makedirs(out_dir, exist_ok=True)
+
+    # ── 3) 핵심: run_job 이 선수마다 사이즈 레이아웃+배번/이름으로 PDF 를 굽고 검증한다. ──
+    result = run_job(args.preset, args.design, order_rows, out_dir,
+                     font_path=args.font, split=args.split,
+                     make_preview=not args.no_preview)
+
+    s = result["summary"]
+    # ── 4) 행 경고/스킵 안내(사람 검수용). ──
+    for w in s["warnings"]:
+        print(w)
+    for sk in s["skipped"]:
+        print(f"  건너뜀: 행{sk['row']} '{sk.get('name','')}' — {sk['reason']}")
+    if s["missing_sizes"]:
+        print(f"  ⚠️ preset 에 없는 사이즈(패턴 미확보): {', '.join(s['missing_sizes'])}")
+
+    # ── 5) 종합 요약. ──
+    produced = s["produced"]
+    vpass = s["verify_pass"]
+    vfail = s["verify_fail"]
+    nskip = len(s["skipped"])
+    split_name = s["split"]
+    print("\n생성 %d개 / verify PASS %d · FAIL %d / 건너뜀 %d (split=%s)" % (produced, vpass, vfail, nskip, split_name))
+    print("작업 폴더: %s" % s["job_dir"])
+
+    # 하나도 못 만들었거나 verify 실패가 있으면 비정상 종료코드(사용자가 알아채게).
+    if s["produced"] == 0 or s["verify_fail"] > 0:
+        return 1
+    return 0
+
+
+def cmd_flatten(args) -> int:
+    """디자인 PDF 의 투명도를 벡터 상태로 평탄화한다(EPS 벡터 유지 선결 작업)."""
+    bg = None
+    if args.bg:
+        try:
+            bg = tuple(float(x) for x in args.bg.split(","))
+            if len(bg) != 4:
+                raise ValueError
+        except ValueError:
+            print("--bg 는 'C,M,Y,K' 4개 0~1 실수여야 합니다 (예: 0.8,0.5,0,0.1)", file=sys.stderr)
+            return 2
+    rep = flatten_transparency(args.design, args.out, bg_cmyk=bg)
+    print("배경색(CMYK): %s" % (rep["bg"],))
+    print("평탄화한 XObject: %s / 색 교체 %d곳 / 알파 ExtGState %d개 → 1.0"
+          % (rep["flattened_xobjects"], rep["recolored_fills"], rep["alpha_gstates_fixed"]))
+    for w in rep["warnings"]:
+        print("  ⚠️ %s" % w)
+    if rep["transparency_left"]:
+        print("  ❌ 평탄화 후에도 투명도 잔존: %s" % rep["transparency_left"], file=sys.stderr)
+        return 1
+    print("투명도 없음 ✅ → 저장: %s" % args.out)
+    return 0
+
+
 def _force_utf8_console() -> None:
     """한글 Win 기본 콘솔(cp949)에서 '—'(U+2014) 등 비-cp949 문자 출력 시
     UnicodeEncodeError 크래시를 막기 위해 stdout/stderr를 UTF-8로 고정한다.
@@ -236,6 +319,25 @@ def main(argv=None) -> int:
     op.add_argument("xlsx", help="주문서 엑셀 파일 경로(.xlsx)")
     op.add_argument("--json", default=None, help="(선택) 결과를 저장할 JSON 경로")
     op.set_defaults(func=cmd_order)
+
+    jp = sub.add_parser("job", help="주문서×디자인 → 선수별 통합 출력")
+    jp.add_argument("--preset", required=True, help="패턴 폴더의 preset.json 경로")
+    jp.add_argument("--design", required=True, help="기준 디자인 파일(.ai/.pdf)")
+    jp.add_argument("--order", required=True, help="주문서 xlsx 경로")
+    jp.add_argument("--out", default=None,
+                    help="(선택) 작업 폴더. 미지정 시 data/jobs/<날짜_주문서명>/ 자동")
+    jp.add_argument("--font", default=None,
+                    help="(선택, 현재 미사용) 폰트 루트 — preset 의 area.font 가 우선")
+    jp.add_argument("--split", choices=["per_player", "single"], default="per_player",
+                    help="per_player(기본, 선수별 파일) | single(다페이지 1PDF)")
+    jp.add_argument("--no-preview", action="store_true", help="검수용 PNG 미리보기 생략")
+    jp.set_defaults(func=cmd_job)
+
+    fp = sub.add_parser("flatten", help="디자인 투명도 벡터 평탄화(EPS 벡터 유지)")
+    fp.add_argument("--design", required=True, help="평탄화할 디자인 파일(.ai/.pdf)")
+    fp.add_argument("--out", required=True, help="평탄화 결과 저장 경로(.pdf)")
+    fp.add_argument("--bg", default=None, help="(선택) 배경 CMYK 'C,M,Y,K' 강제 지정. 미지정 시 자동 감지")
+    fp.set_defaults(func=cmd_flatten)
 
     args = p.parse_args(argv)
     return args.func(args)
