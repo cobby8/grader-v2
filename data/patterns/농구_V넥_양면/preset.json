@@ -1,0 +1,72 @@
+{
+  "preset_name": "농구_V넥_양면",
+  "version": 1,
+  "design": {
+    "base_size": "XL",
+    "design_file": "연세대 레플리카 블루림 V넥 스탠다드 베이직 XL - 템플릿.ai",
+    "page_size_pt": [4478.74, 5669.29],
+    "content_box": [468.0, 2877.0, 3997.0, 5562.0]
+  },
+  "sizes": [
+    { "name": "5XS", "pattern_file": "5XS.svg", "scale": 1.0 },
+    { "name": "4XS", "pattern_file": "4XS.svg", "scale": 1.0 },
+    { "name": "3XS", "pattern_file": "3XS.svg", "scale": 1.0 },
+    { "name": "2XS", "pattern_file": "2XS.svg", "scale": 1.0 },
+    { "name": "XS", "pattern_file": "XS.svg", "scale": 1.0 },
+    { "name": "S", "pattern_file": "S.svg", "scale": 1.0 },
+    { "name": "M", "pattern_file": "M.svg", "scale": 1.0 },
+    { "name": "L", "pattern_file": "L.svg", "scale": 1.0 },
+    { "name": "XL", "pattern_file": "XL.svg", "scale": 1.0 },
+    { "name": "2XL", "pattern_file": "2XL.svg", "scale": 1.0 },
+    { "name": "3XL", "pattern_file": "3XL.svg", "scale": 1.0 },
+    { "name": "4XL", "pattern_file": "4XL.svg", "scale": 1.0 },
+    { "name": "5XL", "pattern_file": "5XL.svg", "scale": 1.0 }
+  ],
+  "pieces": [
+    {
+      "id": "front",
+      "name": "앞판",
+      "svg_index": 0,
+      "design_region_pt": [468.0, 2877.0, 2098.0, 5287.0]
+    },
+    {
+      "id": "back",
+      "name": "뒤판",
+      "svg_index": 1,
+      "design_region_pt": [2310.0, 2877.0, 3997.0, 5287.0]
+    }
+  ],
+  "design_mapping": {
+    "mode": "anchor",
+    "anchor": "bottom-left",
+    "fit": "contain",
+    "preserve_aspect": true
+  },
+  "front_number_area": {
+    "piece_id": "front",
+    "center": [1389, 4184],
+    "cap_height": 310,
+    "color_cmyk": [0, 0, 0, 0],
+    "font": "data/fonts/HY헤드라인M.ttf"
+  },
+  "back_number_area": {
+    "piece_id": "back",
+    "center": [3217, 4342],
+    "cap_height": 539,
+    "color_cmyk": [0, 0, 0, 0],
+    "font": "data/fonts/HY헤드라인M.ttf"
+  },
+  "back_name_area": {
+    "piece_id": "back",
+    "center_x": 3219.8,
+    "baseline": 4765.7,
+    "em_pt": 136.40,
+    "pitch": 195.4,
+    "color_cmyk": [0, 0, 0, 0],
+    "font": "data/fonts/HY헤드라인M.ttf"
+  },
+  "shrink": {
+    "x": 1.0,
+    "y": 1.0
+  }
+}

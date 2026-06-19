@@ -251,6 +251,67 @@ def cmd_job(args) -> int:
     return 0
 
 
+def cmd_normalize_svg(args) -> int:
+    """path SVG(직선 d 명령) → polyline SVG 변환(단일/배치) + 변환 후 조각수 자동 확인.
+
+    두 가지 사용법:
+      ① 단일: --in IN.svg --out OUT.svg
+      ② 배치: --in-dir DIR --pattern '..._{size}.svg' --out-dir DIR --sizes 5XS,XS,...
+              → 각 사이즈마다 IN=in-dir/pattern({size}치환), OUT=out-dir/<size>.svg.
+
+    변환 직후 parse_svg 로 다시 읽어 조각수를 출력한다(2 가 기대값 — 앞/뒤판).
+    """
+    from .svg_normalize import normalize_svg
+
+    # ── 변환할 (입력, 출력, 라벨) 목록을 만든다(단일 또는 배치). ──
+    jobs = []  # (in_path, out_path, label)
+    if args.in_path and args.out:
+        jobs.append((args.in_path, args.out, os.path.basename(args.out)))
+    elif args.in_dir and args.out_dir and args.pattern and args.sizes:
+        sizes = [s.strip() for s in args.sizes.split(",") if s.strip()]
+        for sz in sizes:
+            fname = args.pattern.replace("{size}", sz)
+            in_path = os.path.join(args.in_dir, fname)
+            out_path = os.path.join(args.out_dir, f"{sz}.svg")
+            jobs.append((in_path, out_path, sz))
+    else:
+        print("사용법: normalize-svg --in IN.svg --out OUT.svg  (단일)\n"
+              "    또는 normalize-svg --in-dir DIR --pattern '..._{size}.svg' "
+              "--out-dir DIR --sizes 5XS,XS,...  (배치)", file=sys.stderr)
+        return 2
+
+    ok_count = 0
+    fail_count = 0
+    for in_path, out_path, label in jobs:
+        # ── 입력 존재 선검증(친절한 한글 안내). 1개 실패해도 나머지는 계속. ──
+        if not os.path.exists(in_path):
+            print(f"  ❌ [{label}] 입력 없음: {in_path}", file=sys.stderr)
+            fail_count += 1
+            continue
+        try:
+            rep = normalize_svg(in_path, out_path)
+        except Exception as e:
+            print(f"  ❌ [{label}] 변환 실패: {e}", file=sys.stderr)
+            fail_count += 1
+            continue
+
+        # ── 변환 직후 parse_svg 로 재파싱해 조각수를 확인(2 기대). ──
+        polys = pattern.parse_svg(out_path)
+        n = len(polys)
+        mark = "✅" if n == 2 else "⚠️"
+        print(f"  {mark} [{label}] 조각 {n}개 "
+              f"(written={rep['pieces_written']} / dropped open={rep['dropped_open']} "
+              f"small={rep['dropped_small']} dup={rep['dropped_dup']}) → {out_path}")
+        for w in rep["warnings"]:
+            print(f"      {w}")
+        if rep["has_curves"]:
+            print("      🟡 곡선 명령 감지 — 직선 근사됨(형태 확인 필요).")
+        ok_count += 1
+
+    print(f"\n변환 완료: 성공 {ok_count} · 실패 {fail_count} (총 {len(jobs)})")
+    return 0 if fail_count == 0 else 1
+
+
 def cmd_flatten(args) -> int:
     """디자인 PDF 의 투명도를 벡터 상태로 평탄화한다(EPS 벡터 유지 선결 작업)."""
     bg = None
@@ -405,6 +466,18 @@ def main(argv=None) -> int:
     rp.add_argument("--font", default="data/fonts/HY헤드라인M.ttf",
                     help="번호·이름 공통 폰트 경로(기본 HY헤드라인M.ttf)")
     rp.set_defaults(func=cmd_reference)
+
+    np_ = sub.add_parser("normalize-svg",
+                         help="path SVG → polyline SVG 변환(단일/배치) + 조각수 확인")
+    np_.add_argument("--in", dest="in_path", default=None, help="(단일) 입력 path SVG")
+    np_.add_argument("--out", default=None, help="(단일) 출력 polyline SVG")
+    np_.add_argument("--in-dir", dest="in_dir", default=None, help="(배치) 입력 폴더")
+    np_.add_argument("--out-dir", dest="out_dir", default=None, help="(배치) 출력 폴더")
+    np_.add_argument("--pattern", default=None,
+                     help="(배치) 파일명 패턴. '{size}' 가 사이즈로 치환됨")
+    np_.add_argument("--sizes", default=None,
+                     help="(배치) 변환할 사이즈 콤마 구분(예: 5XS,4XS,...,5XL)")
+    np_.set_defaults(func=cmd_normalize_svg)
 
     fp = sub.add_parser("flatten", help="디자인 투명도 벡터 평탄화(EPS 벡터 유지)")
     fp.add_argument("--design", required=True, help="평탄화할 디자인 파일(.ai/.pdf)")

@@ -8,6 +8,12 @@
 - **내용**: 시스템엔 서로 다른 좌표계 3개가 존재한다. ①디자인 AI(기준 XL) MediaBox `4478×5669pt`(세로 긴 양면펼침 페이지) ②패턴 SVG(예 XS) viewBox `4337×3401`(가로 긴 조각나열 마커시트, y아래로 증가) ③출력 대지 158×200cm 고정(일러 기준). engine은 ①을 통짜 Form XObject 1개로 임베드하고 ②의 조각 윤곽으로 클리핑(W n)+cm 변환해 무손실 합성. preset.json은 이 셋을 잇는 변환정보를 담는다. **매핑 경로**: preset의 조각 outline → parse_svg()→Polyline.points → `Piece.outline`(PDF좌표, y뒤집음) / preset의 design_mapping(조각별 fit·anchor·scale) → `Piece.transform`(=scale_translate cm행렬) / page_size → `SizeLayout.page_size` / number_area·name_area(조각 상대비율) → A-4 text.py가 절대좌표 환산. engine 공개 API는 불변(주어진 것).
 - **참조횟수**: 0
 
+### [2026-06-19] path SVG → polyline SVG 전처리 경로 (engine/svg_normalize.py, parse_svg 앞단 도구)
+- **분류**: architecture
+- **발견자**: planner-architect
+- **내용**: 운영 패턴 SVG가 두 형식으로 들어온다 — ①일러 "SVG Export Plug-In" = `<polyline>`(닫힌 윤곽만, parse_svg 직접호환, U넥) ②inkscape/PyMuPDF류 = `<path d="M/H/L/V...">`+개별 `matrix(a,b,c,d,e,f)`(보조선 포함, parse_svg 0조각, V넥). parse_svg는 polyline/polygon만 읽으므로(불변), ②를 ①로 바꾸는 **전처리 변환기 `engine/svg_normalize.py`**를 parse_svg **앞단**에 둔다(engine 코어 미접촉, ElementTree만 import, pattern.py에 함수추가 안 함=계층분리). 공개함수 `normalize_svg_paths(in,out,*,min_points,drop_open,flatten_curves,samples)->dict`. 흐름: path d 직선전개(M/H/L/V 절대·상대)+matrix적용(x'=ax+cy+e,y'=bx+dy+f)→**viewBox좌표 그대로**(flip_y 안 함, parse_svg가 flip→이중flip방지)→보조선(열린·세로·수평선) 필터→U넥형 polyline SVG. 곡선(C/Q/S/A) 폴백은 평탄화샘플링 인터페이스만 마련(V넥 곡선0이라 미사용). **변환은 1회성**(빌드단계), 산출 polyline SVG를 preset.sizes가 가리키면 이후 엔진은 V넥을 U넥과 동일취급. **V넥 실측**: 닫힌조각=앞·뒤 2개(소매부재), 변환후 높이정렬 앞=idx0/뒤=idx1. 좌표정합은 design_region_pt(펼침본4478×5669)→조각bbox(마커시트4478×3401)를 _piece_transform이 앵커+contain 자동수행(Phase C 방식A). data/patterns/농구_V넥_양면/ 폴더에 변환SVG13개+preset.json.
+- **참조횟수**: 0
+
 ### [2026-06-18] job 선수별 통합 출력 경로 (engine/job.py, 응용 오케스트레이터 — grade.py와 동급)
 - **분류**: architecture
 - **발견자**: planner-architect

@@ -17,6 +17,9 @@ grading_compare/_measure/
 # _grade_out, _grade_out_text2, _grade_out_reg 등 모든 grade 출력 폴더 포함
 _grade_out*/
 
+# job 작업 산출물 (선수별 PDF/PNG, 무거움 — job 재실행으로 재생성)
+data/jobs/
+
 # 가상환경
 .venv/
 venv/

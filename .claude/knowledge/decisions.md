@@ -2,6 +2,12 @@
 <!-- 담당: planner-architect | 최대 30항목 -->
 <!-- "왜 A 대신 B를 선택했는지" 기술 결정의 배경과 이유를 기록 -->
 
+### [2026-06-19] Phase D: 기존 path SVG 활용 + path→polyline 전처리 변환기(parse_svg 무수정)
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: V넥 패턴 SVG 13개(5XS~5XL, 직선 폴리라인 path)가 G드라이브에 이미 존재함을 발견. 형식은 inkscape/PyMuPDF류 `<path>`+`matrix(1,0,0,-1,tx,ty)`로 **곡선명령 전무**(M/H/L/V만, 실측). parse_svg는 polyline/polygon만 읽어 이 SVG를 **0조각**으로 반환(검증). **결정: parse_svg를 고치지 않고(불변제약 §6), path SVG를 읽어 U넥과 동일한 polyline SVG로 다시 써주는 전처리 변환기 `engine/svg_normalize.py`를 신규 모듈로 추가.** 대안 비교 — ①Phase D-1 ai_to_svg.jsx(일러 GUI 재내보내기): 소매 보존되나 사용자 수동·13개 재작업·GUI의존. ②PyMuPDF get_drawings 재생성: 소매 분리선 재구성 추측영역·정합위험. ③(채택) 기존 path SVG 직접 변환: 이미 있는 13개 즉시 활용, matrix+직선전개는 결정적·정확, parse_svg 무수정, 1회성 변환. ③이 가장 단순·안전(이미 만든 자산 재사용). **변환 핵심**: path d 직선전개(M/H/L/V 절대·상대) + matrix(a,b,c,d,e,f) 적용 → viewBox좌표 polyline points(flip_y는 parse_svg가 하므로 변환기는 안 함=이중flip 방지) → U넥형 SVG. 보조선(열린/세로/수평선) 필터로 닫힌 조각만. **실측 확정사실**: V넥 XL.svg 닫힌조각=앞판(path1,V넥,h2354)·뒤판(path0,h2352) **2개뿐, 소매 윤곽 부재**. 변환후 parse_svg 높이정렬→**앞=idx0/뒤=idx1**(U넥 뒤0앞1소매2와 반대순서 주의). design_region_pt는 펼침본(4478×5669) 좌표로 적고 _piece_transform이 마커시트 조각bbox에 앵커+contain 자동정합(Phase C 방식A 무수정). **잔존 차단**: ①소매 조각 부재(앞/뒤 2조각 1차, 사용자 결정 필요) ②빈템플릿 미확보(design_file placeholder) ③design_region_pt U넥값 재사용→V넥 reference 재추출 권장 ④svg_index 정렬역전(앞뒤 높이차2pt) 단계검증. **Phase D-1 ai_to_svg.jsx는 폐기 아님**(곡선섞인 다른 패턴·소매 별도확보 시 폴백 경로로 보존).
+- **참조횟수**: 0
+
 ### [2026-06-18] job split 기본값 per_player(파일별 PDF) 확정 + 사이즈필터=preset 복제 방식
 - **분류**: decision
 - **발견자**: planner-architect (split 기본값은 사용자 2026-06-18 확정)
