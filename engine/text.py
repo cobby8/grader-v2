@@ -26,7 +26,8 @@ from __future__ import annotations
 import os
 from typing import Dict, List, Tuple
 
-from fontTools.pens.recordingPen import RecordingPen
+from fontTools.pens.recordingPen import DecomposingRecordingPen, RecordingPen
+from fontTools.pens.qu2cuPen import Qu2CuPen
 from fontTools.ttLib import TTFont
 
 from .pdfutil import fmt
@@ -88,14 +89,26 @@ def _glyph_path_ops(glyphset, glyph_name: str, scale: float, dx: float, dy: floa
       curveTo(c1,c2,e)   → 'C1 C2 E c' (큐빅 베지어 — CFF라 항상 이 형태)
       closePath          → 'h'       (서브패스 닫기)
     """
-    pen = RecordingPen()
-    glyphset[glyph_name].draw(pen)         # 글리프 윤곽을 펜 명령 리스트로 기록
+    # ── 1) 합성 글리프(한글 등 addComponent) 분해 + 2) 쿼드라틱(TTF)→큐빅 변환 ──
+    #   · DecomposingRecordingPen: 컴포넌트로 만든 글리프(한글 음절=자모 조합)를 실제 윤곽으로 편다.
+    #     (이게 없으면 합성 글리프는 addComponent 만 남아 경로가 0개가 된다 — 한글 누락 버그)
+    #   · Qu2CuPen(all_cubic=True): TTF 의 2차 베지어(qCurveTo)를 PDF c(3차)로 정확 변환.
+    #     CFF(Pretendard)는 이미 3차라 그대로 통과(회귀 없음).
+    dpen = DecomposingRecordingPen(glyphset)
+    glyphset[glyph_name].draw(dpen)
+    rec = RecordingPen()
+    try:
+        q2c = Qu2CuPen(rec, max_err=1.0, all_cubic=True)
+        dpen.replay(q2c)
+        commands = rec.value
+    except Exception:
+        commands = dpen.value  # 변환 실패 시 분해본이라도 사용(아래 qCurveTo 폴백 처리)
 
     # 폰트좌표 1점을 시트좌표 pt 로 옮기는 작은 도우미.
     tx = lambda x, y: (x * scale + dx, y * scale + dy)
 
     parts: List[str] = []
-    for cmd, pts in pen.value:
+    for cmd, pts in commands:
         if cmd == "moveTo":
             (x, y) = pts[0]
             X, Y = tx(x, y)
