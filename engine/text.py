@@ -27,6 +27,7 @@ import os
 from typing import Dict, List, Tuple
 
 from fontTools.pens.recordingPen import DecomposingRecordingPen, RecordingPen
+from fontTools.pens.boundsPen import ControlBoundsPen  # 글리프 '잉크 경계' 측정용(번호 높이 기준)
 from fontTools.pens.qu2cuPen import Qu2CuPen
 from fontTools.ttLib import TTFont
 
@@ -277,6 +278,220 @@ def render_text_ops(
 
     # ── 최종 조립: q(상태저장) → 색 → 모든 글자경로 → f(채우기) → Q(상태복원) ──
     #    q…Q 로 감싸 색/CTM 누수 방지. 'f'(non-zero) 라 글자 구멍(0,8,이 안쪽)도 자동 처리.
+    body = "\n".join(glyph_blocks)
+    ops_str = f"q\n{color_op}\n{body}\nf\nQ"
+    return ops_str, warnings
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Phase B — 정밀 배치 함수 (의뢰서 §4 공식 그대로 구현)
+#
+#   기존 render_text_ops 는 'bbox 안에 contain' 방식이라 미세하게 부정확하다.
+#   완성본(정답지)에서 실측한 "높이·중심·자간" 수치를 그대로 재현하려면, 칸이 아니라
+#   숫자=잉크높이 기준 scale, 이름=em 기준 scale + 음절 피치 로 배치해야 한다.
+#   → 아래 place_number / place_name 이 그 정밀 배치기다. (수치는 전부 인자, 하드코딩 없음)
+# ════════════════════════════════════════════════════════════════════════════
+
+
+def _glyph_ink_bounds(glyphset, glyph_name: str):
+    """글리프 1개의 '잉크 경계'(xMin,yMin,xMax,yMax, 폰트단위)를 구한다.
+
+    왜 필요한가: 번호의 '자릿수 높이'(목표값 cap_h)는 글자 칸(em)이 아니라 숫자가
+    실제로 차지하는 세로 잉크 높이(yMax-yMin)다. 완성본 실측이 잉크 높이라 여기에 맞춘다.
+
+    합성 글리프(한글 음절 등)도 정확히 재기 위해 DecomposingRecordingPen 으로 윤곽을
+    먼저 편 뒤 ControlBoundsPen 으로 경계를 잰다. 윤곽이 없는 글리프(공백)는 None.
+    반환: (xMin, yMin, xMax, yMax) | None
+    """
+    # 1) 합성 글리프 분해(컴포넌트를 실제 윤곽으로) → 경계 측정.
+    dpen = DecomposingRecordingPen(glyphset)
+    glyphset[glyph_name].draw(dpen)
+    bpen = ControlBoundsPen(glyphset)
+    dpen.replay(bpen)
+    if bpen.bounds is None:                 # 공백 등 윤곽 없는 글리프
+        return None
+    return bpen.bounds                       # (xMin, yMin, xMax, yMax) 폰트단위
+
+
+def place_number(text, font, cap_h_pt: float, center_x: float, center_y: float, color):
+    """번호('7','20' 등)를 '자릿수 높이=cap_h_pt' 로 (center_x, center_y) 잉크중심에 배치.
+
+    의뢰서 §4 공식:
+      · 대표 자릿 글리프의 잉크 높이 inkH(폰트단위)로 scale s = cap_h_pt / inkH.
+      · 자릿들을 자연 advance×s 로 좌→우 배치, 전체를 center_x 에 가운데정렬.
+      · baseline = center_y - ((yMin+yMax)/2)*s  → 잉크 세로중심이 center_y 에 온다.
+      · 한 자리("7")·두 자리("20") 모두 center_x 정확히 가운데정렬.
+
+    인자:
+      text       : 번호 문자열("7","20"). 빈값/None 이면 아무것도 안 그림.
+      font       : 폰트 절대경로(.ttf/.otf). 없으면 친절 에러.
+      cap_h_pt   : 목표 자릿수(잉크) 높이(pt). 예: 앞 310, 뒤 539.
+      center_x   : 번호 가로 중심(시트 절대좌표 pt).
+      center_y   : 번호 잉크 세로 중심(시트 절대좌표 pt).
+      color      : CMYK (c,m,y,k). 0~1 또는 0~100 모두 허용.
+    반환: (ops_str, warnings) — render_text_ops 와 동일 규약(ascii ops, k fill, q…Q).
+    """
+    warnings: List[str] = []
+
+    # ── 빈 텍스트: 그릴 것 없음(정상). 번호 미지정 시 출력 불변 보장. ──
+    if text is None or str(text).strip() == "":
+        return "", warnings
+    text = str(text).strip()
+
+    # ── 목표 높이 검증(0/음수 방지 — preset 오타 대비) ──
+    if cap_h_pt <= 0:
+        warnings.append(f"🟡 번호 '{text}' 의 높이값이 잘못됐습니다(cap_height {cap_h_pt}). 건너뜁니다.")
+        return "", warnings
+
+    # ── 폰트 로드 + 글자 측정(advance, 누락 글리프) ──
+    glyphset, cmap, upm = _load_glyphset(font)
+    entries, missing = _text_metrics(text, glyphset, cmap, upm)
+
+    # ── R-F: 폰트에 없는 글자가 있으면 통째 미출력(번호 깨짐 방지) ──
+    if missing:
+        miss_str = "".join(missing)
+        warnings.append(
+            f"🟡 번호 '{text}' 중 '{miss_str}' 글자가 폰트에 없어 전체를 그리지 않습니다(입력값 확인).")
+        return "", warnings
+    if not entries:
+        return "", warnings
+
+    # ── 대표 자릿 글리프의 잉크 높이로 scale 결정 ──
+    #    '대표'는 가장 키 큰 자릿(보통 잉크높이 최대)으로 잡아, 모든 자리를 같은 s 로 배치한다.
+    #    (각 자리 높이가 미세히 달라도 한 줄 번호는 동일 배율이어야 자연스럽다.)
+    ink_list = []
+    for gname, _ in entries:
+        b = _glyph_ink_bounds(glyphset, gname)
+        if b is not None:
+            ink_list.append(b)
+    if not ink_list:                         # 전부 공백 등 — 그릴 잉크 없음
+        warnings.append(f"🟡 번호 '{text}' 에 그릴 윤곽이 없어 건너뜁니다.")
+        return "", warnings
+
+    # 대표 잉크 높이 = 후보 중 최대(가장 큰 자릿). 이 높이를 cap_h_pt 에 맞춘다.
+    rep = max(ink_list, key=lambda bb: bb[3] - bb[1])
+    ink_h = rep[3] - rep[1]                   # yMax - yMin (폰트단위)
+    if ink_h <= 0:
+        warnings.append(f"🟡 번호 '{text}' 의 잉크 높이를 계산하지 못해 건너뜁니다.")
+        return "", warnings
+    s = cap_h_pt / ink_h                      # 폰트단위 → pt 배율(이 번호 전용)
+
+    # ── 가로: 자릿들을 advance×s 로 이어붙인 전체 폭을 center_x 가운데정렬 ──
+    #    전체 폭 = Σ(advance)×s. 시작 x = center_x - 전체폭/2.
+    total_adv = sum(adv for _, adv in entries)
+    total_w = total_adv * s
+    start_x = center_x - total_w / 2.0
+
+    # ── 세로: baseline 을 잡아 잉크 세로중심이 center_y 에 오게 한다 ──
+    #    baseline 위 잉크중심 = (yMin+yMax)/2 × s. 이걸 center_y 에 맞추려면
+    #    baseline = center_y - ((yMin+yMax)/2)×s. (대표 글리프의 잉크 세로중심 기준)
+    ink_mid = (rep[1] + rep[3]) / 2.0
+    baseline_y = center_y - ink_mid * s
+
+    # ── 자릿별 경로 누적(왼→오, 폰트 advance 만큼 전진) ──
+    pen_x = start_x
+    glyph_blocks: List[str] = []
+    for gname, adv in entries:
+        ops = _glyph_path_ops(glyphset, gname, s, pen_x, baseline_y)  # s=폰트단위→pt 배율
+        if ops:                               # 공백은 윤곽 없어 빈 문자열
+            glyph_blocks.append(ops)
+        pen_x += adv * s
+    if not glyph_blocks:
+        return "", warnings
+
+    # ── 색(CMYK k fill) + q…Q 래핑(기존 규약과 동일) ──
+    c, m, y, k = _normalize_cmyk(color)
+    color_op = f"{fmt(c)} {fmt(m)} {fmt(y)} {fmt(k)} k"
+    body = "\n".join(glyph_blocks)
+    ops_str = f"q\n{color_op}\n{body}\nf\nQ"
+    return ops_str, warnings
+
+
+def place_name(text, font, em_pt: float, pitch_pt: float, baseline_y: float,
+               center_x: float, color):
+    """이름('김경원' 등)을 em_pt 크기로, 음절 피치 pitch_pt 간격, baseline 고정,
+    center_x 가운데정렬로 배치.
+
+    의뢰서 §4 공식:
+      · scale = em_pt / upm  (em_pt=136.40, upm=1024 → 글자 한 칸이 em_pt pt).
+      · 음절을 pitch_pt 간격으로 baseline_y 에 고정, 전체를 center_x 가운데정렬.
+      · 원본은 음절 사이 공백+Tc(자간)로 간격을 줬으므로, 여기서는 '음절당 피치 한 칸'으로
+        재현한다. 입력에 공백이 섞여 있어도 공백 자체는 피치 한 칸을 차지하는 것으로 본다.
+
+    인자:
+      text       : 이름 문자열("김경원"). 빈값/None 이면 아무것도 안 그림.
+      font       : 폰트 절대경로. 없으면 친절 에러.
+      em_pt      : 글자 1em 크기(pt). 예: 136.40.
+      pitch_pt   : 음절 중심 간 간격(pt). 예: 195.4.
+      baseline_y : 글자 baseline 의 시트 절대 y(pt). 예: 4765.7.
+      center_x   : 이름 전체 가로 중심(시트 절대좌표 pt). 예: 3219.8.
+      color      : CMYK (c,m,y,k). 0~1 또는 0~100 모두 허용.
+    반환: (ops_str, warnings).
+    """
+    warnings: List[str] = []
+
+    # ── 빈 텍스트: 그릴 것 없음(정상). ──
+    if text is None or str(text).strip() == "":
+        return "", warnings
+    text = str(text)
+
+    # ── 값 검증(em/pitch 0·음수 방지) ──
+    if em_pt <= 0:
+        warnings.append(f"🟡 이름 '{text}' 의 글자 크기값이 잘못됐습니다(em_pt {em_pt}). 건너뜁니다.")
+        return "", warnings
+    if pitch_pt <= 0:
+        warnings.append(f"🟡 이름 '{text}' 의 음절 간격값이 잘못됐습니다(pitch {pitch_pt}). 건너뜁니다.")
+        return "", warnings
+
+    glyphset, cmap, upm = _load_glyphset(font)
+    if not upm:
+        warnings.append(f"🟡 이름 '{text}' 의 폰트 upm 을 읽지 못해 건너뜁니다.")
+        return "", warnings
+
+    # ── '음절 단위'로 자른다(공백 포함, 글자 하나=한 음절=피치 한 칸) ──
+    #    피치는 advance 가 아니라 '고정 간격'이라, 음절 폭이 달라도 중심 간격이 일정하다.
+    syllables = list(text)                   # 한글 음절/숫자/공백 각각 한 칸
+    n = len(syllables)
+
+    # ── 전체 폭 = (음절수-1)×pitch (중심~중심 거리 합). 1글자면 폭 0(중심에 그대로). ──
+    total_span = (n - 1) * pitch_pt
+    # 첫 음절의 '중심 x' = center_x - total_span/2, 이후 음절마다 +pitch.
+    first_center_x = center_x - total_span / 2.0
+
+    # ── em → pt 배율(글리프 좌표=폰트단위에 곱할 값) ──
+    s = em_pt / upm
+
+    glyph_blocks: List[str] = []
+    missing: List[str] = []
+    for i, ch in enumerate(syllables):
+        if ch.strip() == "":                 # 공백 음절: 피치 한 칸만 차지(그릴 윤곽 없음)
+            continue
+        gname = cmap.get(ord(ch))
+        if gname is None:                    # 폰트에 없는 글자 수집(아래서 통째 처리)
+            missing.append(ch)
+            continue
+        # 이 음절의 중심 x(시트 절대좌표).
+        syl_center_x = first_center_x + i * pitch_pt
+        # 글리프를 '자기 advance 폭의 가운데'가 syl_center_x 에 오게 좌측 시작점 보정.
+        #   글리프 그리기 시작 x(dx) = 중심 - (advance×s)/2.  (음절 자체를 피치칸 가운데에 둠)
+        adv = glyphset[gname].width
+        dx = syl_center_x - (adv * s) / 2.0
+        ops = _glyph_path_ops(glyphset, gname, s, dx, baseline_y)  # baseline 고정
+        if ops:
+            glyph_blocks.append(ops)
+
+    # ── R-F: 폰트에 없는 글자가 있으면 통째 미출력(이름 깨짐 방지) ──
+    if missing:
+        miss_str = "".join(missing)
+        warnings.append(
+            f"🟡 이름 '{text}' 중 '{miss_str}' 글자가 폰트에 없어 전체를 그리지 않습니다(입력값 확인).")
+        return "", warnings
+    if not glyph_blocks:                      # 전부 공백 등 — 그릴 윤곽 없음
+        return "", warnings
+
+    # ── 색(CMYK k fill) + q…Q 래핑 ──
+    c, m, y, k = _normalize_cmyk(color)
+    color_op = f"{fmt(c)} {fmt(m)} {fmt(y)} {fmt(k)} k"
     body = "\n".join(glyph_blocks)
     ops_str = f"q\n{color_op}\n{body}\nf\nQ"
     return ops_str, warnings

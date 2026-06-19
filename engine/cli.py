@@ -275,6 +275,69 @@ def cmd_flatten(args) -> int:
     return 0
 
 
+def cmd_reference(args) -> int:
+    """완성본(샘플 번호·이름 박힌 디자인)에서 preset area JSON 초안을 자동 추출한다.
+
+    `engine reference --완성본 R.ai [--템플릿 T.ai] [--json out]`
+      · 완성본 단독으로 동작(템플릿은 선택, 1차는 미사용 — 향후 diff 정확도용).
+      · 앞/뒤 번호(center·cap_height·color)와 뒤 이름(center_x·baseline·em_pt·pitch)을
+        preset 스키마(front_number_area/back_number_area/back_name_area)로 출력.
+    """
+    from .reference import build_area_preset
+
+    # ── 입력 파일 선검증(친절한 한글 메시지). ──
+    if not os.path.exists(args.완성본):
+        print(f"완성본 파일을 찾지 못했습니다: {args.완성본}", file=sys.stderr)
+        return 2
+    if args.템플릿 and not os.path.exists(args.템플릿):
+        print(f"템플릿 파일을 찾지 못했습니다: {args.템플릿}", file=sys.stderr)
+        return 2
+    if args.템플릿:
+        # 1차 구현은 완성본 단독 추출이라 템플릿은 받기만 하고 안내만 한다(향후 diff 용).
+        print("ℹ️ 템플릿은 받았으나 1차 추출은 완성본 단독으로 수행합니다(diff 정확도 향상은 후속).")
+
+    # ── 핵심: build_area_preset 이 번호(pikepdf)+이름(fitz rawdict)을 묶어 area 초안 산출. ──
+    try:
+        result = build_area_preset(args.완성본, font=args.font)
+    except Exception as e:
+        # 크래시 금지 — 사람이 읽을 수 있는 한글 메시지로 안내.
+        print(f"완성본 분석 중 문제가 발생했습니다: {e}", file=sys.stderr)
+        return 1
+
+    pw, ph = result["page_size"]
+    print(f"페이지 크기: {pw} x {ph} pt / 앞·뒤 분할 x={result['split_x']}")
+
+    # ── 추출 경고(부분 실패)를 먼저 안내. ──
+    for w in result["warnings"]:
+        print(w)
+
+    # ── 추출 결과 요약(사람이 §4 수치와 대조). ──
+    areas = result["areas"]
+    fa = areas["front_number_area"]
+    ba = areas["back_number_area"]
+    na = areas["back_name_area"]
+    if fa:
+        print(f"앞 번호: center={fa['center']} cap_height={fa['cap_height']} color={fa['color_cmyk']}")
+    if ba:
+        print(f"뒤 번호: center={ba['center']} cap_height={ba['cap_height']} color={ba['color_cmyk']}")
+    if na:
+        print(f"뒤 이름: center_x={na['center_x']} baseline={na['baseline']} "
+              f"em_pt={na['em_pt']} pitch={na['pitch']} color={na['color_cmyk']}")
+    nd = result.get("name_detail")
+    if nd:
+        print(f"  (이름 추출 원문='{nd['text']}' font='{nd['font']}')")
+
+    # ── --json 지정 시 area 초안을 파일로 저장(preset.json 에 붙여넣을 수 있게). ──
+    if args.json:
+        import json
+        with open(args.json, "w", encoding="utf-8") as f:
+            json.dump(areas, f, ensure_ascii=False, indent=2)
+        print(f"area JSON 저장: {args.json}")
+
+    # 셋 중 하나라도 뽑았으면 성공으로 본다(전부 실패면 1).
+    return 0 if (fa or ba or na) else 1
+
+
 def _force_utf8_console() -> None:
     """한글 Win 기본 콘솔(cp949)에서 '—'(U+2014) 등 비-cp949 문자 출력 시
     UnicodeEncodeError 크래시를 막기 위해 stdout/stderr를 UTF-8로 고정한다.
@@ -332,6 +395,16 @@ def main(argv=None) -> int:
                     help="per_player(기본, 선수별 파일) | single(다페이지 1PDF)")
     jp.add_argument("--no-preview", action="store_true", help="검수용 PNG 미리보기 생략")
     jp.set_defaults(func=cmd_job)
+
+    rp = sub.add_parser("reference", help="완성본에서 번호·이름 area JSON 초안 추출")
+    rp.add_argument("--완성본", required=True, dest="완성본",
+                    help="샘플 번호·이름이 박힌 완성본 디자인(.ai/.pdf)")
+    rp.add_argument("--템플릿", default=None, dest="템플릿",
+                    help="(선택) 빈 템플릿 — 1차는 미사용, 향후 diff 정확도용")
+    rp.add_argument("--json", default=None, help="(선택) area JSON 초안 저장 경로")
+    rp.add_argument("--font", default="data/fonts/HY헤드라인M.ttf",
+                    help="번호·이름 공통 폰트 경로(기본 HY헤드라인M.ttf)")
+    rp.set_defaults(func=cmd_reference)
 
     fp = sub.add_parser("flatten", help="디자인 투명도 벡터 평탄화(EPS 벡터 유지)")
     fp.add_argument("--design", required=True, help="평탄화할 디자인 파일(.ai/.pdf)")
