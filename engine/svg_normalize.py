@@ -203,6 +203,7 @@ def normalize_svg(in_path: str, out_path: str, *,
                   min_points: int = 3,
                   drop_open: bool = True,
                   min_dim_ratio: float = 0.05,
+                  min_area_ratio: float = 0.002,
                   dedup_tol_ratio: float = 0.01,
                   flatten_curves: bool = False,
                   samples: int = 16) -> dict:
@@ -213,8 +214,14 @@ def normalize_svg(in_path: str, out_path: str, *,
       out_path       : 출력 polyline SVG 경로(임시파일→os.replace 로 원자적 저장).
       min_points     : 폴리라인 최소 점 수(이보다 적으면 보조선으로 보고 버림).
       drop_open      : True 면 '열린' 조각(시작≠끝)을 버린다. V넥 면적 조각은 모두 닫힘.
-      min_dim_ratio  : 페이지 대비 폭·높이 최소 비율. 둘 중 하나라도 이보다 작으면(세로선·
-                       수평선·작은 표식) 버린다. 0.05 = 5%.
+      min_dim_ratio  : 페이지 대비 폭·높이 최소 비율. (이슈3 정정) "한 축이라도 작으면 버림"은
+                       목 '밴드' 조각(폭은 충분, 높이만 얇음 176pt)까지 버리는 부작용이 있었다.
+                       → 이제 폭·높이 '둘 다' 이 비율보다 작을 때만 버린다(진짜 보조선=양축 작음).
+                       밴드처럼 한 축만 얇고 다른 축이 충분한 띠 조각은 보존된다. 0.05 = 5%.
+      min_area_ratio : 페이지넓이(page_dim²) 대비 최소 면적 비율. bbox 면적이 이보다 작으면
+                       (접는선·짧은 표식 등 면적이 거의 0인 보조선) 버린다. 한 축만 얇아도
+                       면적이 충분하면(밴드) 보존. 0.002 = 0.2%(예: 4337²×0.002≈3.8만pt²).
+                       실측 밴드 최소 면적 ≈ 24만pt² 이므로 안전히 보존, 0면적 보조선만 제거.
       dedup_tol_ratio: 중복 조각 판정 허용오차(페이지 대비 비율). bbox 폭·높이·중심이 모두
                        이 안에서 같으면 같은 조각으로 보고 1개만 남긴다(위·아래 중복 제거).
       flatten_curves : (인터페이스만) 곡선 평탄화 모드. 현재 V넥 곡선 0이라 미사용.
@@ -262,7 +269,15 @@ def normalize_svg(in_path: str, out_path: str, *,
             "🟡 곡선 명령(C/Q/S/A)을 만나 끝점만 직선 근사했습니다. 형태가 어긋날 수 있어 "
             "확인이 필요합니다(현재 V넥 데이터엔 곡선이 없어야 정상).")
 
-    # ── 보조선·작은 표식 필터 ──
+    # ── 보조선·작은 표식 필터 (이슈3에서 정정) ──
+    #   [수정 이유] 종전 "한 축이라도 5%보다 작으면 버림"은 목 '밴드' 조각(폭 1380~1992,
+    #   높이 176pt)까지 버려 V넥에 밴드 조각이 누락됐다. 밴드는 한 축(높이)만 얇을 뿐
+    #   '면적'은 충분한(≈24만~35만pt²) 띠 조각이다. 진짜 보조선(접는선/짧은표식)은
+    #   '양 축이 둘 다 작거나' '면적이 거의 0'이다.
+    #   → 판정 기준을 (A)양 축이 둘 다 작을 때만 버림  AND  (B)면적이 최소치 미만이면 버림
+    #     으로 바꿔, 밴드는 보존하고 진짜 보조선만 제거한다.
+    dim_thr = page_dim * min_dim_ratio          # 길이 임계(폭/높이)
+    area_thr = (page_dim ** 2) * min_area_ratio  # 면적 임계(page_dim² 대비 비율)
     dropped_open = 0
     dropped_small = 0
     kept = []  # (pts, bbox)
@@ -270,12 +285,19 @@ def normalize_svg(in_path: str, out_path: str, *,
         x0, y0, x1, y1 = bb
         w = x1 - x0
         h = y1 - y0
+        area = w * h
         # 점이 너무 적으면 선분(보조선) → 버림.
         if len(pts) < min_points:
             dropped_small += 1
             continue
-        # 폭·높이 중 하나라도 페이지 대비 너무 작으면(세로선/수평선/작은 표식) → 버림.
-        if w < page_dim * min_dim_ratio or h < page_dim * min_dim_ratio:
+        # (A) 폭·높이가 '둘 다' 너무 작으면(점 같은 작은 표식) → 버림.
+        #     한 축만 작은 띠(밴드)는 이 조건을 통과한다.
+        if w < dim_thr and h < dim_thr:
+            dropped_small += 1
+            continue
+        # (B) bbox 면적이 최소치 미만이면(접는선처럼 한 축이 0에 수렴하는 보조선) → 버림.
+        #     밴드는 면적이 충분(≈24만+)하므로 통과, 0면적 보조선만 제거된다.
+        if area < area_thr:
             dropped_small += 1
             continue
         # 닫히지 않은(열린) 조각은 면적 조각이 아님 → drop_open 이면 버림.
@@ -360,4 +382,162 @@ def normalize_svg(in_path: str, out_path: str, *,
         "has_curves": any_curves,
         "bboxes": bboxes,
         "warnings": warnings,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5) 사이즈 단조성 가드 (이슈3 — 자산 결함 자동 탐지)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# 왜 이 가드가 필요한가 (큰 그림):
+#   이슈3에서 3XL.svg 가 5XL.svg 와 '조각 좌표 100% 동일'한 자산 결함이 있었다.
+#   그런데 이 결함은 기존 6개 검증 신호(조각수3·viewBox통일·OOB없음·높이내림차순·
+#   verify PASS·selftest PASS)를 전부 통과한다. 즉 "초록불인데 치수만 틀린" 함정이라,
+#   사람 눈으로도 잡기 어렵고 결국 3XL 주문 선수에게 5XL 크기가 출고될 뻔했다.
+#
+#   ⇒ 이를 자동으로 잡는 유일한 방법은 '여러 사이즈를 함께 놓고 비교'하는 것이다.
+#     비유하면 옷 사이즈표 검표기 — "3XL인데 5XL과 치수가 똑같다"는 모순을 잡아낸다.
+#     (a) 인접/임의 두 사이즈의 조각 좌표가 100% 동일하면 → 같은 자산 복붙 의심(실패).
+#     (b) 사이즈가 커질수록 조각 높이가 단조 증가해야 정상인데, 작아지거나 그대로면 경고.
+#
+# 불변 제약: 기존 함수는 일절 건드리지 않고 '추가'만 한다. parse_svg(pattern.py)를
+#   읽기 전용으로 호출해 "엔진이 실제로 보는 조각"을 기준으로 비교한다(가장 신뢰도 높음).
+def _piece_coord_hash(points: List[Point], *, ndigits: int = 2) -> str:
+    """조각 윤곽 점열을 안정적인 해시 문자열로 만든다(좌표 비교용).
+
+    왜 반올림: 부동소수 미세오차로 '사실상 동일'이 '다름'으로 오판되지 않게
+    소수 ndigits 자리에서 반올림한 뒤 해시한다. 점 순서는 그대로 둔다
+    (정규화된 SVG 는 같은 자산이면 점 순서까지 동일하므로 정렬 불필요).
+    """
+    import hashlib
+
+    norm = ";".join(f"{round(x, ndigits)},{round(y, ndigits)}" for (x, y) in points)
+    return hashlib.md5(norm.encode("utf-8")).hexdigest()[:8]
+
+
+def check_size_monotonicity(svg_paths, *,
+                            size_order=None,
+                            piece_index: int = 0,
+                            fail_on_duplicate: bool = True):
+    """여러 사이즈 SVG 의 조각 좌표를 비교해 '사이즈 단조성'을 점검한다.
+
+    이슈3 자산 결함(3XL=5XL 동일 도형) 같은 "초록불인데 치수만 틀린" 함정을 잡는
+    전용 가드. parse_svg(읽기 전용)로 각 SVG 의 조각을 읽어 다음 두 가지를 본다:
+
+      (A) 좌표 동일 검출 : 서로 다른 두 사이즈의 piece_index 조각 좌표 해시가 같으면
+          → 같은 자산을 복붙한 결함으로 본다(기본: 실패 신호).
+      (B) 높이 단조 검출 : size_order 순으로 piece_index 조각의 높이가 단조 증가해야
+          정상. 인접 사이즈에서 높이가 '동일'하거나 '감소'하면 경고(자산 의심).
+
+    매개변수
+      svg_paths        : {사이즈명: svg경로} dict  또는  [svg경로,...] 리스트.
+                         리스트면 파일명(확장자 제외)을 사이즈명으로 쓴다.
+      size_order       : 작은→큰 사이즈 이름 순서 리스트(예: ["5XS",...,"5XL"]).
+                         None 이면 단조(높이) 검사는 건너뛰고 좌표 동일 검사만 한다.
+      piece_index      : 비교 기준 조각 인덱스(parse_svg 높이 내림차순). 0=가장 큰 조각(앞판).
+      fail_on_duplicate: True 면 좌표 동일 발견 시 passed=False(출고 차단용).
+
+    반환(dict): {
+      "passed"        : bool — (A)좌표동일 없음 + (fail_on_duplicate 일 때) 통과 여부,
+      "checked"       : 검사한 사이즈 수,
+      "duplicates"    : [(sizeA, sizeB), ...] 좌표 100% 동일한 사이즈 쌍,
+      "non_monotonic" : [{"size","prev","height","prev_height","kind"}...] 단조 위반,
+      "hashes"        : {사이즈명: 조각해시} (디버그/리포트용),
+      "heights"       : {사이즈명: 조각높이},
+      "warnings"      : [사람이 읽을 한글 경고/안내],
+      "missing"       : [읽기 실패한 사이즈명],
+    }
+
+    parse_svg 는 pattern.py 의 것을 '여기서' 지연 import 한다(읽기 전용 호출 — 불변
+    제약 위반 아님). engine 코어 코드를 수정하지 않는다.
+    """
+    # 지연 import (모듈 최상단 import 를 피해 svg_normalize 의 '표준라이브러리만' 원칙 유지).
+    from .pattern import parse_svg
+
+    # ── 입력 정규화: dict / list 둘 다 받아 {사이즈명: 경로} 로 통일 ──
+    if isinstance(svg_paths, dict):
+        path_map = dict(svg_paths)
+    else:
+        path_map = {}
+        for p in svg_paths:
+            base = os.path.basename(p)
+            name = base[:-4] if base.lower().endswith(".svg") else base
+            path_map[name] = p
+
+    warnings: List[str] = []
+    missing: List[str] = []
+    hashes: dict = {}
+    heights: dict = {}
+
+    # ── 각 사이즈 SVG 를 parse_svg 로 읽어 piece_index 조각의 해시·높이를 모은다 ──
+    for size_name, path in path_map.items():
+        try:
+            polys = parse_svg(path)  # 높이 내림차순 정렬된 Polyline 리스트
+        except Exception as e:
+            missing.append(size_name)
+            warnings.append(f"🟡 [{size_name}] parse_svg 실패(가드 건너뜀): {e}")
+            continue
+        if not polys or piece_index >= len(polys):
+            missing.append(size_name)
+            warnings.append(
+                f"🟡 [{size_name}] 조각 {piece_index} 없음(조각수 {len(polys)}) — 가드 건너뜀.")
+            continue
+        poly = polys[piece_index]
+        hashes[size_name] = _piece_coord_hash(poly.points)
+        heights[size_name] = round(poly.height, 2)
+
+    # ── (A) 좌표 동일(=같은 자산 복붙) 검출: 서로 다른 사이즈인데 해시가 같으면 결함 ──
+    duplicates: List[Tuple[str, str]] = []
+    items = list(hashes.items())
+    for a in range(len(items)):
+        for b in range(a + 1, len(items)):
+            na, ha = items[a]
+            nb, hb = items[b]
+            if ha == hb:
+                duplicates.append((na, nb))
+                warnings.append(
+                    f"🔴 [{na}] 와(과) [{nb}] 의 조각{piece_index} 좌표가 100% 동일합니다 "
+                    f"(해시 {ha}). 같은 자산을 복붙한 결함 의심 — 사이즈가 다른데 도형이 "
+                    f"같으면 한쪽 사이즈로 오출고됩니다. 원본 .ai 재확보 후 재변환 필요.")
+
+    # ── (B) 높이 단조 증가 검출: size_order 가 주어졌을 때만 ──
+    non_monotonic: list = []
+    if size_order:
+        prev_name = None
+        prev_h = None
+        for sz in size_order:
+            if sz not in heights:
+                continue  # 비활성/누락 사이즈는 단조 검사에서 자연스럽게 건너뜀
+            h = heights[sz]
+            if prev_h is not None:
+                if h < prev_h - 1e-6:
+                    non_monotonic.append({
+                        "size": sz, "prev": prev_name,
+                        "height": h, "prev_height": prev_h, "kind": "감소"})
+                    warnings.append(
+                        f"🟡 [{sz}] 조각{piece_index} 높이({h})가 더 작은 사이즈 "
+                        f"[{prev_name}]({prev_h})보다 작습니다(단조 감소). 자산 순서 확인 필요.")
+                elif abs(h - prev_h) <= 1e-6:
+                    non_monotonic.append({
+                        "size": sz, "prev": prev_name,
+                        "height": h, "prev_height": prev_h, "kind": "동일"})
+                    warnings.append(
+                        f"🟡 [{sz}] 조각{piece_index} 높이({h})가 인접 사이즈 "
+                        f"[{prev_name}]와 동일합니다 — 사이즈 구분이 없습니다(자산 의심).")
+            prev_name = sz
+            prev_h = h
+
+    passed = True
+    if fail_on_duplicate and duplicates:
+        passed = False
+
+    return {
+        "passed": passed,
+        "checked": len(hashes),
+        "duplicates": duplicates,
+        "non_monotonic": non_monotonic,
+        "hashes": hashes,
+        "heights": heights,
+        "warnings": warnings,
+        "missing": missing,
     }

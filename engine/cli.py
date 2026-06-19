@@ -282,6 +282,8 @@ def cmd_normalize_svg(args) -> int:
 
     ok_count = 0
     fail_count = 0
+    # (이슈3) 단조성 가드용: 성공한 (사이즈명 → 출력경로) 모음. 배치 끝에서 한 번에 점검한다.
+    converted_map = {}
     for in_path, out_path, label in jobs:
         # ── 입력 존재 선검증(친절한 한글 안내). 1개 실패해도 나머지는 계속. ──
         if not os.path.exists(in_path):
@@ -295,10 +297,12 @@ def cmd_normalize_svg(args) -> int:
             fail_count += 1
             continue
 
-        # ── 변환 직후 parse_svg 로 재파싱해 조각수를 확인(2 기대). ──
+        # ── 변환 직후 parse_svg 로 재파싱해 조각수를 확인. ──
+        #    기대 조각수: U넥형(앞/뒤) 2개 또는 V넥 암홀X형(앞/뒤/넥밴드) 3개 둘 다 정상.
+        #    (이슈3) 밴드 보존 필터 적용으로 V넥은 3조각이 기대값이다.
         polys = pattern.parse_svg(out_path)
         n = len(polys)
-        mark = "✅" if n == 2 else "⚠️"
+        mark = "✅" if n in (2, 3) else "⚠️"
         print(f"  {mark} [{label}] 조각 {n}개 "
               f"(written={rep['pieces_written']} / dropped open={rep['dropped_open']} "
               f"small={rep['dropped_small']} dup={rep['dropped_dup']}) → {out_path}")
@@ -306,9 +310,43 @@ def cmd_normalize_svg(args) -> int:
             print(f"      {w}")
         if rep["has_curves"]:
             print("      🟡 곡선 명령 감지 — 직선 근사됨(형태 확인 필요).")
+        # 가드용으로 라벨(=사이즈명)→출력경로 기록(배치일 때 라벨이 사이즈명).
+        converted_map[label] = out_path
         ok_count += 1
 
     print(f"\n변환 완료: 성공 {ok_count} · 실패 {fail_count} (총 {len(jobs)})")
+
+    # ── (이슈3) 사이즈 단조성 가드: 2개 이상 변환했을 때만 의미가 있다. ──
+    #    왜: 3XL=5XL 처럼 "사이즈가 다른데 도형이 100% 동일한" 자산 결함은 조각수/viewBox/
+    #    OOB/정렬/verify 검증을 전부 통과한다. 여러 사이즈를 함께 비교해야만 잡힌다.
+    guard_fail = False
+    if len(converted_map) >= 2:
+        from .svg_normalize import check_size_monotonicity
+
+        # 배치 사용 시 --sizes 순서를 작은→큰 사이즈 순서로 그대로 쓴다(단조 높이 검사용).
+        order = None
+        if getattr(args, "sizes", None):
+            order = [s.strip() for s in args.sizes.split(",") if s.strip()]
+        guard = check_size_monotonicity(converted_map, size_order=order)
+        print("\n── 사이즈 단조성 가드 ──")
+        print(f"  점검 사이즈: {guard['checked']}개")
+        if guard["duplicates"]:
+            for a, b in guard["duplicates"]:
+                print(f"  🔴 좌표 100% 동일: {a} == {b} (같은 자산 의심 → 오출고 위험)")
+        if guard["non_monotonic"]:
+            for nm in guard["non_monotonic"]:
+                print(f"  🟡 높이 {nm['kind']}: {nm['size']}({nm['height']}) "
+                      f"vs {nm['prev']}({nm['prev_height']})")
+        for w in guard["warnings"]:
+            print(f"  {w}")
+        if guard["passed"] and not guard["duplicates"]:
+            print("  ✅ 단조성 가드 통과 — 사이즈별 도형이 모두 다릅니다.")
+        if not guard["passed"]:
+            guard_fail = True
+
+    if guard_fail:
+        # 자산 결함(좌표 동일)은 출고 차단 사유 → 비정상 종료 코드로 알린다.
+        return 1
     return 0 if fail_count == 0 else 1
 
 

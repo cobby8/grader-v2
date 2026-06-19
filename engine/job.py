@@ -596,7 +596,22 @@ def run_job(preset: str,
         raise FileNotFoundError(f"디자인 파일 없음: {design_pdf}")
 
     # 사용 가능한 사이즈 맵(이름 → 사이즈 정의). 주문 사이즈를 여기에 대조한다.
+    #   sizes 에는 '출고 가능한' 사이즈만 들어 있다(예: V넥 12개). 주문 사이즈가
+    #   여기 없으면 매칭 실패다 — 사이즈는 정확히 일치해야만 매칭되므로 '대체' 경로가 없다.
     size_map = {s["name"]: s for s in preset_dict["sizes"]}
+    # ── (이슈3) 비활성(결함) 사이즈는 preset 최상위 "disabled_sizes" 섹션에서 읽는다. ──
+    #   왜 sizes 가 아니라 별도 섹션인가:
+    #     grade.py 의 build_layouts 는 preset["sizes"] 전체를 순회하며 각 사이즈의
+    #     pattern_file(SVG)을 읽는다. 결함으로 봉인한 3XL 을 sizes 안에 남겨 두면(설령
+    #     disabled 표식이 있어도) build_layouts 는 그 표식을 모른 채 3XL.svg 를 읽으려다
+    #     FileNotFoundError 로 크래시한다(grade 회귀). build_layouts/grade 는 불변 제약이라
+    #     수정할 수 없으므로, 결함 사이즈를 sizes 에서 아예 빼고 disabled_sizes 로 옮긴다.
+    #     → build_layouts 는 3XL 을 순회하지 않아 grade 가 크래시하지 않는다.
+    #   삭제가 아니라 '이동'이라, 올바른 .ai 재확보 후 disabled_sizes 에서 빼고 sizes 에
+    #   다시 넣으면 즉시 복원된다(복원법은 scratchpad 참조).
+    #   {이름 → 사유} 형태로 보관해, 그 사이즈 주문이 오면 '왜' skip 됐는지 명확히 안내한다.
+    disabled_map = {d["name"]: d.get("reason", "사유 미기재")
+                    for d in preset_dict.get("disabled_sizes", [])}
 
     output_dir = os.path.join(out_dir, "output")
     preview_dir = os.path.join(out_dir, "preview")
@@ -607,6 +622,12 @@ def run_job(preset: str,
     warnings: list = []
     missing_sizes: set = set()
     used_filenames: set = set()  # 파일명 충돌 회피용
+
+    # (이슈3) 비활성 사이즈가 있으면 작업 시작 시 1회 안내(warnings 정의 이후라 안전).
+    if disabled_map:
+        for nm, reason in disabled_map.items():
+            warnings.append(
+                f"🟡 [사이즈 {nm}] 비활성(disabled) — 출고 차단됨. 사유: {reason}")
 
     # ── base 디자인 투명도 선(先)평탄화 (왜: 투명도가 남으면 EPS 변환 때 래스터화되고
     #    verify 의 '투명도 없음' 검사가 FAIL 난다 → 시작 시 한 번 벡터 평탄화해 모든
@@ -675,6 +696,19 @@ def run_job(preset: str,
         # ── 엣지: 사이즈 빈값 → skip ──
         if not size:
             skipped.append({"row": idx, "name": name, "reason": "사이즈 빈값"})
+            continue
+        # ── (이슈3) 비활성(결함) 사이즈 주문 → 크래시 없이 명확한 결함 사유로 skip ──
+        #    왜 별도 분기(일반 missing 과 구분): 그냥 "없는 사이즈"로 흘리면 사유가 모호하다.
+        #    disabled_sizes 에 든 사이즈는 '자산 결함으로 의도적 차단'이므로 결함 사유를
+        #    그대로 알려준다. 5XL 등 다른 사이즈로 '대체'되지 않음 — size 가 정확히 일치해야만
+        #    매칭되므로(size_map 에 3XL 자체가 없음) 대체 출고 경로가 원천적으로 없다.
+        if size in disabled_map:
+            reason = disabled_map[size]
+            skipped.append({"row": idx, "name": name,
+                            "reason": f"사이즈 '{size}' 비활성(자산 결함): {reason}"})
+            warnings.append(
+                f"🟡 [행{idx} {name or '(무명)'} {size}] 결함 사이즈 주문 → skip "
+                f"(5XL 등으로 대체 출고하지 않음, 결함 사유: {reason}).")
             continue
         # ── 엣지: preset 에 없는 사이즈(아직 패턴 미확보 등) → skip + missing 집계 ──
         if size not in size_map:
@@ -829,6 +863,9 @@ def run_job(preset: str,
         "skipped": skipped,
         "warnings": warnings,
         "missing_sizes": sorted(missing_sizes),
+        # (이슈3) 비활성 사이즈 목록(사유 포함) — 어떤 사이즈가 결함으로 차단됐는지 추적.
+        #   disabled_map 은 이미 {이름 → 사유} 형태(preset.disabled_sizes 섹션 출처)다.
+        "disabled_sizes": dict(disabled_map),
         # Phase C 배관 추적용: 정밀배치 경로 사용 여부 + 평탄화 결과 요약(있으면).
         "precise_placement": use_precise,
         "flatten": ({
