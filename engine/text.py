@@ -313,8 +313,15 @@ def _glyph_ink_bounds(glyphset, glyph_name: str):
     return bpen.bounds                       # (xMin, yMin, xMax, yMax) 폰트단위
 
 
-def place_number(text, font, cap_h_pt: float, center_x: float, center_y: float, color):
+def place_number(text, font, cap_h_pt: float, center_x: float, center_y: float, color,
+                 glyph_source=None):
     """번호('7','20' 등)를 '자릿수 높이=cap_h_pt' 로 (center_x, center_y) 잉크중심에 배치.
+
+    ── 이슈1(번호 글리프셋) 분기 ──
+      glyph_source 가 주어지면(디자이너가 .ai 에 직접 그린 번호 글리프셋 dict),
+      폰트 대신 그 글리프셋으로 번호를 그린다. 잉크중심 정렬(이슈2)은 동일하게 적용된다.
+      glyph_source 가 None(기본값)이면 기존처럼 font(HY헤드라인M) 아웃라인으로 폴백한다.
+      → 글리프셋이 없거나 깨지면 무조건 폰트 폴백이 보장된다(출고 안전).
 
     의뢰서 §4 + 이슈2(잉크 기준 중앙정렬):
       · 대표 자릿 글리프의 잉크 높이 inkH(폰트단위)로 scale s = cap_h_pt / inkH.
@@ -344,6 +351,15 @@ def place_number(text, font, cap_h_pt: float, center_x: float, center_y: float, 
     if cap_h_pt <= 0:
         warnings.append(f"🟡 번호 '{text}' 의 높이값이 잘못됐습니다(cap_height {cap_h_pt}). 건너뜁니다.")
         return "", warnings
+
+    # ── 이슈1: 글리프셋이 주어지면 디자이너 번호 도형으로 그린다(폰트 대신). ──
+    #    폰트 로드보다 먼저 분기한다. glyph_source 가 None 이면 그대로 아래 폰트 폴백으로 진행.
+    #    (모듈 지연 import: 글리프셋을 안 쓰는 경로/환경에 영향 주지 않기 위함.)
+    if glyph_source is not None:
+        from .number_glyphs import render_glyph_number_ops
+        return render_glyph_number_ops(
+            glyph_source, text, cap_h_pt=cap_h_pt,
+            center_x=center_x, center_y=center_y, color=color)
 
     # ── 폰트 로드 + 글자 측정(advance, 누락 글리프) ──
     glyphset, cmap, upm = _load_glyphset(font)

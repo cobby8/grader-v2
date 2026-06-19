@@ -442,6 +442,47 @@ def _has_precise_areas(preset: dict) -> bool:
                ("front_number_area", "back_number_area", "back_name_area"))
 
 
+# ── (이슈1) 번호 글리프셋 로드 캐시: 같은 JSON 을 선수마다 다시 읽지 않게 한 번만 읽는다. ──
+#    key = JSON 절대경로 → glyphset dict. preset 단위로 안 두고 경로 단위라 안전(읽기 전용).
+_GLYPH_CACHE: dict = {}
+
+
+def _load_glyph_source(preset: dict, glyph_source, warnings) -> Optional[dict]:
+    """area.glyph_source(파일명/경로)를 읽어 글리프셋 dict 로 돌려준다.
+
+    · glyph_source 가 없으면(None/빈값) None 반환 → place_number 가 폰트 폴백으로 그린다.
+    · 경로는 preset['_dir'](패턴 폴더) 기준 상대경로로 먼저 찾고, 없으면 절대/현재경로로 시도.
+    · 로드 실패(파일 없음/JSON 오류)는 치명적이지 않게 경고만 남기고 None 반환(폰트 폴백 보장).
+    """
+    if not glyph_source:
+        return None
+    # 패턴 폴더 기준 경로를 우선 사용(번호 글리프셋은 패턴 폴더에 함께 둔다).
+    candidates = []
+    base_dir = preset.get("_dir")
+    if base_dir:
+        candidates.append(os.path.join(base_dir, glyph_source))
+    candidates.append(glyph_source)  # 절대/현재경로 폴백
+
+    for path in candidates:
+        if os.path.exists(path):
+            key = os.path.abspath(path)
+            if key in _GLYPH_CACHE:
+                return _GLYPH_CACHE[key]
+            try:
+                from .number_glyphs import load_glyphset_json
+                gs = load_glyphset_json(path)
+                _GLYPH_CACHE[key] = gs
+                return gs
+            except Exception as e:
+                warnings.append(
+                    f"🟡 번호 글리프셋 '{glyph_source}' 로드 실패(폰트로 폴백): {e}")
+                return None
+    # 후보 경로 어디에도 없음 → 폰트 폴백(경고).
+    warnings.append(
+        f"🟡 번호 글리프셋 '{glyph_source}' 를 찾지 못해 폰트로 폴백합니다.")
+    return None
+
+
 def _build_precise_layout(preset: dict, size_def: dict, *,
                           number=None, name=None, warnings=None,
                           cutline_strokes=None) -> SizeLayout:
@@ -509,12 +550,16 @@ def _build_precise_layout(preset: dict, size_def: dict, *,
 
         # ── 디자인좌표 글자 ops 생성(Phase B 정밀 배치기). ──
         if kind == "number":
+            # ── 이슈1: area 에 glyph_source 가 있으면 디자이너 번호 글리프셋으로 그린다.
+            #    없거나 로드 실패면 glyph_set=None 으로 전달 → place_number 가 폰트 폴백. ──
+            glyph_set = _load_glyph_source(preset, area.get("glyph_source"), warnings)
             ops, warns = place_number(
                 str(value), font_path,
                 cap_h_pt=float(area.get("cap_height", 0)),
                 center_x=float(area["center"][0]),
                 center_y=float(area["center"][1]),
-                color=color)
+                color=color,
+                glyph_source=glyph_set)
         else:  # name
             ops, warns = place_name(
                 str(value), font_path,

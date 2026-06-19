@@ -58,14 +58,16 @@
     "center": [1389, 4184],
     "cap_height": 310,
     "color_cmyk": [0, 0, 0, 0],
-    "font": "data/fonts/HY헤드라인M.ttf"
+    "font": "data/fonts/HY헤드라인M.ttf",
+    "glyph_source": "number_glyphs.json"
   },
   "back_number_area": {
     "piece_id": "back",
     "center": [3217, 4342],
     "cap_height": 539,
     "color_cmyk": [0, 0, 0, 0],
-    "font": "data/fonts/HY헤드라인M.ttf"
+    "font": "data/fonts/HY헤드라인M.ttf",
+    "glyph_source": "number_glyphs.json"
   },
   "back_name_area": {
     "piece_id": "back",

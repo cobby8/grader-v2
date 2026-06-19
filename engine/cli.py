@@ -350,6 +350,54 @@ def cmd_normalize_svg(args) -> int:
     return 0 if fail_count == 0 else 1
 
 
+def cmd_number_glyphs(args) -> int:
+    """(이슈1) 소스 .ai ArtBox 안 번호 글리프셋(0~9)을 추출해 JSON 으로 저장.
+
+      python -m engine number-glyphs --src SRC.ai --out OUT.json
+                  [--artbox x0,y0,x1,y1] [--order 1234567890]
+
+    추출 후 글리프별 폭·cap_height·subpath 수를 출력해 사람이 검수한다.
+    """
+    from .number_glyphs import extract_number_glyphs, save_glyphset_json
+
+    # ── 입력 선검증(친절한 한글 안내). ──
+    if not os.path.exists(args.src):
+        print(f"소스 파일을 찾지 못했습니다: {args.src}", file=sys.stderr)
+        return 2
+
+    # ── artbox 파싱(미지정 시 모듈 기본값 사용). ──
+    artbox = [585, 4673, 3923, 5211]
+    if args.artbox:
+        try:
+            artbox = [float(x) for x in args.artbox.split(",")]
+            if len(artbox) != 4:
+                raise ValueError
+        except ValueError:
+            print("--artbox 는 'x0,y0,x1,y1' 4개 숫자여야 합니다.", file=sys.stderr)
+            return 2
+
+    # ── 핵심: 추출 → 저장. ──
+    try:
+        glyphset = extract_number_glyphs(args.src, artbox=artbox, order=args.order)
+    except Exception as e:
+        print(f"글리프 추출 중 문제가 발생했습니다: {e}", file=sys.stderr)
+        return 1
+
+    save_glyphset_json(glyphset, args.out)
+
+    glyphs = glyphset["glyphs"]
+    print(f"추출 글리프 {len(glyphs)}개 / 대표 cap_height ≈ {glyphset['cap_height']}pt")
+    print(f"순서(order): {glyphset['order']}  artbox={glyphset['artbox']}")
+    for ch in glyphset["order"]:
+        g = glyphs.get(ch)
+        if not g:
+            continue
+        print(f"  '{ch}': 폭 {g['width']}pt · cap_height {g['cap_height']}pt · "
+              f"subpath {len(g['subpaths'])}개")
+    print(f"JSON 저장: {args.out}")
+    return 0 if len(glyphs) == len(args.order) else 1
+
+
 def cmd_flatten(args) -> int:
     """디자인 PDF 의 투명도를 벡터 상태로 평탄화한다(EPS 벡터 유지 선결 작업)."""
     bg = None
@@ -516,6 +564,16 @@ def main(argv=None) -> int:
     np_.add_argument("--sizes", default=None,
                      help="(배치) 변환할 사이즈 콤마 구분(예: 5XS,4XS,...,5XL)")
     np_.set_defaults(func=cmd_normalize_svg)
+
+    ngp = sub.add_parser("number-glyphs",
+                         help="(이슈1) 소스 .ai ArtBox 의 번호 글리프셋(0~9) 추출→JSON")
+    ngp.add_argument("--src", required=True, help="번호 견본이 그려진 소스(.ai/.pdf)")
+    ngp.add_argument("--out", required=True, help="글리프셋 JSON 저장 경로")
+    ngp.add_argument("--artbox", default=None,
+                     help="(선택) 추출 영역 'x0,y0,x1,y1'. 미지정 시 기본 585,4673,3923,5211")
+    ngp.add_argument("--order", default="1234567890",
+                     help="(선택) x순 정렬 시 대응 문자열(기본 1234567890)")
+    ngp.set_defaults(func=cmd_number_glyphs)
 
     fp = sub.add_parser("flatten", help="디자인 투명도 벡터 평탄화(EPS 벡터 유지)")
     fp.add_argument("--design", required=True, help="평탄화할 디자인 파일(.ai/.pdf)")
