@@ -65,6 +65,12 @@
     "color_cmyk": [0, 0, 0, 0],
     "font": "data/fonts/HY헤드라인M.ttf"
   },
+  "cutline": {
+    "color_cmyk": [0, 0.96, 0.95, 0],
+    "match_tol": 0.05,
+    "expected_strokes": 3,
+    "device_k": [0, 0.96, 0.95, 0]
+  },
   "shrink": {
     "x": 1.0,
     "y": 1.0

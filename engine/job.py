@@ -26,6 +26,9 @@ import tempfile
 from dataclasses import asdict
 from typing import List, Optional
 
+import pikepdf
+from pikepdf import parse_content_stream
+
 from .compose import Piece, SizeLayout, compose
 from .flatten import flatten_transparency  # 디자인 투명도 벡터 평탄화(EPS 벡터 유지·verify PASS)
 # grade.py 는 무수정(불변 제약). 공개 build_layouts/load_preset 과 함께, 폰트경로 해석
@@ -158,6 +161,273 @@ def _wrap_design_ops(transform, ops: str) -> str:
     return "q\n" + cm_matrix(a, b, c, d, e, f) + "\n" + ops + "\nQ"
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# 이슈4 — 빨간 재단선(stroke) + 너치 보존
+#
+#   왜 필요한가(공장 관점):
+#     인쇄·재단 공장은 디자인의 '빨간 재단선'(CMYK 0,0.96,0.95,0 류)과 그 위 너치(재단
+#     맞춤 표식)를 보고 천을 자른다. 그런데 compose 는 각 조각을 그 조각 윤곽(clip)으로
+#     잘라 디자인을 얹는다 → 재단선/너치는 보통 '조각 경계 밖'이라 클립에 잘려 사라진다.
+#     그래서 재단선만 따로 추출해 클립 '밖'(extra_ops)에 다시 그려 살려 둔다.
+#
+#   접근(소스 확인 결과 반영):
+#     디자인 PDF(평탄화본)를 1회 훑어 '빨간 stroke 경로'를 캡처한다. 캡처는 그 시점의
+#     CTM(좌표변환)을 적용해 '디자인 절대좌표'로 평탄화한 ops 문자열로 만든다(나중에
+#     조각 transform 으로 다시 감싸 시트좌표로 옮기기 위함 — 글자 주입과 같은 경로).
+#     ⚠️ 현재 V넥 템플릿은 재단선 레이어(MC1/MC2/MC3)가 PDF 상 '비어' 있어 추출 stroke 가
+#        0개일 수 있다. 이때는 경고만 남기고(0개 보존=정상), 재단선이 살아있는 소스가
+#        들어오면 동일 코드가 자동으로 보존한다(색·좌표·허용오차는 전부 preset/소스에서).
+# ════════════════════════════════════════════════════════════════════════════
+
+
+def _mat_mul(m1, m2):
+    """PDF 행렬 곱(flatten._mat_mul 과 동일): cm 은 현재 CTM 왼쪽에 곱해진다(new = m1 × m2)."""
+    a1, b1, c1, d1, e1, f1 = m1
+    a2, b2, c2, d2, e2, f2 = m2
+    return (
+        a1 * a2 + b1 * c2,
+        a1 * b2 + b1 * d2,
+        c1 * a2 + d1 * c2,
+        c1 * b2 + d1 * d2,
+        e1 * a2 + f1 * c2 + e2,
+        e1 * b2 + f1 * d2 + f2,
+    )
+
+
+def _apply(m, x, y):
+    """점 (x,y) 에 행렬 m 을 적용해 변환된 (x',y') 반환."""
+    a, b, c, d, e, f = m
+    return (a * x + c * y + e, b * x + d * y + f)
+
+
+def _to_nums(operands):
+    """피연산자들을 float 리스트로. 숫자가 아니면 None(색공간 이름 등)."""
+    out = []
+    for o in operands:
+        try:
+            out.append(float(o))
+        except Exception:
+            return None
+    return out
+
+
+def _color_matches(color, target, tol) -> bool:
+    """color(4채널)가 target(4채널)과 채널별 허용오차 tol 이내로 일치하면 True."""
+    if color is None or len(color) != 4:
+        return False
+    return all(abs(c - t) <= tol for c, t in zip(color, target))
+
+
+def _extract_red_strokes(design_pdf: str, red_cmyk, tol: float,
+                         page_index: int = 0):
+    """디자인 PDF 를 1회 훑어 '빨간 stroke 경로'를 디자인 절대좌표 ops 로 캡처한다.
+
+    반환: [ {"ops": <str>, "bbox": (x0,y0,x1,y1)}, ... ]  — stroke 1개당 1개 dict.
+      ops  : 그 stroke 한 개를 디자인좌표에서 다시 그리는 PDF 연산자 문자열.
+             (m/l/c/v/y/h 경로 + device K 색 재지정 + w 선폭 + S 로 stroke)
+      bbox : 그 stroke 의 디자인 절대좌표 경계상자(조각 매핑에 사용).
+
+    동작:
+      · q/Q/cm 으로 CTM 을 추적해 모든 점을 '디자인 절대좌표'로 환산한다(평탄화).
+      · K(또는 4값 SCN)로 stroke 색을 추적하고, 그 색이 red_cmyk 와 tol 이내면
+        그 경로를 빨간 재단선으로 보고 캡처한다(stroke 페인트 연산자 S/s/B/b 등에서).
+      · 색은 출력에서 device K(`0 0.96 0.95 0 K`)로 '재지정'해 무손실로 보존한다.
+
+    ⚠️ stroke 가 없으면 빈 리스트를 돌려준다(현재 빈-레이어 템플릿의 정상 결과).
+    """
+    target = [float(v) for v in red_cmyk]
+
+    pdf = pikepdf.open(design_pdf)
+    try:
+        page = pdf.pages[page_index]
+
+        ctm = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)  # 현재 변환행렬(디자인 좌표계로의 누적)
+        ctm_stack = []
+        stroke_color = None   # 현재 stroke 색(K 또는 SCN 4값)
+        line_width = 1.0      # 현재 선폭(w). CTM 스케일을 곱해 디자인 절대 선폭으로.
+        lw_stack = []
+        # 현재 경로의 '디자인 절대좌표' 세그먼트들(연산자, [환산된 점들]) 누적.
+        path_segs = []        # [(op_char, [(x,y), ...]), ...]
+
+        strokes = []
+
+        def _emit(op_char, *pts):
+            """원본 점들을 CTM 으로 디자인 절대좌표로 환산해 경로 세그먼트에 누적."""
+            mapped = [_apply(ctm, px, py) for (px, py) in pts]
+            path_segs.append((op_char, mapped))
+
+        def _capture():
+            """누적된 경로가 빨간 stroke 면 디자인좌표 ops + bbox 로 캡처한다."""
+            if not path_segs:
+                return
+            if not _color_matches(stroke_color, target, tol):
+                return
+            # 경로의 모든 점으로 ops 문자열과 bbox 를 만든다.
+            xs, ys, lines = [], [], []
+            for op_char, mapped in path_segs:
+                if op_char == "h":
+                    lines.append("h")
+                    continue
+                # m/l = 1점, c = 3점, v/y = 2점. 점들을 'x y' 나열 후 op 붙임.
+                coords = " ".join(f"{x:.4f} {y:.4f}" for (x, y) in mapped)
+                lines.append(f"{coords} {op_char}")
+                for (x, y) in mapped:
+                    xs.append(x); ys.append(y)
+            if not xs:
+                return
+            # CTM 의 평균 스케일로 선폭을 디자인 절대값으로 환산(0 이면 hairline 기본 1pt).
+            a, b, c, d, _, _ = ctm
+            sx = (a * a + b * b) ** 0.5
+            sy = (c * c + d * d) ** 0.5
+            scale = (sx + sy) / 2.0 or 1.0
+            w_abs = (line_width or 0.0) * scale
+            if w_abs <= 0:
+                w_abs = 1.0
+            # device K 로 색 재지정(무손실) + 선폭 + 경로 + S(stroke). q…Q 로 상태 격리.
+            kr, kg, kb, kk = target
+            body = (
+                "q\n"
+                f"{kr:.4f} {kg:.4f} {kb:.4f} {kk:.4f} K\n"
+                f"{w_abs:.4f} w\n"
+                + "\n".join(lines) + "\n"
+                "S\n"
+                "Q"
+            )
+            strokes.append({"ops": body,
+                            "bbox": (min(xs), min(ys), max(xs), max(ys))})
+
+        for operands, op in parse_content_stream(page):
+            o = str(op)
+            n = _to_nums(operands)
+            if o == "q":
+                ctm_stack.append(ctm); lw_stack.append(line_width)
+            elif o == "Q":
+                ctm = ctm_stack.pop() if ctm_stack else ctm
+                line_width = lw_stack.pop() if lw_stack else line_width
+            elif o == "cm" and n and len(n) >= 6:
+                ctm = _mat_mul(tuple(n[:6]), ctm)
+            elif o == "w" and n and len(n) >= 1:
+                line_width = n[0]
+            elif o == "K" and n and len(n) == 4:
+                stroke_color = tuple(n)            # device CMYK stroke 색
+            elif o == "SCN" and n and len(n) == 4:
+                stroke_color = tuple(n)            # 색공간 기반 4값 stroke 색
+            # ── 경로 구성 연산자: 점을 CTM 환산해 누적 ──
+            elif o == "m" and n and len(n) >= 2:
+                _emit("m", (n[0], n[1]))
+            elif o == "l" and n and len(n) >= 2:
+                _emit("l", (n[0], n[1]))
+            elif o == "c" and n and len(n) >= 6:
+                _emit("c", (n[0], n[1]), (n[2], n[3]), (n[4], n[5]))
+            elif o == "v" and n and len(n) >= 4:
+                _emit("v", (n[0], n[1]), (n[2], n[3]))
+            elif o == "y" and n and len(n) >= 4:
+                _emit("y", (n[0], n[1]), (n[2], n[3]))
+            elif o == "re" and n and len(n) >= 4:
+                x, y, w, h = n[:4]
+                # re(사각형) → m/l/h 로 풀어서 누적(stroke 가능 경로로).
+                _emit("m", (x, y)); _emit("l", (x + w, y))
+                _emit("l", (x + w, y + h)); _emit("l", (x, y + h))
+                path_segs.append(("h", []))
+            elif o == "h":
+                path_segs.append(("h", []))
+            # ── 페인트 연산자: stroke 면 캡처, 어느 쪽이든 현재 경로 종료 ──
+            elif o in ("S", "s", "B", "B*", "b", "b*"):
+                _capture()
+                path_segs = []
+            elif o in ("f", "F", "f*", "n", "W", "W*"):
+                # fill/clip/no-op 으로 끝나는 경로는 재단선 아님 → 버린다.
+                path_segs = []
+        return strokes
+    finally:
+        pdf.close()
+
+
+def _count_red_strokes_in_output(pdf_path: str, red_cmyk, tol: float,
+                                 page_index: int = 0) -> int:
+    """출력 PDF 의 '페이지 콘텐츠'에서 빨간(허용오차 내) stroke 페인트 수를 센다.
+
+    재단선은 compose 가 extra_ops 로 페이지 콘텐츠에 직접 그린다(디자인 Form 안이 아님).
+    그래서 페이지 content 스트림만 훑어 K(빨강) 상태에서의 S/s/B/b 횟수를 센다.
+    '재단선 보존' 체크(출력 stroke 수 ≥ 매핑 기대 수)에 쓴다.
+    """
+    target = [float(v) for v in red_cmyk]
+    cnt = 0
+    pdf = pikepdf.open(pdf_path)
+    try:
+        page = pdf.pages[page_index]
+        stroke_color = None
+        color_stack = []
+        for operands, op in parse_content_stream(page):
+            o = str(op)
+            n = _to_nums(operands)
+            if o == "q":
+                color_stack.append(stroke_color)
+            elif o == "Q":
+                stroke_color = color_stack.pop() if color_stack else stroke_color
+            elif o in ("K", "SCN") and n and len(n) == 4:
+                stroke_color = tuple(n)
+            elif o in ("S", "s", "B", "B*", "b", "b*"):
+                if _color_matches(stroke_color, target, tol):
+                    cnt += 1
+        return cnt
+    finally:
+        pdf.close()
+
+
+def _overlap_area(b1, b2) -> float:
+    """두 bbox(x0,y0,x1,y1)의 겹침 면적(겹치지 않으면 0)."""
+    ix0 = max(b1[0], b2[0]); iy0 = max(b1[1], b2[1])
+    ix1 = min(b1[2], b2[2]); iy1 = min(b1[3], b2[3])
+    if ix1 <= ix0 or iy1 <= iy0:
+        return 0.0
+    return (ix1 - ix0) * (iy1 - iy0)
+
+
+def _point_in(region, x, y) -> bool:
+    """점 (x,y)가 region(x0,y0,x1,y1) 안에 있으면 True(경계 포함)."""
+    return region[0] <= x <= region[2] and region[1] <= y <= region[3]
+
+
+def _map_strokes_to_pieces(strokes, pieces_def, warnings):
+    """각 빨간 stroke 를 design_region_pt 와 겹침면적이 최대인 조각에 매핑한다.
+
+    반환: {piece_index: [stroke, ...]}  — 조각 인덱스별 매핑된 stroke 목록.
+    겹치는 조각이 없는 stroke(예: 이슈3 미추가 밴드 영역)는 skip + 경고.
+
+    ⚠️ 재단선/너치는 '가는 선'이라 bbox 가 1차원(폭 또는 높이=0)일 수 있다. 이때
+       면적 겹침은 0 이 되어 매핑에 실패한다. 그래서 면적 매핑이 0 이면 'stroke bbox
+       중심점이 어느 region 안에 드는지'로 보조 매핑한다(선·점 너치도 매핑되게).
+    """
+    mapping = {}
+    for st in strokes:
+        best_idx, best_area = None, 0.0
+        for i, pdef in enumerate(pieces_def):
+            region = pdef.get("design_region_pt")
+            if not region:
+                continue
+            area = _overlap_area(st["bbox"], tuple(region))
+            if area > best_area:
+                best_area, best_idx = area, i
+        # 보조: 면적 겹침이 없으면(가는 선·점) bbox 중심점 포함 여부로 매핑.
+        if best_idx is None:
+            bx0, by0, bx1, by1 = st["bbox"]
+            cx, cy = (bx0 + bx1) / 2.0, (by0 + by1) / 2.0
+            for i, pdef in enumerate(pieces_def):
+                region = pdef.get("design_region_pt")
+                if region and _point_in(tuple(region), cx, cy):
+                    best_idx = i
+                    break
+        if best_idx is None:
+            # 겹치는 조각 없음 → 밴드[0] 등 아직 preset 에 없는 부위. 보류(이슈3 후 연결).
+            warnings.append(
+                "🟡 재단선 1개가 어느 조각에도 겹치지 않아 보류합니다"
+                f"(bbox={tuple(round(v,1) for v in st['bbox'])}) — 이슈3 밴드 조각 추가 후 연결.")
+            continue
+        mapping.setdefault(best_idx, []).append(st)
+    return mapping
+
+
 def _find_piece_index(pieces_def, piece_id):
     """preset['pieces'] 에서 piece_id 에 해당하는 인덱스를 찾는다(없으면 None)."""
     for i, pdef in enumerate(pieces_def):
@@ -173,7 +443,8 @@ def _has_precise_areas(preset: dict) -> bool:
 
 
 def _build_precise_layout(preset: dict, size_def: dict, *,
-                          number=None, name=None, warnings=None) -> SizeLayout:
+                          number=None, name=None, warnings=None,
+                          cutline_strokes=None) -> SizeLayout:
     """새 area(front/back_number_area·back_name_area)로 정밀배치한 SizeLayout 1개 생성.
 
     동작은 build_layouts(방식 A)와 같지만, 글자 주입만 place_number/place_name 으로
@@ -184,6 +455,9 @@ def _build_precise_layout(preset: dict, size_def: dict, *,
       2) 각 조각의 방식 A transform 계산(_job_piece_transform, grade 와 동일 공식).
       3) front_number_area → front 조각, back_number_area/back_name_area → back 조각의
          place_* 글자 ops 를 '그 조각 transform' 으로 감싸 extra_ops 에 누적.
+      4) (이슈4) cutline_strokes(빨간 재단선, 디자인좌표 ops)를 겹침 최대 조각에 매핑해
+         그 조각 transform 으로 감싸 extra_ops 에 누적(글자와 동일 경로, 클립 '밖'이라
+         조각 경계를 넘는 너치까지 안 잘리고 보존됨).
     """
     if warnings is None:
         warnings = []
@@ -262,6 +536,17 @@ def _build_precise_layout(preset: dict, size_def: dict, *,
     _inject("front_number_area", "number", number)
     _inject("back_number_area", "number", number)
     _inject("back_name_area", "name", name)
+
+    # ── 4) (이슈4) 빨간 재단선 주입: 디자인좌표 stroke ops 를 매핑 조각 transform 으로
+    #       감싸 extra_ops 에 누적한다. 글자와 '같은 경로'라 디자인 위 정위치에 박힌다.
+    #       extra_ops 는 q…Do…Q 의 '밖'(클립 외부)이라 너치가 조각 경계를 넘어도 안 잘린다.
+    if cutline_strokes:
+        cut_map = _map_strokes_to_pieces(cutline_strokes, pieces_def, warnings)
+        for pidx, sts in cut_map.items():
+            tp = layout_pieces[pidx]
+            for st in sts:
+                wrapped = _wrap_design_ops(piece_transforms[pidx], st["ops"])
+                tp.extra_ops = (tp.extra_ops + "\n" + wrapped) if tp.extra_ops else wrapped
 
     # ── 페이지 크기 = 모든 조각 윤곽 전체 bbox + 여백 50pt(build_layouts 와 동일). ──
     all_x = [x for p in pieces_def for (x, _) in polys[p["svg_index"]].points]
@@ -346,6 +631,38 @@ def run_job(preset: str,
     # 정밀배치 경로 사용 여부(새 area 가 하나라도 있으면 place_*/감싸기 경로). 없으면 폴백.
     use_precise = _has_precise_areas(preset_dict)
 
+    # ── (이슈4) 빨간 재단선 1회 추출 (preset 에 cutline 키가 있을 때만). ──
+    #    왜 한 번만: 디자인은 모든 선수가 공유하므로 stroke 추출은 1회로 충분(성능).
+    #    cutline 키가 없으면(U넥 등) 추출 자체를 건너뛰어 '기존 동작' 그대로 유지한다.
+    cutline_strokes = []          # 매핑 가능한 디자인좌표 stroke 목록
+    cutline_cfg = preset_dict.get("cutline")
+    cutline_mapped_expected = 0   # '재단선 보존' 체크용 기대 수(조각에 매핑된 stroke 수)
+    if cutline_cfg:
+        red = cutline_cfg.get("color_cmyk", [0, 0.96, 0.95, 0])
+        tol = float(cutline_cfg.get("match_tol", 0.05))
+        try:
+            cutline_strokes = _extract_red_strokes(base_design, red, tol)
+        except Exception as e:
+            warnings.append(f"[재단선] 추출 실패(재단선 없이 진행): {e}")
+            cutline_strokes = []
+        # 매핑 기대 수 미리 계산(경고는 레이아웃 생성 시 1회만 나오게 별도 리스트 사용).
+        _pre_warn: list = []
+        cutline_mapped_expected = sum(
+            len(v) for v in _map_strokes_to_pieces(
+                cutline_strokes, preset_dict["pieces"], _pre_warn).values())
+        n_found = len(cutline_strokes)
+        n_exp = int(cutline_cfg.get("expected_strokes", 0))
+        if n_found == 0:
+            warnings.append(
+                "🟡 [재단선] 디자인에서 빨간 stroke 를 찾지 못했습니다(추출 0개). "
+                f"기대 {n_exp}개 — 현재 템플릿은 재단선 레이어가 PDF 상 비어 있을 수 있습니다. "
+                "재단선이 보이는 소스로 재내보내면 자동 보존됩니다.")
+        elif n_found < n_exp:
+            warnings.append(
+                f"🟡 [재단선] 추출 {n_found}개 < 기대 {n_exp}개 — 일부 재단선이 누락됐을 수 있습니다.")
+        else:
+            warnings.append(f"[재단선] 추출 {n_found}개 (매핑 {cutline_mapped_expected}개).")
+
     # single 모드에서 누적할 (layout, meta) 목록.
     single_layouts: list = []
     single_meta: list = []
@@ -375,7 +692,8 @@ def run_job(preset: str,
                 # 그 조각 transform 으로 감싸 디자인 위 정위치(시트좌표)에 박는다.
                 layout = _build_precise_layout(
                     preset_dict, size_map[size],
-                    number=number, name=name, warnings=row_warns)
+                    number=number, name=name, warnings=row_warns,
+                    cutline_strokes=cutline_strokes)
             else:
                 # 폴백: 기존 rel_bbox(number_area/name_area) 기반 build_layouts(방식 A).
                 layouts = build_layouts(sized, base_design,
@@ -424,6 +742,20 @@ def run_job(preset: str,
         checks = verify_output(pdf_path, base_design, placements)
         verify_pass = all_passed(checks)
 
+        # ── (이슈4) '재단선 보존' 체크: 출력의 빨간 stroke 수 ≥ 매핑 기대 수. ──
+        #    verify_pass(불변 검사) 에는 섞지 않는다 — 재단선은 별도 표식 체크로 보고만 한다.
+        check_dicts = _checks_to_dicts(checks)
+        if cutline_cfg:
+            red = cutline_cfg.get("color_cmyk", [0, 0.96, 0.95, 0])
+            tol = float(cutline_cfg.get("match_tol", 0.05))
+            n_out = _count_red_strokes_in_output(pdf_path, red, tol)
+            ok = n_out >= cutline_mapped_expected
+            check_dicts.append({
+                "name": "재단선 보존",
+                "ok": ok,
+                "detail": f"출력 빨간 stroke {n_out}개 (매핑 기대 {cutline_mapped_expected}개)",
+            })
+
         preview_rel = None
         if make_preview and _preview is not None:
             try:
@@ -438,7 +770,7 @@ def run_job(preset: str,
             "size": size, "name": name, "number": number,
             "pdf": os.path.relpath(pdf_path, out_dir).replace("\\", "/"),
             "preview": preview_rel,
-            "checks": _checks_to_dicts(checks),
+            "checks": check_dicts,
             "verify_pass": verify_pass,
         })
 
@@ -449,6 +781,21 @@ def run_job(preset: str,
         placements = _atomic_save_compose(base_design, single_layouts, pdf_path)
         checks = verify_output(pdf_path, base_design, placements)
         verify_pass = all_passed(checks)
+
+        # ── (이슈4) '재단선 보존' 체크(single): 전 페이지 합산 stroke ≥ 기대×페이지수. ──
+        check_dicts = _checks_to_dicts(checks)
+        if cutline_cfg:
+            red = cutline_cfg.get("color_cmyk", [0, 0.96, 0.95, 0])
+            tol = float(cutline_cfg.get("match_tol", 0.05))
+            n_pages = len(single_layouts)
+            n_out = sum(_count_red_strokes_in_output(pdf_path, red, tol, page_index=pi)
+                        for pi in range(n_pages))
+            exp = cutline_mapped_expected * n_pages
+            check_dicts.append({
+                "name": "재단선 보존",
+                "ok": n_out >= exp,
+                "detail": f"출력 빨간 stroke {n_out}개 (매핑 기대 {exp}개 = {cutline_mapped_expected}×{n_pages}p)",
+            })
 
         previews_rel = []
         if make_preview and _preview is not None:
@@ -465,7 +812,7 @@ def run_job(preset: str,
             "pdf": os.path.relpath(pdf_path, out_dir).replace("\\", "/"),
             "preview": previews_rel,
             "players": [{"page": i + 1, **single_meta[i]} for i in range(len(single_meta))],
-            "checks": _checks_to_dicts(checks),
+            "checks": check_dicts,
             "verify_pass": verify_pass,
         })
 
@@ -491,6 +838,12 @@ def run_job(preset: str,
             "alpha_gstates_fixed": flatten_info["alpha_gstates_fixed"],
             "transparency_left": flatten_info["transparency_left"],
         } if flatten_info else None),
+        # 이슈4 추적용: 재단선 추출/매핑 요약(cutline 키 없으면 None).
+        "cutline": ({
+            "found": len(cutline_strokes),
+            "expected": int(cutline_cfg.get("expected_strokes", 0)),
+            "mapped": cutline_mapped_expected,
+        } if cutline_cfg else None),
     }
     result = {"outputs": outputs, "summary": summary}
 
