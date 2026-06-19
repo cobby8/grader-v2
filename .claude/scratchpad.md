@@ -290,6 +290,48 @@ run_job(preset, design_pdf, order_rows, out_dir, font_path, split="per_player") 
 
 ## 구현 기록 (developer)
 
+### Phase E — STIZ 신양식③ 주문서 파서 + 연세대 V넥 38건 선수별 PDF 생성  [2026-06-19] ✅**완료**
+
+📝 구현한 기능: STIZ '작성하기' 신양식③(순번|이니셜|배번|사이즈(상의/하의)|비고 헤더) 파서를 order.py(응용계층)에만 추가하고, 그 주문서로 V넥 양면 38건 선수별 PDF를 job으로 생성·전수 검증. engine 코어 전부 무수정.
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| engine/order.py | `_norm_header` nbsp(\xa0) 제거 보강 + `_parse_form_stiz` 신양식③ 파서 추가 + 헤더키워드(_HEADER_SEQ/_HEADER_NOTE)·_QTY_NUM_PATTERN 추가 + parse_order 자동판별에 ①→③→② 순 끼워넣기 | 수정(+114/-4) |
+
+🔧 신양식③ 파서 핵심:
+- 헤더 탐색: 한 행에 '순번'+'이니셜'+'사이즈'가 모두 있어야 ③로 식별(양식①은 '순번' 컬럼 없어 충돌 없음).
+- 컬럼을 키워드로 동적 매핑(순번/이니셜=이름/배번/사이즈/비고). 이름=B열, 배번=C열(양식①과 위치 다름).
+- 부제행("상의/하의") 1행 skip → 상의 사이즈(col_size) 사용.
+- 비고 "4장"→4 추출(_QTY_NUM_PATTERN). 없으면 qty="1".
+- 핵심 결측행(이름·배번·사이즈 모두 빈 행=순번만 미리 적힌 39~100행) skip.
+- `_norm_header`: \xa0(nbsp)도 공백처럼 제거(신양식 헤더 '\xa0이니셜','순\xa0\xa0 번' 매칭 위함). 양식①/② 헤더엔 nbsp 없어 무손상.
+
+📊 파싱 결과(검증 PASS): 260213 연세대 추가주문서 → **유효 38행 / 11명** (이해솔1·최영상2·이주영5·김승우6·이채형7·이병엽9·홍상민10·김상현12·박준성13·김윤서22·장혁준11), 사이즈 XS·S·M·L·XL·2XL·3XL, qty "1"~"6" 정상 추출. warnings 0.
+
+📦 job summary(per_player): **total_players 38 / produced 38 / verify_pass 38 / verify_fail 0 / skipped [] / missing_sizes [] / warnings [] / precise_placement True**. 작업폴더 data/jobs/260619_연세대V넥/ (output 38 PDF + preview 38 PNG + job.json).
+
+🖼️ 미리보기 육안확인(필수, 6건 PASS): XS 김승우6·M 이해솔1·L 이채형7·XL 김윤서22·2XL 이주영5·3XL 김윤서22 — 전부 **앞판(YONSEI+번호)·뒤판(이름+번호) 둘 다 캔버스 안 정위치, 앞판 소실 없음**(Phase D 되돌림 교훈 준수). 모든 page rect 가로(w>h). 흰 글자 정렬 정상.
+
+🔒 금지연산자 전수 0(대표 6건): Do=2(앞/뒤만)·rg/RG=0·scn=0(별색없음)·gs=0(투명도없음)·inline BI=0. k(CMYK fill)=3=앞번호+뒤번호+이름(글자 k fill만). 디자인 device CMYK 무손실(verify PASS).
+
+🤝 cowork 시각검증용 PDF(절대경로):
+- XL: `C:\0. Programing\grader-v2\data\jobs\260619_연세대V넥\output\XL_22_김윤서.pdf` (§4 비교용)
+- 비-XL: `C:\0. Programing\grader-v2\data\jobs\260619_연세대V넥\output\2XL_05_이주영.pdf`
+
+✅ 회귀: selftest PASS / 양식①(순번 없음·이름 A열) 무손상(stiz파서 0행 반환=충돌없음) / 기존 실주문서 3개(126·32·39행) 정상 파싱.
+
+🧩 불변 제약 준수(§6): git diff = **engine/order.py 1파일만**(+114/-4). engine 공개 API·job·svg_normalize·grade·build_layouts·compose·verify 변경 0줄. data/jobs/는 .gitignore(출력 미커밋). order.py만 커밋 대상.
+
+💡 tester 참고:
+- 파싱 재현: `python -c "from engine.order import parse_order; w=[]; print(len(parse_order(r'C:/Users/user/Desktop/새 폴더/260213_연세대학교 레플리카_농구유니폼_추가주문서.xlsx', w)), w)"` → (38, [])
+- job 재현: 상단 CLI 한 줄(--split per_player). 정상이면 produced 38/verify_pass 38.
+- 주의 입력: 신양식 헤더 nbsp(\xa0)·"순번만 적힌 빈 행"·비고 "N장" → 전부 처리됨. 양식①/② 무손상 확인 필수.
+
+⚠️ reviewer 참고:
+- `_parse_form_stiz` 헤더 식별 조건(순번+이니셜+사이즈 동시)이 양식①과 충돌 안 하는지(①은 순번 없음).
+- `_norm_header` nbsp 보강이 양식①/② 헤더 매칭에 영향 없는지(nbsp 미포함이라 무손상).
+- 자동판별 순서 ①→③→② — ①이 0행이어야 ③ 진입. 신양식은 ①에서 헤더('이니셜' 있으나 컬럼 배치 달라) 부분 매칭 가능성? → 실측상 ①은 0행(데이터 시작행 판정에서 막힘), ③에서 38행. 확인 권장.
+
 ### Phase D 되돌림1 — 방식(A) 실행: 원본 .ai 13개 동일출처 재변환(좌표계 오염 해소)  [2026-06-19] ✅**완료**
 
 📝 구현한 기능: tester 수정요청(비-XL 12개 SVG 좌표계 오염 → 앞판 소실)을 **승인된 방식(A)** 로 해소. `.ai → path SVG` 추출을 **별도 보조 스크립트**(scripts/ai_to_path_svg.py)로 신설하고, 그 뒤 **기존 normalize-svg CLI 그대로** 사용해 원본 .ai 13개(XL 포함 전부)를 **동일 출처·동일 viewBox(가로 4478×3401)** 로 재변환·덮어쓰기. engine 공개 API·cli·svg_normalize 코어 **전부 무수정**(scripts/ 신규 + 데이터 재생성만).
@@ -506,6 +548,26 @@ run_job(preset, design_pdf, order_rows, out_dir, font_path, split="per_player") 
 
 ## 테스트 결과 (tester)
 
+### Phase E 독립 검증 [2026-06-19] — ✅ 종합 PASS (7/7) → **완료기준 §7 전 항목 달성**
+
+| 검증 항목 | 결과 | 비고 |
+|-----------|------|------|
+| 1) selftest 회귀 | ✅ 통과 | 6사이즈 24배치 9개 PASS, inkcov 편차 0.000000, 종합 PASS. order.py 변경이 코어/job/grade 영향 0(git status: order.py 1파일만 M) |
+| 2) 신양식③ 파싱 | ✅ 통과 | **유효 38행/11명** 전수 일치(이해솔1·최영상2·이주영5·김승우6·이채형7·이병엽9·홍상민10·김상현12·박준성13·김윤서22·장혁준11). 사이즈 XS·S·M·L·XL·2XL·3XL, qty "N장"→숫자 정확(이주영 XL=6장 등). nbsp 헤더 인식·warnings 0 |
+| 3) ★기존 양식 회귀★ | ✅ 통과 | 실주문서 3개(호바스 32행·ATLAS 39행·신도고 12행) 정상 파싱. **stiz파서가 기존 양식 시트에서 잡은 수=0**(신양식③ 분기가 양식①/② 무손상, 충돌 0). 양식①(이름 A열·순번 없음) 정상 |
+| 4) job 완료기준 CLI 재현 | ✅ 통과 | `job --preset 농구_V넥_양면 --design 빈템플릿.ai --order 추가주문서.xlsx --out _etest` → **produced 38/verify_pass 38/fail 0/skipped[]/missing[]/warnings[]/precise=True** 재현. summary 11키 전부 존재 |
+| 5) ★미리보기 육안(필수)★ | ✅ 통과 | 대표 6건(XS 김승우6·M 이해솔1·L 이채형7·XL 김윤서22·2XL 이주영5·3XL 홍상민10) PNG **전부 앞판(YONSEI+번호)·뒤판(이름+번호) 둘 다 캔버스 안 정위치, 앞판 소실 없음**. **page rect 6개 전수 가로**(XS 3897×2748~3XL 4283×2863). Phase D FAIL(세로 길쭉·앞판소실) 재발 없음. 1자리·2자리 번호 모두 정상 |
+| 6) verify 38 + 금지연산자 | ✅ 통과 | verify 38/38 PASS. **38건 전수 Do=2(앞/뒤)·k=3(앞·뒤번호+이름 CMYK fill) 균일**, rg/RG·scn·gs·BI(inline)·ca/CA=0건(전수). 글자 k fill만 |
+| 7) 엣지(다중사이즈·빈/결측행) | ✅ 통과 | 이주영(배번5) 6벌이 S/M/L/XL/2XL/3XL 파일명 충돌 없이 구분(38개 PDF 경로 전수 unique). 실시트 100행 중 순번만 적힌 빈행 62개 skip→38행. 합성엣지(부제행/순번만/전부빈) 정확 skip, qty없음→"1" 폴백 |
+
+📊 종합: 7개 전부 통과 / 0개 실패 → **종합 PASS** (수정 요청 없음)
+
+🎯 **완료기준 §7 달성 판정**: §7-1(selftest PASS) ✅ / §7-3(job 선수별 PDF 38건 전부 verify PASS, CLI 한 줄 재현) ✅ / §7-4(번호·이름 위치 — 미리보기 육안 정위치 확인, cowork 오버레이 정밀재검증은 잔여) → **§7 핵심 완료기준 달성**. (Phase D 데이터결함은 되돌림1로 해소, 본 Phase E에서 재발 0 재확인)
+
+⚠️ Phase D 함정 재점검(errors.md [2026-06-19]): 13개 패턴 SVG viewBox **전수 동일(0 0 4478.74 3401.57 가로)**·조각 bbox **음수/초과 0건**·조각수=2·앞=idx0(왼)/뒤=idx1(오) 13개 일관. "조각수2+verify PASS" 초록불에 더해 (a)viewBox전수동일 (b)좌표 viewBox내 (c)page rect 가로 (d)미리보기 육안 4중 점검 전부 통과.
+
+검증 환경: Python 3.11.9 / fitz 1.27.2.3 / pikepdf 10.8.0 / openpyxl. 빈템플릿=C:/Users/user/Desktop/새 폴더/…V넥…XL - 템플릿.ai. 주문서=동 폴더 260213…추가주문서.xlsx. 임시출력 data/jobs/_etest 정리 완료. order.py는 아직 미커밋(작업트리 M) — Phase E 커밋 대상.
+
 ### Phase B 독립 검증 [2026-06-19] — 종합 PASS (15/15)
 
 | 테스트 항목 | 결과 | 비고 |
@@ -596,6 +658,34 @@ job.json summary 키 11개 전부 존재(job_dir/split/total_players/produced/ve
 검증 환경: Python 3.11.9 / fitz 1.27.2.3 / pikepdf 10.8.0. 빈템플릿=C:/Users/user/Desktop/새 폴더/연세대…V넥…XL - 템플릿.ai. 원본 .ai=G:/공유 드라이브/디자인/2026 커스텀용 패턴/0. 농구유니폼 확정 정리본/2. 양면 유니폼상의 패턴/V넥/V넥 양면유니폼 스탠다드/.
 
 ## 리뷰 결과 (reviewer)
+
+### Phase E 리뷰 결과 [2026-06-19] — STIZ 신양식③ 파서(order.py)
+
+📊 종합 판정: **통과** (치명 0 / 주의 2 / 후순위 3)
+
+✅ 잘된 점:
+- **불변 제약 완벽 준수**(§6): `git diff HEAD --name-only` = `engine/order.py`·`.claude/scratchpad.md` **딱 둘뿐**. engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_output)·job·svg_normalize·grade·build_layouts·verify **변경 0줄**. order.py는 원래 engine 코어를 import 안 하는 독립 입력 파서라 코어 무손상. `selftest 종합 PASS`(바이트동일·CMYK·inkcov 편차 0) 회귀 0 직접 확인.
+- **컬럼 위치 키워드 동적 매핑**(과적합 방지 핵심): 고정 오프셋 아님. 순번/이니셜/배번/사이즈/비고를 헤더 키워드로 각각 col 인덱스 탐색 → 양식①(이름 A열)과 양식③(이름 B열) 컬럼 배치 차이를 정확히 흡수. 배번 헤더 누락 시 `col_name+1` 폴백도 합리적.
+- **결측행 skip 견고**: 이름·배번·사이즈 3개 모두 빈 행("순번만 미리 적힌 39~100행")을 정확히 건너뜀. 실데이터에서 100행 중 유효 38행만 추출, 빈 62행 무오염 확인.
+- **부제행(상의/하의) skip 정확**: 헤더 바로 아래 `상의`/`하의` 텍스트 감지 시 1행 skip → 상의 col_size 그대로 사용. 실데이터 19행(상의/하의 부제) 정확히 건너뜀.
+- **qty 숫자추출 안전**: `_QTY_NUM_PATTERN=(\d+)` 가 "4장"·"1장"에서 앞 숫자 추출, col_note 없거나 비숫자/결측이면 qty="1" 폴백. `_to_str` 거쳐 None/float 방어.
+- **nbsp 보강 정확·무손상**: `_norm_header`가 `\xa0`→공백→제거. 실데이터 헤더 `\xa0이니셜`·`순\xa0\xa0 번` 매칭 위함. 양식①/② 헤더엔 nbsp 없어 영향 0 — `_parse_form1`은 `_HEADER_INITIAL` 매칭만 쓰고 정상 작동(실데이터 form1=0 확인). selftest·기존 파서 경로 무변동.
+- **실데이터 전수 정상**: 260213 연세대 추가주문서 → form1=0 / stiz=38 / warnings 0. 사이즈 XS~3XL·qty "1"~"4" 정상.
+
+🔴 필수 수정: 없음.
+
+🟡 주의(권장, 차단 아님):
+- **[과적합 위험 — 자동판별 순서 ①→③→②의 취약점] (가장 중요)** developer 설명("①이 0행이라 ③ 진입")의 *메커니즘이 실제와 다름*. ①이 0행인 진짜 이유는 **`_parse_form1`의 헤더 탐색 범위가 `min(12, len)` 즉 0~11행뿐인데 실데이터 양식③ 헤더가 18행**에 있어 ①이 헤더를 아예 못 찾기 때문(우연한 안전). 직접 재현 검증 결과: **양식③ 헤더를 0~11행 안으로 옮기면 `_parse_form1`이 '이니셜' 헤더(B열)를 잡아 양식③ 데이터를 2행으로 파싱해버리고, 그 결과 비고("4장")가 무시되어 qty가 전부 "1"로 깨진다**(stiz 파서에 도달조차 못 함). 즉 현 통과는 "헤더가 12행 밖"이라는 *이 파일 1개의 우연*에 의존. 다른 STIZ 양식③ 주문서(헤더 위치 다름)에서 qty 손실 가능. → 근본 방어: parse_order에서 ③ 식별(순번+이니셜+사이즈)을 ①보다 **먼저** 시도하거나, `_parse_form1`이 헤더행에 '순번' 컬럼이 보이면 양식③에 양보(빈 리스트 반환)하도록 가드 1줄 추가 권장. (현 데이터 무해 → 차단 아님, 단 일반화 시 1순위 개선)
+- **[하의 사이즈 미지원 = 백로그⑦]** col_size는 상의 열만 사용, 하의 열(부제행 '하의'가 가리키는 col)은 무시. V넥 상의 출력엔 정상이나, 상·하의 사이즈가 다른 주문(농구는 보통 세트)에서 하의 정보 소실. 백로그⑦에 이미 등재됨 — 1차 범위 밖, 인지 확인.
+
+🟢 후순위(개선 제안):
+1. **[헤더 탐색 범위 비일관]** stiz는 헤더 20행/컬럼 10열, form1은 12행/7열로 범위가 제각각. 실데이터 헤더 18행이 form1 범위(12) 밖이라 우연히 충돌 안 나지만, 두 파서 범위를 같은 상수로 통일하면 의도가 명확해지고 위 🟡 취약점도 부분 완화.
+2. **[col_seq 미사용]** 헤더에서 col_seq를 잡아두지만 데이터 추출엔 안 씀(파일명/정렬에 활용 여지). 현재 무해, 식별용으로만 쓰임.
+3. **[qty 정수성 미검증]** "0장"·"00장"이 와도 qty="0"으로 통과(양식②는 0 제외 처리). job이 qty=0을 어떻게 다루는지(0벌 출력?) 확인 권장 — 현 실데이터엔 0 없음.
+
+검증 방법: git diff HEAD --name-only(2파일 한정) + order.py diff·전문 정독(_parse_form_stiz/_norm_header/parse_order 분기) + 실데이터 260213 시트별 form1/stiz 결과(0/38) + 헤더행 위치 실측(18행) + **합성 양식③(헤더 5행) 재현으로 form1 선점·qty 손실 위험 입증** + nbsp/결측행/부제행/qty추출 단위 확인 + selftest PASS + 의뢰서 §6 대조.
+
+---
 
 ### Phase D 리뷰 결과 [2026-06-19]
 
@@ -692,6 +782,7 @@ job.json summary 키 11개 전부 존재(job_dir/split/total_players/produced/ve
 ## 작업 로그 (최근 10건만 유지)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |
 |------|---------|----------|------|
+| 2026-06-19 | reviewer | Phase E 리뷰: order.py 신양식③ 파서·nbsp·자동판별 | 통과(치명0/주의2/후순위3). 불변제약·selftest OK. 🟡 자동판별 ①→③ 순서가 헤더 12행밖 우연에 의존(헤더 앞쪽이면 form1이 선점→qty손실) — 일반화 시 가드 권장 |
 | 2026-06-15 | developer | A-4 구현: text.py 신설+compose/grade/cli 확장 | 글자없이 콘텐츠100%동일·verify PASS유지 |
 | 2026-06-15 | tester/reviewer | A-4 검증·리뷰 | 통과(6/6, 치명0, 🟡후순위) |
 | 2026-06-15 | pm | A-4 커밋(c1d0048)+자료 커밋(c7fc068)+fontTools | 완료 |
@@ -709,6 +800,7 @@ job.json summary 키 11개 전부 존재(job_dir/split/total_players/produced/ve
 | 2026-06-19 | tester | Phase C 독립검증(8항목: selftest회귀·per_player·콘텐츠주입·좌표변환동일행렬·single·금지연산자·하위호환폴백·엣지) | 종합 PASS(8/8, 수정요청0) |
 | 2026-06-19 | reviewer | Phase C 코드리뷰(불변제약·좌표변환정합·flatten·piece매핑·Phase D연결) | 통과(치명0, 🟡2, 🟢4) — transform복제 동기화 후속리스크 명시 |
 | 2026-06-19 | developer | Phase D 사전조사: V넥 .ai 13개 확인·PyMuPDF변환 검증 | ⛔차단2건(PyMuPDF=path라 parse_svg 0개·소매조각 소실) — 사용자 확인 대기 |
+| 2026-06-19 | developer | Phase E: order.py 신양식③ 파서(_parse_form_stiz)+_norm_header nbsp보강 / V넥 38건 job | 파싱38행11명·produced38/verify_pass38·육안6건PASS·금지연산0·order.py만수정 |
 | 2026-06-19 | developer | Phase D-1: ai_to_svg.jsx 신설(일러스트 SVG직접내보내기 배치·해결책A 자동화, 두스키마·ENTITIES·polyline리스크주석) | 작성완료(사용자 GUI 실행 산출물, engine 무수정) |
 | 2026-06-19 | planner-architect | Phase D 재설계(기존 path SVG 13개 발견): path→polyline 전처리 변환기 svg_normalize.py + V넥 preset 설계. XL.svg 실측(닫힘조각 앞/뒤 2개·곡선0·소매부재 확인) | 완료(설계만). ⛔잔존:소매부재·빈템플릿미확보 |
 | 2026-06-19 | developer | Phase D 구현 완료: svg_normalize.py(path→polyline 변환기·중복제거·닫힘=시작≈끝)+cli normalize-svg+V넥 13개 변환+preset+빈템플릿 job 스모크 | selftest PASS·13개 조각수=2 전수·preset유효·스모크 verify PASS(김경원20/이순신7)·금지연산자0·불변제약준수 |

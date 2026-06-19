@@ -72,9 +72,14 @@ _HOSU_PATTERN = re.compile(r"^(\d{1,2})\s*호$")
 _FOOTER_KEYWORDS = ("배송 정보", "배송정보", "성명", "주소", "연락처")
 
 # 헤더 탐색용 키워드(공백 제거 후 비교).
-_HEADER_INITIAL = ("이니셜",)          # 양식① 식별 키워드
+_HEADER_INITIAL = ("이니셜",)          # 양식①/③ 식별 키워드(이름 열)
 _HEADER_NUMBER = ("배번",)             # '배 번' → 공백 제거 시 '배번'
 _HEADER_SIZE = ("사이즈",)             # '사이즈'
+
+# 신양식③(STIZ '작성하기' 신폼) 헤더 키워드.
+# 양식③은 맨 앞에 '순번' 컬럼이 있고, '비고' 컬럼에 "4장" 식 수량이 적힌다.
+_HEADER_SEQ = ("순번",)                # '순\xa0\xa0 번' → nbsp/공백 제거 시 '순번'
+_HEADER_NOTE = ("비고",)              # '비  고' → 공백 제거 시 '비고'
 
 # ── 이번 주문 표식 키워드 ────────────────────────────────────────────────────
 # STIZ 주문서는 한 xlsx 에 여러 접수분 시트가 누적된다(시트명=날짜 6자리).
@@ -162,10 +167,18 @@ def _normalize_size(value) -> str:
 
 
 def _norm_header(value) -> str:
-    """헤더 비교용: 공백 제거 + 문자열화(예: '배 번' → '배번')."""
+    """헤더 비교용: 공백 제거 + 문자열화(예: '배 번' → '배번').
+
+    일반 공백(" ")뿐 아니라 **nbsp(\\xa0, non-breaking space)** 도 제거한다.
+    신양식③ 헤더는 '순\\xa0\\xa0 번', '\\xa0이니셜', '\\xa0배\\xa0\\xa0 번'처럼
+    엑셀에서 칸 맞춤용으로 nbsp 를 끼워 넣는다. nbsp 를 안 지우면
+    '\\xa0이니셜' 이 '이니셜' 과 달라 헤더 탐색이 실패한다(양식③ 0행 원인).
+    양식①/② 헤더엔 nbsp 가 없으므로 이 보강은 그 양식들엔 무손상이다.
+    """
     if value is None:
         return ""
-    return str(value).replace(" ", "").strip()
+    # \xa0(nbsp) → 일반 공백으로 치환 후, 일반 공백 전부 제거.
+    return str(value).replace("\xa0", " ").replace(" ", "").strip()
 
 
 # ── 양식① 「선수별 행」 파서 ──────────────────────────────────────────────────
@@ -340,6 +353,99 @@ def _parse_form2(rows: list) -> list[dict]:
     ]
 
 
+# ── 신양식③ 「STIZ 작성하기 신폼」 파서 ──────────────────────────────────────
+# 수량 표기 "4장" / "4 장" / "4벌" 등에서 앞 숫자만 뽑는 정규식.
+_QTY_NUM_PATTERN = re.compile(r"(\d+)")
+
+
+def _parse_form_stiz(rows: list) -> list[dict]:
+    """행 2차원 리스트에서 신양식③(STIZ '작성하기' 신폼)을 추출한다.
+
+    양식③ 구조(실데이터 260213 연세대 추가주문서로 확정):
+        헤더행:  순번 | 이니셜 | 배번 | 사이즈 | (빈) | 비고
+        부제행:  (빈) | (빈)  | (빈) | 상의   | 하의 | (빈)   ← 건너뜀
+        데이터:  1   | 이해솔 | 1   | M      | (빈) | 1장
+      → 양식①과 달리 **맨 앞에 '순번' 컬럼**이 있고 **이름이 두 번째 열**이다.
+        그래서 컬럼 위치를 헤더 키워드로 동적으로 찾는다(고정 오프셋 금지).
+
+    반환: [{name=이니셜, number=배번, size=상의사이즈, qty=비고숫자}].
+          헤더(순번+이니셜+사이즈)를 못 찾으면 빈 리스트(=양식③ 아님).
+    """
+    # 1) 헤더행 탐색: '순번' '이니셜' '사이즈' 가 한 행에 함께 있어야 양식③.
+    #    (양식①은 '순번' 컬럼이 없어 여기서 걸러진다 → 두 양식 충돌 방지.)
+    header_r = None
+    col_seq = col_name = col_number = col_size = col_note = None
+    for r in range(min(20, len(rows))):
+        row = rows[r]
+        cols: dict[str, int] = {}
+        for c in range(min(10, len(row))):
+            h = _norm_header(row[c])
+            if h in _HEADER_SEQ and "seq" not in cols:
+                cols["seq"] = c
+            elif h in _HEADER_INITIAL and "name" not in cols:
+                cols["name"] = c
+            elif h in _HEADER_NUMBER and "number" not in cols:
+                cols["number"] = c
+            elif h in _HEADER_SIZE and "size" not in cols:
+                cols["size"] = c
+            elif h in _HEADER_NOTE and "note" not in cols:
+                cols["note"] = c
+        # 양식③ 식별 핵심: 순번 + 이니셜 + 사이즈가 모두 있는 행.
+        if "seq" in cols and "name" in cols and "size" in cols:
+            header_r = r
+            col_seq = cols["seq"]
+            col_name = cols["name"]
+            col_number = cols.get("number", col_name + 1)  # 보통 이니셜 옆 칸.
+            col_size = cols["size"]
+            col_note = cols.get("note")  # 비고(수량). 없으면 qty="1".
+            break
+    if header_r is None:
+        return []  # 양식③ 아님.
+
+    # 2) 부제행(상의/하의) 건너뛰기: 헤더 바로 아래에 '상의'/'하의'가 보이면 1행 skip.
+    start_r = header_r + 1
+    if start_r < len(rows):
+        sub = rows[start_r]
+        joined = "".join(_norm_header(v) for v in sub[:8])
+        if "상의" in joined or "하의" in joined:
+            start_r += 1  # 부제행을 건너뛴다(상의 사이즈 = col_size 열 그대로).
+
+    def cell(row, idx):
+        return row[idx] if (idx is not None and idx < len(row)) else None
+
+    # 3) 데이터 행 추출.
+    result: list[dict] = []
+    for r in range(start_r, len(rows)):
+        row = rows[r]
+
+        name = _to_str(cell(row, col_name))
+        number = _to_str(cell(row, col_number))
+        size = _normalize_size(cell(row, col_size))
+
+        # 비고("4장")에서 수량 숫자만 추출. 없거나 못 읽으면 qty="1"(1선수 1행 기본).
+        qty = "1"
+        if col_note is not None:
+            note_raw = _to_str(cell(row, col_note))
+            m = _QTY_NUM_PATTERN.search(note_raw)
+            if m:
+                qty = m.group(1)
+
+        # 핵심 결측행 skip: 이름·배번·사이즈가 모두 비면 데이터가 아니다.
+        #   양식③ 끝은 순번만 미리 적혀 있고 나머지(이름/배번/사이즈)는 비어 있다
+        #   (예: 39~100행). 이런 '순번만 있는 빈 행'을 건너뛴다(크래시·오염 방지).
+        if not name and not number and not size:
+            continue
+
+        result.append({
+            "name": name,
+            "number": number,
+            "size": size,   # 정규화 실패 시 ""(웹에서 강조 → 수기 보정)
+            "qty": qty,     # 비고의 "4장" → "4". 없으면 "1".
+        })
+
+    return result
+
+
 # ── 공개 함수 ────────────────────────────────────────────────────────────────
 def parse_order(xlsx_path: str, warnings: list | None = None) -> list[dict]:
     """주문서 xlsx 를 읽어 표준 행 리스트로 반환한다.
@@ -381,8 +487,12 @@ def parse_order(xlsx_path: str, warnings: list | None = None) -> list[dict]:
             if not rows:
                 continue
 
-            # 양식① 우선 시도 → 비면 양식②.
+            # 양식① 우선 → 비면 신양식③ → 비면 양식②.
+            #   ①(이름=A열, 순번 없음)이 0행이면 ③(순번+이니셜 헤더)을 시도한다.
+            #   ③은 '순번' 컬럼 유무로 ①과 구분되므로 충돌하지 않는다.
             parsed = _parse_form1(rows)
+            if not parsed:
+                parsed = _parse_form_stiz(rows)
             if not parsed:
                 parsed = _parse_form2(rows)
             if not parsed:
