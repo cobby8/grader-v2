@@ -316,11 +316,13 @@ def _glyph_ink_bounds(glyphset, glyph_name: str):
 def place_number(text, font, cap_h_pt: float, center_x: float, center_y: float, color):
     """번호('7','20' 등)를 '자릿수 높이=cap_h_pt' 로 (center_x, center_y) 잉크중심에 배치.
 
-    의뢰서 §4 공식:
+    의뢰서 §4 + 이슈2(잉크 기준 중앙정렬):
       · 대표 자릿 글리프의 잉크 높이 inkH(폰트단위)로 scale s = cap_h_pt / inkH.
-      · 자릿들을 자연 advance×s 로 좌→우 배치, 전체를 center_x 에 가운데정렬.
-      · baseline = center_y - ((yMin+yMax)/2)*s  → 잉크 세로중심이 center_y 에 온다.
-      · 한 자리("7")·두 자리("20") 모두 center_x 정확히 가운데정렬.
+      · 자릿들을 자연 advance×s 로 좌→우 '임시배치'한 뒤, 배치된 전체 글리프의 실제
+        잉크 bbox(min/max x·y)를 재서 그 한가운데를 (center_x, center_y) 에 평행이동한다.
+      · 왜 advance 기준이 아니라 잉크 기준인가: "1"처럼 advance 박스 안에서 잉크가 한쪽으로
+        치우친 글자는 advance 중앙정렬 시 보이는 획이 ~27pt 밀린다(이슈2). 잉크 기준이면
+        "1","11","20","22" 모두 보이는 잉크 중심이 center_x 에 정확히 온다.
 
     인자:
       text       : 번호 문자열("7","20"). 빈값/None 이면 아무것도 안 그림.
@@ -376,26 +378,53 @@ def place_number(text, font, cap_h_pt: float, center_x: float, center_y: float, 
         return "", warnings
     s = cap_h_pt / ink_h                      # 폰트단위 → pt 배율(이 번호 전용)
 
-    # ── 가로: 자릿들을 advance×s 로 이어붙인 전체 폭을 center_x 가운데정렬 ──
-    #    전체 폭 = Σ(advance)×s. 시작 x = center_x - 전체폭/2.
-    total_adv = sum(adv for _, adv in entries)
-    total_w = total_adv * s
-    start_x = center_x - total_w / 2.0
-
-    # ── 세로: baseline 을 잡아 잉크 세로중심이 center_y 에 오게 한다 ──
-    #    baseline 위 잉크중심 = (yMin+yMax)/2 × s. 이걸 center_y 에 맞추려면
-    #    baseline = center_y - ((yMin+yMax)/2)×s. (대표 글리프의 잉크 세로중심 기준)
-    ink_mid = (rep[1] + rep[3]) / 2.0
-    baseline_y = center_y - ink_mid * s
-
-    # ── 자릿별 경로 누적(왼→오, 폰트 advance 만큼 전진) ──
-    pen_x = start_x
-    glyph_blocks: List[str] = []
+    # ── 1차 임시배치: 자릿들을 advance×s 로 좌→우 이어붙인다(가로 시작점 0 기준 상대배치) ──
+    #    왜 임시배치부터 하나: "1"처럼 잉크가 advance 박스 안에서 한쪽으로 치우친 글자가 있어,
+    #    advance 기준으로 곧장 중앙정렬하면 보이는 잉크가 밀린다(이슈2). 그래서 일단 배치만 해
+    #    놓고, 아래에서 '실제 잉크 bbox'를 재서 그 중심을 center_x/center_y 에 맞춰 평행이동한다.
+    #    seg = (글리프이름, 이 글자의 가로 시작점 dx0)  ← dx0 는 아직 center 보정 전 상대좌표.
+    segs: List[Tuple[str, float]] = []
+    pen_x = 0.0
     for gname, adv in entries:
-        ops = _glyph_path_ops(glyphset, gname, s, pen_x, baseline_y)  # s=폰트단위→pt 배율
+        segs.append((gname, pen_x))
+        pen_x += adv * s                      # 다음 글자 위치로 advance 만큼 전진(pt)
+
+    # ── 배치된 전체 글리프의 '실제 잉크 bbox'(시트좌표계) 측정 ──
+    #    각 글리프의 잉크 경계(폰트단위) b=(xMin,yMin,xMax,yMax) 를 배치 좌표계로 변환:
+    #      시트x = 폰트x*s + dx0,  시트y = 폰트y*s + (baseline 0 가정).
+    #    세로는 baseline 을 일단 0 으로 두고 잰 뒤(아래서 shift_y 로 한 번에 올림).
+    ink_min_x = ink_min_y = float("inf")
+    ink_max_x = ink_max_y = float("-inf")
+    for gname, dx0 in segs:
+        b = _glyph_ink_bounds(glyphset, gname)   # (xMin,yMin,xMax,yMax) 폰트단위 | None(공백)
+        if b is None:
+            continue
+        # 폰트단위 경계 → 배치 좌표계(pt)로 환산. dx0 는 글자별 가로 시작점.
+        gx0 = b[0] * s + dx0
+        gx1 = b[2] * s + dx0
+        gy0 = b[1] * s                          # baseline=0 가정 좌표
+        gy1 = b[3] * s
+        ink_min_x = min(ink_min_x, gx0)
+        ink_max_x = max(ink_max_x, gx1)
+        ink_min_y = min(ink_min_y, gy0)
+        ink_max_y = max(ink_max_y, gy1)
+
+    if ink_min_x == float("inf"):              # 측정된 잉크가 없으면(전부 공백) 종료
+        warnings.append(f"🟡 번호 '{text}' 에 그릴 잉크가 없어 건너뜁니다.")
+        return "", warnings
+
+    # ── 잉크 중심을 center_x / center_y 에 맞추는 평행이동량 계산 ──
+    #    가로: 보이는 잉크의 한가운데가 center_x 에 오도록 shift_x.
+    #    세로: baseline=0 으로 잰 잉크 세로중심이 center_y 에 오도록 baseline_y(=shift_y) 결정.
+    shift_x = center_x - (ink_min_x + ink_max_x) / 2.0
+    baseline_y = center_y - (ink_min_y + ink_max_y) / 2.0
+
+    # ── 자릿별 경로 누적(상대 dx0 + shift_x = 최종 시트 x, baseline_y = 최종 시트 y) ──
+    glyph_blocks: List[str] = []
+    for gname, dx0 in segs:
+        ops = _glyph_path_ops(glyphset, gname, s, dx0 + shift_x, baseline_y)  # s=폰트단위→pt
         if ops:                               # 공백은 윤곽 없어 빈 문자열
             glyph_blocks.append(ops)
-        pen_x += adv * s
     if not glyph_blocks:
         return "", warnings
 
@@ -461,7 +490,11 @@ def place_name(text, font, em_pt: float, pitch_pt: float, baseline_y: float,
     # ── em → pt 배율(글리프 좌표=폰트단위에 곱할 값) ──
     s = em_pt / upm
 
-    glyph_blocks: List[str] = []
+    # ── 1차 임시배치: 음절을 피치 간격으로 좌→우 배치(아직 잉크 보정 전 상대 dx) ──
+    #    각 음절을 '자기 advance 폭의 가운데'가 피치칸 중심에 오게 둔다(기존 방식 유지).
+    #    아래에서 배치된 전체 잉크 bbox 를 재서 가로 잉크중심을 center_x 에 맞춰 평행이동한다.
+    #    seg = (글리프이름, 이 글자의 가로 시작점 dx)
+    segs: List[Tuple[str, float]] = []
     missing: List[str] = []
     for i, ch in enumerate(syllables):
         if ch.strip() == "":                 # 공백 음절: 피치 한 칸만 차지(그릴 윤곽 없음)
@@ -470,15 +503,12 @@ def place_name(text, font, em_pt: float, pitch_pt: float, baseline_y: float,
         if gname is None:                    # 폰트에 없는 글자 수집(아래서 통째 처리)
             missing.append(ch)
             continue
-        # 이 음절의 중심 x(시트 절대좌표).
+        # 이 음절의 중심 x(피치 기준).
         syl_center_x = first_center_x + i * pitch_pt
         # 글리프를 '자기 advance 폭의 가운데'가 syl_center_x 에 오게 좌측 시작점 보정.
-        #   글리프 그리기 시작 x(dx) = 중심 - (advance×s)/2.  (음절 자체를 피치칸 가운데에 둠)
         adv = glyphset[gname].width
         dx = syl_center_x - (adv * s) / 2.0
-        ops = _glyph_path_ops(glyphset, gname, s, dx, baseline_y)  # baseline 고정
-        if ops:
-            glyph_blocks.append(ops)
+        segs.append((gname, dx))
 
     # ── R-F: 폰트에 없는 글자가 있으면 통째 미출력(이름 깨짐 방지) ──
     if missing:
@@ -486,6 +516,29 @@ def place_name(text, font, em_pt: float, pitch_pt: float, baseline_y: float,
         warnings.append(
             f"🟡 이름 '{text}' 중 '{miss_str}' 글자가 폰트에 없어 전체를 그리지 않습니다(입력값 확인).")
         return "", warnings
+    if not segs:                              # 전부 공백 등 — 그릴 윤곽 없음
+        return "", warnings
+
+    # ── 배치된 전체 글리프의 '실제 잉크 가로 bbox' 측정 → 가로 잉크중심을 center_x 에 평행이동 ──
+    #    이름도 번호(이슈2)와 같은 잉크 기준으로 통일한다(2글자 이름 등 미세 치우침 예방).
+    #    세로는 baseline_y 고정(의뢰서 §4: baseline 고정) — 가로만 잉크 기준 보정.
+    ink_min_x = float("inf")
+    ink_max_x = float("-inf")
+    for gname, dx in segs:
+        b = _glyph_ink_bounds(glyphset, gname)   # (xMin,yMin,xMax,yMax) 폰트단위 | None(공백)
+        if b is None:
+            continue
+        ink_min_x = min(ink_min_x, b[0] * s + dx)   # 폰트단위→pt 환산 + 글자 시작점
+        ink_max_x = max(ink_max_x, b[2] * s + dx)
+    # 측정된 잉크가 있으면 가로 잉크중심을 center_x 로 맞춘다(없으면 보정 0).
+    shift_x = 0.0 if ink_min_x == float("inf") else center_x - (ink_min_x + ink_max_x) / 2.0
+
+    # ── 최종 경로 누적(dx + shift_x = 최종 시트 x, baseline_y 고정) ──
+    glyph_blocks: List[str] = []
+    for gname, dx in segs:
+        ops = _glyph_path_ops(glyphset, gname, s, dx + shift_x, baseline_y)  # baseline 고정
+        if ops:
+            glyph_blocks.append(ops)
     if not glyph_blocks:                      # 전부 공백 등 — 그릴 윤곽 없음
         return "", warnings
 

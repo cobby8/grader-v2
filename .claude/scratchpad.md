@@ -51,8 +51,62 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 ## 구현 기록 (developer)
 (완료 — Phase B~E, 상세는 git 히스토리)
 
+### 이슈2 — place_number/place_name 잉크 bbox 기준 중앙정렬 (2026-06-19)
+📝 구현: place_number 중앙정렬을 advance 박스 기준 → **실제 잉크 bbox 기준**으로 변경. "1"처럼
+advance 박스 내 잉크가 좌측 치우친 글자가 ~27pt 밀리던 버그 교정. place_name 도 가로 잉크중심으로 통일.
+
+| 파일 | 변경 내용 | 신규/수정 |
+|------|----------|----------|
+| engine/text.py | place_number: advance 임시배치(segs) → 배치좌표계 잉크 min/max x·y 측정 → shift_x/baseline_y 로 잉크중심을 center_x/center_y 에 평행이동 | 수정 |
+| engine/text.py | place_name: 음절 임시배치(segs) → 가로 잉크 min/max x 측정 → shift_x 로 가로 잉크중심을 center_x 에 정렬(세로 baseline_y 고정 유지) | 수정 |
+
+- 측정은 기존 `_glyph_ink_bounds`(폰트단위 경계) 재사용 + `시트좌표=폰트좌표×s+dx` 환산(transform/scale 반영).
+- 시그니처·ASCII ops·k fill·q…Q 래핑 무수정. 하드코딩 0(좌표·크기·색 전부 인자).
+
+💡 tester 참고:
+- 회귀: `python -m engine selftest` → PASS(전 항목).
+- 번호 잉크중심 오차(cap539, center 1000,2000): **"1"·"11"·"20"·"22" 모두 x오차 +0.000 / y오차 +0.000pt** (이전 "1"/"11" -27.6pt → 교정).
+- 이름 가로 잉크중심(center_x 3219.8): 김경원/김윤서/이해솔/박 모두 +0.000pt.
+- 금지 op(Do/rg/RG/ca/CA) 전부 없음. 빈/공백/None/누락글리프 안전처리 정상.
+- 검증법: ops 문자열의 m/l/c 좌표점을 모아 min/max bbox 중심 계산 → center 와 비교.
+
+⚠️ reviewer 참고:
+- place_number 의 scale 결정(rep=대표 잉크높이 최대 글리프)은 그대로 유지. 정렬만 잉크 기준으로 분리.
+- place_name 세로는 의뢰서 §4 요구(baseline 고정)대로 baseline_y 유지 — 가로만 잉크 보정.
+
 ## 테스트 결과 (tester)
 (완료 — B 15/15, C 8/8, D 7/7(되돌림1), E 7/7)
+
+### 이슈2 독립검증 (2026-06-19, tester) — place_number/place_name 잉크 bbox 중앙정렬
+폰트 data/fonts/HY헤드라인M.ttf. ops의 m/l/c 좌표를 직접 추출 + fontTools BoundsPen으로
+베지어 곡선 실제 극값 잉크 bbox까지 2중 측정해 교차 검증(코드 무수정, 검증만).
+
+| 검증 항목 | 결과 | 비고 |
+|-----------|------|------|
+| 1) selftest 회귀 | ✅ PASS | 전 항목 PASS, 멱등 재실행도 PASS |
+| 2) place_number 잉크중심(±2pt) | ✅ PASS | 아래 번호별 수치 참조, 전부 0.0000pt |
+| 3) place_name 가로잉크중심+baseline고정 | ✅ PASS | 김경원/김윤서/이해솔/박 가로오차 0.0000pt, y범위에 baseline 포함(고정 유지) |
+| 4) ops 무결성(q…Q+k fill만) | ✅ PASS | q시작/Q끝/f/단일 k라인(`0 0 0 1 k`), Do·rg·RG·sc·scn·ca·CA·gs 0 |
+| 5) 엣지(빈·None·공백·누락·자릿수) | ✅ PASS | 빈''/None/공백/😀·€(진짜 누락)/cap0/em0/pitch0 → 빈 ops+경고, 1~3자리 정상, 크래시 0 |
+| 6) 회귀 V넥 job 스모크 | ✅ PASS | 38명 생성·verify 38/38 PASS, 01/11번 산출물 잉크 정상, page Do는 디자인임베드(정상) |
+
+📊 종합: 6/6 PASS, 실패 0
+
+**2) 번호별 잉크중심 오차(cap_h=539, center=(1000,2000)) — BoundsPen 곡선극값 기준:**
+| 번호 | 잉크폭(pt) | 잉크높이(pt) | x중심오차 | y중심오차 |
+|------|-----------|-------------|----------|----------|
+| 1    | 180.91 | 539.00 | 0.0000 | 0.0000 |
+| 11   | 550.77 | 539.00 | 0.0000 | 0.0000 |
+| 20   | 647.04 | 540.19 | 0.0000 | 0.0000 |
+| 22   | 664.04 | 539.00 | 0.0000 | 0.0000 |
+| 7    | 304.19 | 539.00 | 0.0000 | 0.0000 |
+| 100  | 969.36 | 539.00 | 0.0000 | 0.0000 |
+
+- "1"은 잉크폭 180.91로 좁지만 중심오차 0.0 → 이슈2 핵심(좁은 "1"/"11"이 -27.6pt 밀리던 버그) 완전 교정 확인.
+- 잉크높이 모두 ~539(목표 cap_h) 일치 → scale 결정도 정상.
+- 완료기준 §2(±2pt 이내) 충족. 명세서 이슈2 요구(advance→잉크 bbox 평행이동) 정확 구현.
+- 참고: 'A'는 HY헤드라인 폰트에 실재(라틴 포함)하므로 ops 생성이 정상 — 누락처리는 😀/€ 등 진짜 미보유 글자에서 검증.
+- 수정 요청 없음(전 항목 PASS).
 
 ## 리뷰 결과 (reviewer)
 (완료 — 전 Phase 통과, 치명0. 주의는 백로그 반영)
@@ -73,3 +127,5 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 | 2026-06-19 | dev/test | Phase D 되돌림1: 원본.ai 동일출처 재변환(좌표오염 해소) | FAIL 해소 |
 | 2026-06-19 | dev/test/rev | Phase E STIZ신양식 파서+전선수 PDF 38건 | 통과(verify38/38) |
 | 2026-06-19 | pm | Phase B/C/D/E 커밋 5개 origin 푸시 | 완료(미푸시0) |
+| 2026-06-19 | dev | 이슈2 place_number/place_name 잉크 bbox 기준 중앙정렬 | "1/11/20/22" 오차±0.000pt, selftest PASS |
+| 2026-06-19 | tester | 이슈2 독립검증(BoundsPen 곡선극값 2중측정+V넥 job 스모크) | 6/6 PASS, 1/11/20/22/7/100 오차 0.0000pt, verify 38/38 |
