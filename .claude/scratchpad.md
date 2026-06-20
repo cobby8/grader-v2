@@ -319,6 +319,53 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 - _safe_pattern_dirname: 선행 `_` 보존(strip("."))+금지문자·경로탈출 차단. design_region_pt 추정값(경고동반)·전부결함 등록거부 정책.
 - POST /patterns 부분실패 무중단(글리프셋·완성본 실패=경고, 사이즈 전부실패만 거부). _tmp_path 중간산출 정리. settings.json gitignore.
 
+## 구현 기록 (developer) — 웹앱5 (run.bat + 실행가이드 + 직원 E2E 통합검증) (2026-06-20)
+📝 구현한 기능: **웹앱 5단계(최종 패키징·검증)** — ① 직원용 `run.bat`(더블클릭 기동), ② `실행가이드.md`(직원용 1장), ③ **직원 E2E 통합검증**(브라우저+백엔드 실데이터 끝까지 1회). 엔진·_handoff 무수정, 빌드0.
+
+| 파일 | 변경 내용 | 신규/수정 |
+|------|----------|----------|
+| run.bat | (저장소 루트) 영어 얇은 껍데기: fastapi 깔린 파이썬 탐색(.venv→venv→python→py, 후보마다 import 시험) → `python -m webapp.run` 실행. 파이썬/부품 부재 시 분기 안내 | 신규 |
+| 실행가이드.md | (루트) 직원용 1장: ①켜기(더블클릭→브라우저) ②5단계 사용법 ③폴더배포 ④GS(EPS)설치 ⑤FAQ | 신규 |
+| webapp/run.py | _check_dependencies(fastapi/uvicorn 자가점검→한국어 안내+exit1, 크래시 아님) + 한국어 시작메시지 + GRADER_NO_BROWSER=1 스위치(테스트용 자동오픈 OFF). uvicorn은 점검 통과 후 import | 수정 |
+
+**핵심 판단(★)**:
+- **run.bat을 영어 껍데기로**: 한글 많은 .bat은 Windows에서 chcp 해도 cmd가 한글 echo/주석을 명령으로 오인(글자깨짐). → .bat은 영어로 "파이썬 찾아 실행"만, **한국어 안내는 전부 run.py(파이썬, UTF-8 완벽)**가 출력. 직원 경험(더블클릭→한국어) 동일.
+- **fastapi 깔린 파이썬 선택(★ 멀티파이썬 함정)**: 이 PC는 `py`=3.13(fastapi 없음)·`python`=3.11(fastapi 있음). 단순 우선순위면 3.13 잡혀 서버 안 뜸. → 후보마다 `python -c "import fastapi,uvicorn"` 시험해 **통과하는 것**을 고름(근본 해결).
+- **배치 지연확장**: `setlocal EnableDelayedExpansion` + 괄호블록 안 `!VAR!`(초안에서 `%VAR%`가 빈값으로 읽혀 부품체크 헛돈 버그 수정).
+
+✅ 검증 — **run.bat 동작**:
+- run.bat 백그라운드 기동 → `[OK] Using Python: python`(3.11 정확 선택) → uvicorn 8000 기동 → health 200 `{"status":"ok","port":8000}` (1초). 부품부재 분기(py 3.13으로 실행) → 한국어 안내+정확한 pip 명령+exit1, **크래시0**. run.py 빌드0(py_compile).
+
+✅ 검증 — **직원 E2E 전체 플로우(실데이터 1회, 백엔드 HTTP + 브라우저 playwright 병행)**:
+| 단계 | 백엔드 HTTP | 브라우저(playwright) |
+|------|-----------|---------------------|
+| 패턴 V넥 12사이즈 | PASS(id=농구_V넥_양면 sizes12 disabled[3XL]) | PASS(카드 클릭·스테퍼) |
+| 빈본체 업로드 5케이스 | PASS(status=pass flattened=True) | PASS(uploadDesign→pass) |
+| 주문서 11명/38행 | PASS(total38 이름11 empty0 warn0) | PASS(페이저"1–12/38"·"order.xlsx·38행·모두입력됨") |
+| 생성 both | PASS(33 produced·pdf33/33·eps33/33 verify) | PASS(진행바100%·완료38/38) |
+| 검수 | PASS(outputs33·미리보기PNG493KB·checks33/33) | PASS(타일12·배지27·판정"33/33 공장 전달 가능"·건너뜀배너) |
+| 3XL 건너뜀 | PASS(skip5명+사유·disabled_sizes{3XL}) | PASS("건너뜀 5건" 배너) |
+| ZIP both | PASS(66파일 pdf/33+eps/33·무결성OK·pdf단독33) | PASS(download web_..._both.zip) |
+| **pageerror/크래시** | — | **PASS(pageerror 0 / 크래시 0)** |
+- 육안: 검수화면(05_review.png) 파란본체+번호+이름+초록PASS배지 타일 + 판정배너 + 건너뜀배너 정상. 생성화면(04_generate.png) 진행바100%·요약·서버연결됨:8000.
+
+✅ 불변제약: **engine/ git diff 0건**(무수정), **_handoff/ git diff 0건**(원본무수정). 변경=webapp/run.py + 신규 run.bat·실행가이드.md만. 빌드0. 포트8000 PID로만 종료(전역 kill 안 함).
+
+💡 cowork 전달용 산출물(웹앱5 E2E):
+- **ZIP(both, 직원 ZIP다운로드 산출)**: `C:\0. Programing\grader-v2\data\jobs\_qa_웹앱5_e2e\cowork_전달_웹앱5_both.zip` (29.7MB·pdf/33+eps/33·무결성OK)
+- **E2E job 폴더**: `C:\0. Programing\grader-v2\data\jobs\web_260620_175520_ffc664\` (output/pdf 33·output/eps 33·preview 33·job.json)
+- **대표 미리보기**: `...\web_260620_175520_ffc664\preview\XL_11_장혁준.png` / `...\M_02_최영상.png`
+- **단계별 스크린샷**: `...\_qa_웹앱5_e2e\01_pattern.png ~ 05_review.png`
+
+💡 tester 참고:
+- 기동: `run.bat` 더블클릭(또는 `python -m webapp.run`). 자동오픈 끄려면 `set GRADER_NO_BROWSER=1`. 종료는 포트8000 PID로만.
+- E2E 재현: 서버 띄운 뒤 `/tmp/e2e_backend.py`(HTTP 풀플로우)·`/tmp/e2e_browser.py`(playwright). 정상=전 단계 PASS+pageerror0.
+- 주의입력: work.html의 ORDER/orderServer는 함수스코프 let이라 `window.ORDER`로 안 읽힘(0으로 보임) → 화면검증은 페이저/요약 텍스트("38행")로 확인. GS부재 환경=EPS skip+PDF만(크래시0).
+
+⚠️ reviewer 참고:
+- run.bat: 후보 파이썬마다 import 시험으로 선택(멀티파이썬 안전), 지연확장 `!VAR!`, 한국어는 run.py로 위임.
+- run.py: _check_dependencies가 fastapi/uvicorn 없으면 한국어 안내+exit1(uvicorn import 전에). GRADER_NO_BROWSER 스위치는 자동오픈만 끄고 서버엔 무영향.
+
 ## 수정 요청
 | 요청자 | 대상 | 문제 | 상태 |
 |--------|------|------|------|
@@ -328,7 +375,6 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 | 결과 |
 |------|---------|------|------|
-| 2026-06-20 | pm | 이슈2/4/3/1 커밋(5개) | 미푸시5(푸시대기) |
 | 2026-06-20 | tester | 본체92K 풀합성 검증(preset design_file→본체) | design Form 3.4KB→91,917B, verify 9/9 PASS, PNG 비흰51%·본체+밴드+번호 정상 |
 | 2026-06-20 | tester | 빈본체 XL11 검증(preset design_file→빈본체 정식설정) | design Form 88,141B 무손실, **겹침없음(30 소멸)**, verify 9/9, PNG 비흰52.6%·번호11/이름 깨끗, 글리프셋 일치확인 |
 | 2026-06-20 | dev | 실주문 11명 빈본체 전체 재출력(job per_player 38행) | **생성33/verify PASS33/FAIL0/skip5(3XL)**, design Form 88,141B 전수 byte-identical, 겹침없음·Do3·k/K3·금지0, 대표6건 육안PASS, cowork PDF/PNG 경로명시 |
@@ -338,3 +384,4 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 | 2026-06-20 | dev | 웹앱2(주문서parse API+디자인점검5케이스+work.html fetch연결) | ①~④ PASS: 주문서 total38/이름11/empty0 · 5케이스 정확(빈템플릿pass+flattened·완성본warn·본체누락fail·%!PS fail·SMask fail, **정상↔완성본 또렷구분** Tj0/1·흰글리프12/16임계14) · 브라우저 업로드→표/점검 정상 · engine0+_handoff0 무수정. 빌드0. data/uploads gitignore |
 | 2026-06-20 | dev | 웹앱3(비동기 job API 5개+design_token+work.html 생성→폴링→검수→ZIP) | ①~⑧ 전부 PASS: POST jobs 비동기 즉시 job_id·progress done(6.5s)·GET결과 verify2/2·checks_eps·skip3XL·format both / zip both(pdf/·eps/하위)·pdf·eps / 브라우저 E2E(tiles3·실미리보기3·배지3·판정3/3·건너뜀1·모달미리보기·ZIP download) / GS부재 EPS skip+PDF·크래시0 / 구 구조 job(한글폴더·output/직하) GET·preview·zip 동작 / **engine0+_handoff0 무수정**. const SKIPPED 우회. 빌드0 |
 | 2026-06-20 | dev | 웹앱4(GET jobs+POST patterns핵심+PUT settings) | ①~⑤ PASS: jobs 18건목록·history연결 / **patterns 실데이터등록 ok·5사이즈·3조각·glyph10자·area전부·load_preset통과·단조증가** / settings PUT 머지 both왕복 / 브라우저 E2E pageerror0·C단계 save버튼·완성본드롭존 / **engine·scripts·_handoff 0변경·HTML 마크업무수정(JS만)**. multipart한글복원(_fix_mojibake). settings.json gitignore. 빌드0 |
+| 2026-06-20 | dev | 웹앱5(run.bat+실행가이드+직원 E2E통합검증) | **run.bat 동작**(fastapi깔린 python자동선택·health200·1초기동, 부품부재 한국어안내+exit1 크래시0) + **직원 E2E 실데이터 끝까지**(패턴V넥12→빈본체pass→주문서38행/11명→생성both 33개·pdf33/eps33 verify→검수 미리보기·배지·3XL건너뜀5→ZIP both 66파일무결성OK, **pageerror0/크래시0**) + **engine0·_handoff0 무수정**·빌드0. cowork ZIP: data/jobs/_qa_웹앱5_e2e/cowork_전달_웹앱5_both.zip |
