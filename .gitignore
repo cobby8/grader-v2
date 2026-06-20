@@ -20,6 +20,10 @@ _grade_out*/
 # job 작업 산출물 (선수별 PDF/PNG, 무거움 — job 재실행으로 재생성)
 data/jobs/
 
+# 디자인 원본 .ai (1.7~1.9MB 바이너리, preset design_file/글리프셋 소스가 참조)
+# clone 시 디자이너에게 별도 확보 필요. design_source/README.md 참고.
+design_source/*.ai
+
 # 가상환경
 .venv/
 venv/

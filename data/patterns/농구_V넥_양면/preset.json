@@ -3,7 +3,7 @@
   "version": 1,
   "design": {
     "base_size": "XL",
-    "design_file": "연세대 레플리카 블루림 V넥 스탠다드 베이직 XL - 템플릿.ai",
+    "design_file": "../../../design_source/연세대_V넥_빈템플릿_본체포함_XL.ai",
     "page_size_pt": [4478.74, 5669.29],
     "content_box": [468.0, 2877.0, 3997.0, 5562.0]
   },
