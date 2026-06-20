@@ -13,9 +13,10 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import threading
 import time
 import uuid
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 # ── 프로젝트 루트 경로 계산 ──────────────────────────────────────────────
 # 이 파일은 <루트>/webapp/state.py 이므로, 상위 폴더가 webapp, 그 상위가 루트다.
@@ -53,6 +54,11 @@ def get_static_dir() -> str:
 def get_patterns_dir() -> str:
     """패턴 프리셋 폴더(절대경로) 를 돌려준다."""
     return PATTERNS_DIR
+
+
+def get_jobs_dir() -> str:
+    """생성 작업 결과 폴더(data/jobs, 절대경로) 를 돌려준다."""
+    return JOBS_DIR
 
 
 def save_upload(upload) -> str:
@@ -107,3 +113,63 @@ def read_settings() -> Dict[str, Any]:
             # 파일이 깨졌어도 화면이 죽으면 안 되므로 기본값으로 진행한다.
             pass
     return settings
+
+
+# ── 비동기 작업(job) 진행상태 메모리 저장소 ──────────────────────────────────
+# 왜 메모리 딕셔너리인가(비유):
+#   생성은 시간이 걸린다(수십 개 파일 합성·검증). 브라우저가 "생성 시작" 버튼을
+#   누르면 곧장 끝나길 기다리게 하면 화면이 멈춘 듯 보인다. 그래서 주방(백그라운드
+#   스레드)에 주문을 넣고 '주문표(job_id)' 만 즉시 돌려준 뒤, 화면이 주기적으로
+#   "다 됐어요?(progress)" 를 물어보게 한다. 그 진행상태를 잠깐 들고 있을 메모장이
+#   바로 이 딕셔너리다. 서버가 떠 있는 동안만 유효하면 충분하다(결과 자체는
+#   data/jobs/<id>/job.json 에 영구 저장되므로 재시작해도 결과 조회는 가능).
+#
+# 구조: { job_id: {status, total, done, error, out_dir, started_at, ...} }
+#   - status : "running" | "done" | "error"
+#   - total  : 전체 주문 행 수(진행바 분모)
+#   - done   : 완료(생성+검증)된 출력 수(진행바 분자)
+#   - error  : 실패 시 한국어 사유(없으면 None)
+#   - out_dir: 결과 폴더 절대경로(완료 후 job.json 위치)
+_JOBS: Dict[str, Dict[str, Any]] = {}
+# 여러 스레드가 동시에 _JOBS 를 만지므로(요청 스레드 vs 작업 스레드) 자물쇠로 보호.
+_JOBS_LOCK = threading.Lock()
+
+
+def create_job(total: int) -> str:
+    """새 job 을 등록하고 job_id 를 돌려준다(상태=running).
+
+    total: 진행바 분모로 쓸 전체 주문 행 수(화면이 0/total 로 그린다).
+    """
+    job_id = uuid.uuid4().hex[:12]  # 12자리면 충돌 사실상 0(폴더명에도 안전).
+    with _JOBS_LOCK:
+        _JOBS[job_id] = {
+            "status": "running",
+            "total": int(total),
+            "done": 0,
+            "error": None,
+            "out_dir": None,
+            "started_at": time.time(),
+        }
+    return job_id
+
+
+def update_job(job_id: str, **fields: Any) -> None:
+    """job 의 일부 필드를 갱신한다(자물쇠로 보호). 모르는 job_id 는 조용히 무시."""
+    with _JOBS_LOCK:
+        if job_id in _JOBS:
+            _JOBS[job_id].update(fields)
+
+
+def bump_job_done(job_id: str, n: int = 1) -> None:
+    """완료 카운트를 n 만큼 올린다(total 을 넘지 않게 보정). 진행바 갱신용."""
+    with _JOBS_LOCK:
+        j = _JOBS.get(job_id)
+        if j:
+            j["done"] = min(j["total"], j["done"] + n)
+
+
+def get_job(job_id: str) -> Optional[Dict[str, Any]]:
+    """job 진행상태 사본을 돌려준다(없으면 None). 사본이라 호출자가 만져도 안전."""
+    with _JOBS_LOCK:
+        j = _JOBS.get(job_id)
+        return dict(j) if j else None

@@ -247,6 +247,39 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 - 베이크 임계 _BAKED_WHITE_GLYPH_MAX=14, _BODY_MIN_BYTES=10000 소스상수(실측 기반, 디자인 바뀌면 여기만). 번호area는 preset center/cap_height에서 읽음(하드코딩 좌표 없음).
 - save_upload 충돌접두어(시각_랜덤8) + upload.file.seek(0) 후 복사. 평탄화 임시파일 tempfile→점검후 finally cleanup(원본 무손상).
 
+## 구현 기록 (developer) — 웹앱3 (비동기 생성 job + 진행폴링 + 검수 결과 + ZIP + 구·신경로) (2026-06-20)
+📝 구현한 기능: **웹앱 3단계** — 생성을 백그라운드 스레드로 돌리는 비동기 job API 5개 + design_token + work.html JS(생성→진행바→검수 그리드→형식선택→ZIP). 엔진 공개 API는 run_job/preview/preset **호출만**(무수정), _handoff 원본 무수정(webapp/static 복사본만), 빌드0.
+
+| 파일 | 변경 내용 | 신규/수정 |
+|------|----------|----------|
+| webapp/state.py | 비동기 job 메모리저장소(_JOBS+Lock) + create_job/update_job/bump_job_done/get_job + get_jobs_dir | 수정 |
+| webapp/api.py | jobs API 5개(POST /jobs 백그라운드 스레드·즉시 job_id / GET .../progress / GET .../{id} / GET .../preview/{file} / GET .../zip?format=) + design/check 응답에 design_token + 구·신경로 폴백헬퍼(_output_file_rel·_find_job_dir·_collect_zip_files) | 수정 |
+| webapp/static/screens/work.html | startGenerate(POST jobs)→pollProgress(진행바)→loadJobResult(검수 RESULTS·SKIPPED)→실미리보기 타일/모달·ZIP 버튼(/zip?format=apiFmt)·loadSettings(형식기본). 마크업·토큰 무수정 | 수정(복사본만) |
+
+**핵심 판단(★)**: ① **비동기=백그라운드 daemon 스레드**: run_job은 행별 콜백이 없어 '시작=running, 끝=done(done=total)'로 전이, 진행바는 폴링이 자연스럽게 채움. 실패해도 status=error+한국어 사유(서버 안 죽음). ② **design_token=업로드 파일명만**(uploads 폴더 안에서만 basename 해석 → 경로조작 차단). ③ **구·신경로 호환**: _output_file_rel가 job.json 기록경로 1순위 → 없으면 output/ 직하(구 구조) → output/pdf|eps 폴백. _find_job_dir는 메모리 우선→디스크 스캔(job_id[:6] 매칭, 폴더명도 허용). ④ **ZIP Content-Disposition**: 한글 폴더명은 latin-1 불가 → ASCII 폴백 filename + RFC5987 filename* UTF-8.
+
+**삽질/수정(★)**: work.html 원본의 `const SKIPPED` 재할당 시 "Assignment to constant variable" → loadJobResult가 throw하며 검수 진입 차단. **SKIPPED.length=0 + push로 내용만 교체**(const 제약 우회, 마크업 무수정 유지)로 해결.
+
+✅ 검증(①~⑧ 전부 PASS — 코드 무수정 실행):
+- **① POST /api/jobs**: 빈본체 design + 실주문 3행(XL/M/3XL) both → job_id 즉시반환(비동기), 폴링 6.5s done. ② progress running→done. ③ GET /{id}: outputs(pdf·eps·preview)·verify 2/2·checks_eps·**skip 3XL 1건·disabled_sizes{3XL:사유}**·format both·format_summary(pdf2/2,eps2/2/0). preview PNG 519KB 서빙(magic 89504E47).
+- **④ zip**: both=4파일(**pdf/·eps/ 하위폴더**)·pdf=2(평평)·eps=2(평평). ZIP DEFLATE 스트리밍.
+- **⑤ 브라우저 E2E(playwright)**: V넥 선택→디자인업로드(filecard)→주문서(38행표)→4행슬라이스→생성 진행바 100%→**검수 tiles3·실미리보기배경3·검증배지3·판정"3/3 공장전달가능"·건너뜀"3XL 비활성 1건"·both안내(pdf/·eps/)·모달 실미리보기 True**→ZIP download(web_..._both.zip). pageerror 0, 콘솔에러는 외부CDN뿐.
+- **⑥ GS부재 시뮬**(find_ghostscript→None 몽키패치): EPS skip(skipped1)·**PDF 산출(파일실존)**·eps=None·**크래시0**·ghostscript=None.
+- **⑦ 기존 job 구 구조**(260620_연세대V넥_빈본체, output/ 직하·한글폴더명): GET/{id}(produced33·outputs33)·preview PNG(494KB)·**zip pdf 33파일**(구 구조 폴백) 전부 동작. Content-Disposition ASCII폴백+filename* 정상.
+- **⑧ 불변제약 git diff**: **engine/ 0변경 + _handoff/ 0변경**(둘 다 빈 diff). 변경파일 3개(api·state·work.html 복사본)만. 빌드0(py_compile+node --check OK).
+
+💡 tester 참고:
+- 기동: `python -m uvicorn webapp.main:app --port 8000` (종료는 포트8000 PID로만, taskkill //f //im node 금지).
+- API 흐름: POST /api/jobs(JSON {patternId,design_token|design,rows,out_format}) → {job_id,total} → GET /api/jobs/{id}/progress 폴링(done) → GET /api/jobs/{id}(outputs·skip·verify·format_summary) → GET /api/jobs/{id}/preview/{file}(PNG) → GET /api/jobs/{id}/zip?format=pdf|eps|both.
+- 정상: 비동기 즉시 job_id, progress done, 검수 미리보기 PNG·검증배지·건너뜀(3XL), zip both=pdf/·eps/ 하위.
+- 주의입력: **패턴은 V넥(12사이즈) 선택해야 M/L/XL 매칭**(U넥은 사이즈 다름→전건 skip). 형식 both는 step3 진입 전 세그먼트/설정으로 정해짐(진입 시 자동생성). GS부재 환경=EPS skip+PDF만. 한글 폴더명 job도 구·신경로 양쪽 동작.
+
+⚠️ reviewer 참고:
+- 비동기 스레드: run_job 행별 진행훅 부재라 progress는 0→완료시 total로 점프(중간 단계없음). job_id는 메모리만, 결과는 job.json 영구 → 서버 재시작 후 _find_job_dir가 디스크 스캔으로 복구.
+- 구·신경로 폴백(_output_file_rel): 기록경로→output/ 직하→output/pdf|eps 3단 폴백. 신규 web job=output/pdf·eps(run_job §4 구조).
+- ZIP Content-Disposition latin-1 회피(ASCII filename + RFC5987 filename*). preview/zip 경로조작 차단(basename only).
+- SKIPPED const 우회(length=0+push) — 마크업/토큰 무수정 위해 JS만 조정.
+
 ## 수정 요청
 | 요청자 | 대상 | 문제 | 상태 |
 |--------|------|------|------|
@@ -266,3 +299,4 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 | 2026-06-20 | reviewer | 출력형식 코드리뷰(eps.py/flatten/job/cli/preset) | **통과(치명0)**: 불변제약 무수정확정·flatten Group제거 알파/SMask 이중가드·페이지그룹/CS보존 타당·GS fallback크래시0·verify_eps Id벡터판정 정교. 권장3(origin_ok무의미가드·GS경로/임계 하드코딩·미사용 _alpha_gstates). 후속: PDF경로 output/pdf 이전→기존job 구구조 웹앱 양쪽읽기 권장(의뢰서 §2 정합) |
 | 2026-06-20 | dev | 웹앱1 FastAPI 뼈대(정적서빙+health/patterns/settings) | 완료기준①~⑤ PASS: uvicorn기동크래시0·curl 3종(V넥 sizes12·glyph_source true·disabled[3XL])·브라우저 패턴실데이터+server-pill연결·engine0변경+_handoff원본무수정(복사본 3파일만)·포트PID종료. fastapi/uvicorn requirements추가. 빌드0 |
 | 2026-06-20 | dev | 웹앱2(주문서parse API+디자인점검5케이스+work.html fetch연결) | ①~④ PASS: 주문서 total38/이름11/empty0 · 5케이스 정확(빈템플릿pass+flattened·완성본warn·본체누락fail·%!PS fail·SMask fail, **정상↔완성본 또렷구분** Tj0/1·흰글리프12/16임계14) · 브라우저 업로드→표/점검 정상 · engine0+_handoff0 무수정. 빌드0. data/uploads gitignore |
+| 2026-06-20 | dev | 웹앱3(비동기 job API 5개+design_token+work.html 생성→폴링→검수→ZIP) | ①~⑧ 전부 PASS: POST jobs 비동기 즉시 job_id·progress done(6.5s)·GET결과 verify2/2·checks_eps·skip3XL·format both / zip both(pdf/·eps/하위)·pdf·eps / 브라우저 E2E(tiles3·실미리보기3·배지3·판정3/3·건너뜀1·모달미리보기·ZIP download) / GS부재 EPS skip+PDF·크래시0 / 구 구조 job(한글폴더·output/직하) GET·preview·zip 동작 / **engine0+_handoff0 무수정**. const SKIPPED 우회. 빌드0 |

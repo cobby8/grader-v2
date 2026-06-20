@@ -590,41 +590,157 @@ function renderFmtSeg() {
 $("#fmtSeg").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
   setOutFmt(b.dataset.fmt);
   renderFmtSeg();
-  $("#genLabel").textContent = (genDone >= RESULTS.length ? "생성 완료" : outFmt() + " 생성 중…");
+  // 형식을 바꾸면(아직 생성 전이면) 라벨만 갱신. 이미 생성된 결과가 있으면
+  // 검수 화면(ZIP 형식 안내)도 다시 그려 준다.
+  if (!jobResult) $("#genLabel").textContent = outFmt() + " 생성 중…";
+  else if (step === 4) renderReview();
 }));
-function startGenerate() {
-  clearInterval(genTimer);
-  genDone = 0;
-  renderFmtSeg();
-  renderGenPills();
-  $("#genTotal").textContent = RESULTS.length;
-  tickGenerate();
-  genTimer = setInterval(tickGenerate, 55);
-}
-function tickGenerate() {
-  if (genDone >= RESULTS.length) {
-    clearInterval(genTimer);
-    $("#genLabel").textContent = "생성 완료";
-    $("#genProgress").classList.add("progress--pass");
-    $("#genCancel").classList.add("hidden");
-    update();
-    return;
-  }
-  genDone += 4; if (genDone > RESULTS.length) genDone = RESULTS.length;
-  $("#genDone").textContent = genDone;
-  $("#genFill").style.width = (genDone / RESULTS.length * 100) + "%";
-  renderGenPills();
-  update();
-}
-function renderGenPills() {
-  // show a window of pills to stay compact at 48
-  const shown = RESULTS.slice(0, 16);
-  $("#genPills").innerHTML = shown.map((r, i) => {
-    const done = i < genDone;
-    return `<span class="pill ${done ? "is-done" : ""}"><span class="material-symbols-outlined">${done ? "check_circle" : "schedule"}</span>${r.size} · ${r.number}</span>`;
-  }).join("") + (RESULTS.length > 16 ? `<span class="pill">+${RESULTS.length - 16}</span>` : "");
+// ── 출력 형식 → API 값(pdf|eps|both) ──
+// 세그먼트 기본값(localStorage)은 'vector' 일 수 있다. API 는 pdf|eps|both 만
+// 받으므로, vector(미선택)이면 서버 설정 기본값(serverFmtDefault)으로 보낸다.
+let serverFmtDefault = "pdf";   // GET /api/settings 로 채운다(없으면 pdf).
+function apiFmt() {
+  const k = outFmtKey();
+  return (k === "pdf" || k === "eps" || k === "both") ? k : serverFmtDefault;
 }
 
+// 서버 작업 상태(비동기 생성).
+let jobId = null;        // POST /api/jobs 로 받은 작업 id
+let jobTotal = 0;        // 진행바 분모(주문 행 수)
+let jobResult = null;    // GET /api/jobs/{id} 결과(검수 그리드 원천)
+let jobError = null;     // 생성 실패 사유(한국어)
+
+// "생성 시작": 화면 표(ORDER)+패턴+디자인 토큰을 서버로 보내 비동기 작업을 띄운다.
+async function startGenerate() {
+  clearInterval(genTimer);
+  jobId = null; jobResult = null; jobError = null; genDone = 0;
+  renderFmtSeg();
+  $("#genProgress").classList.remove("progress--pass");
+  $("#genFill").style.width = "0%";
+  $("#genLabel").textContent = "생성 준비 중…";
+  $("#genTotal").textContent = ORDER.length;
+  $("#genDone").textContent = 0;
+  renderGenPillsLive();
+  try {
+    const body = {
+      patternId: patternId,
+      // 디자인 점검 때 받은 영수증(토큰). 없으면 서버가 명시 경로/기본을 쓴다.
+      design_token: (designServer && designServer.design_token) || null,
+      rows: ORDER.map((r) => ({ name: r.name, number: r.number, size: r.size, qty: r.qty })),
+      out_format: apiFmt(),
+    };
+    const res = await fetch("/api/jobs", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+    jobId = data.job_id;
+    jobTotal = data.total || ORDER.length;
+    $("#genLabel").textContent = OUT_FMT_MAP[apiFmt()] + " 생성 중…";
+    // 진행상태를 주기적으로 물어본다(폴링).
+    genTimer = setInterval(pollProgress, 600);
+    pollProgress();
+  } catch (e) {
+    jobError = "생성을 시작하지 못했습니다: " + (e.message || e);
+    $("#genLabel").textContent = "생성 실패";
+    $("#genProgress").classList.add("progress--fail");
+    update();
+  }
+}
+
+// 진행상태 폴링: 완료/전체로 진행바를 채우고, done 이면 결과를 받아 검수로 넘긴다.
+async function pollProgress() {
+  if (!jobId) return;
+  try {
+    const res = await fetch("/api/jobs/" + jobId + "/progress");
+    const p = await res.json();
+    if (!res.ok) throw new Error(p.error || ("HTTP " + res.status));
+    genDone = p.done || 0;
+    const total = p.total || jobTotal || 1;
+    $("#genDone").textContent = genDone;
+    $("#genTotal").textContent = total;
+    $("#genFill").style.width = (genDone / total * 100) + "%";
+    renderGenPillsLive();
+    if (p.status === "done") {
+      clearInterval(genTimer);
+      $("#genLabel").textContent = "생성 완료";
+      $("#genProgress").classList.add("progress--pass");
+      $("#genCancel").classList.add("hidden");
+      await loadJobResult();   // 결과(job.json) 로드 → RESULTS 채움
+      update();
+    } else if (p.status === "error") {
+      clearInterval(genTimer);
+      jobError = p.error || "생성 중 오류가 발생했습니다.";
+      $("#genLabel").textContent = "생성 실패";
+      $("#genProgress").classList.add("progress--fail");
+      $("#genCancel").classList.add("hidden");
+      update();
+    }
+  } catch (e) {
+    // 일시적 네트워크 흔들림은 다음 폴링에서 회복되므로 라벨만 살짝 알린다.
+    $("#genLabel").textContent = "진행 확인 중…";
+  }
+}
+
+// 완료된 작업 결과를 받아 검수 그리드 원천(RESULTS·SKIPPED) 으로 변환한다.
+async function loadJobResult() {
+  const res = await fetch("/api/jobs/" + jobId);
+  const data = await res.json();
+  if (!res.ok) { jobError = data.error || "결과를 불러오지 못했습니다."; return; }
+  jobResult = data;
+  // outputs → RESULTS(검수 타일). preview 는 /api/jobs/{id}/preview/{file} 로 부른다.
+  RESULTS = (data.outputs || []).map((o) => ({
+    size: o.size, name: o.name || "(이름없음)", number: o.number || "",
+    url: o.preview ? ("/api/jobs/" + jobId + "/preview/" + encodeURIComponent(o.preview)) : null,
+    status: o.status || (o.verify_pass ? "pass" : "warn"),
+    checks: (o.checks || []).map((c) => ({ name: c.name, ok: !!c.ok, detail: c.detail || "" })),
+    checksEps: o.checks_eps || null,
+    pdf: o.pdf, eps: o.eps,
+  }));
+  // 건너뜀: 행 단위 skip(사유) + 비활성 사이즈(결함)를 사이즈별로 묶어 배너로.
+  const skipMap = {};
+  (data.skip || []).forEach((s) => {
+    const sz = s.size || "?"; const reason = s.reason || "생성 제외";
+    const key = sz + "||" + reason;
+    skipMap[key] = (skipMap[key] || 0) + 1;
+  });
+  // SKIPPED 는 원본에서 const 로 선언돼 재할당이 안 된다. 그래서 '내용만' 비우고
+  // 새 항목을 push 해 채운다(배열 자체는 그대로, const 제약 위반 없음).
+  SKIPPED.length = 0;
+  Object.keys(skipMap).forEach((k) => {
+    const [size, reason] = k.split("||");
+    SKIPPED.push({ size, count: skipMap[k], reason });
+  });
+}
+
+// 선택 형식으로 ZIP 을 받아 브라우저 다운로드를 띄운다(둘 다면 pdf/·eps/ 하위).
+function downloadZip(fmt) {
+  if (!jobId) return;
+  const url = "/api/jobs/" + jobId + "/zip?format=" + encodeURIComponent(fmt);
+  // 새 탭이 아니라 보이지 않는 링크 클릭으로 다운로드를 트리거(파일 저장 다이얼로그).
+  const a = document.createElement("a");
+  a.href = url; a.download = "";
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+// 단일 파일 다운로드(모달의 '이 파일 다운로드'): 형식에 맞는 출력 1개를 연다.
+function downloadOne(result, fmt) {
+  const rel = fmt === "eps" ? result.eps : result.pdf;
+  if (!rel || !jobResult) { downloadZip(apiFmt()); return; }  // 단건 경로 없으면 ZIP 폴백
+  // job.json 의 상대경로는 정적 서빙 대상이 아니므로(보안), 단건도 ZIP 으로 받게 한다.
+  downloadZip(fmt === "eps" ? "eps" : "pdf");
+}
+
+// 생성 진행 중 실제 출력 칩(완료/대기) — 주문 행 기준으로 그린다.
+function renderGenPillsLive() {
+  const total = jobTotal || ORDER.length;
+  const shown = ORDER.slice(0, 16);
+  $("#genPills").innerHTML = shown.map((r, i) => {
+    const done = i < genDone;
+    return `<span class="pill ${done ? "is-done" : ""}"><span class="material-symbols-outlined">${done ? "check_circle" : "schedule"}</span>${esc(r.size)} · ${esc(r.number)}</span>`;
+  }).join("") + (total > 16 ? `<span class="pill">+${total - 16}</span>` : "");
+}
 // ====== Panel 4 · review (대량 대응 + 상세 모달) ======
 function reviewView() {
   let list = RESULTS.map((r, i) => ({ ...r, _i: i }));
@@ -649,7 +765,7 @@ function renderReview() {
         <div class="verdict__sub">${allPass ? "색은 참고용이며 실제 출력색은 공장 기준입니다." : `${warnCount}건 확인 필요 — 결과를 클릭해 상세를 검수하세요.`}</div>
       </div>
     </div>
-    <button class="btn btn--primary"><span class="material-symbols-outlined">download</span>ZIP 다운로드(${outFmt()})</button>`;
+    <button class="btn btn--primary" id="zipBtn"><span class="material-symbols-outlined">download</span>ZIP 다운로드(${outFmt()})</button>`;
 
   // 둘 다(both)일 때 ZIP 하위폴더 안내 (의뢰 6)
   $("#fmtNote").innerHTML = outFmtKey() === "both" ? `
@@ -699,10 +815,14 @@ function renderReview() {
     $("#reviewGrid").className = "grid-4";
     $("#reviewGrid").innerHTML = pageItems.map((r) => {
       const pass = r.status === "pass";
+      // 실 미리보기 PNG 가 있으면 배경으로 깔고, 없으면 기존 아이콘 placeholder.
+      const imgBg = r.url
+        ? `background-image:url('${r.url}'); background-size:contain; background-repeat:no-repeat; background-position:center; background-color:var(--surface-sunken);`
+        : "";
       return `
         <div class="tile card--interactive" data-open="${r._i}" style="cursor:pointer;">
-          <div class="tile__img">
-            <span class="material-symbols-outlined">checkroom</span>
+          <div class="tile__img" style="${imgBg}">
+            ${r.url ? "" : '<span class="material-symbols-outlined">checkroom</span>'}
             <span class="tile__num">${esc(r.number)}</span>
             <span class="tile__badge"><span class="badge ${pass ? "badge--pass" : "badge--warn"} badge--sm"><span class="material-symbols-outlined">${pass ? "check" : "warning"}</span>${pass ? "PASS" : "확인"}</span></span>
           </div>
@@ -715,6 +835,10 @@ function renderReview() {
   }
 
   renderPager($("#reviewPager"), view.length, rPage, R_PAGE, (p) => { rPage = p; renderReview(); });
+
+  // ZIP 다운로드: 선택 형식으로 /api/jobs/{id}/zip?format= 을 받아 저장한다.
+  const zb = $("#zipBtn");
+  if (zb) zb.addEventListener("click", () => downloadZip(apiFmt()));
 
   // wire
   $("#reviewControls").querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => { rTab = t.dataset.tab; rPage = 1; renderReview(); }));
@@ -767,11 +891,12 @@ function renderModal() {
       </div>
       <div class="lb__body">
         <div class="lb__preview">
-          <div class="lb__jersey">
+          <div class="lb__jersey" style="${r.url ? `background-image:url('${r.url}'); background-size:contain; background-repeat:no-repeat; background-position:center;` : ""}">
+            ${r.url ? "" : `
             <div class="lb__overlay lb__overlay--number" style="left:34%; top:20%; width:32%; height:18%;"><span class="tag">배번</span>${esc(r.number)}</div>
-            <div class="lb__overlay lb__overlay--name" style="left:28%; top:48%; width:44%; height:11%; font-size:13px;"><span class="tag">이름</span>${esc(r.name)}</div>
+            <div class="lb__overlay lb__overlay--name" style="left:28%; top:48%; width:44%; height:11%; font-size:13px;"><span class="tag">이름</span>${esc(r.name)}</div>`}
           </div>
-          <div class="lb__zoomtag"><span class="material-symbols-outlined">center_focus_strong</span>배번·이름 영역 오버레이 (preset 좌표)</div>
+          <div class="lb__zoomtag"><span class="material-symbols-outlined">center_focus_strong</span>${r.url ? "실제 합성 미리보기" : "배번·이름 영역 오버레이 (preset 좌표)"}</div>
         </div>
         <div class="lb__side">
           <div>
@@ -784,7 +909,7 @@ function renderModal() {
         <span class="muted" style="font:var(--text-caption);">←/→ 이동 · Esc 닫기</span>
         <div class="row" style="gap:8px;">
           <button class="btn btn--secondary btn--sm" id="mNext2">다음<span class="material-symbols-outlined">arrow_forward</span></button>
-          <button class="btn btn--primary btn--sm"><span class="material-symbols-outlined">download</span>이 파일 다운로드</button>
+          <button class="btn btn--primary btn--sm" id="mDownload"><span class="material-symbols-outlined">download</span>이 파일 다운로드</button>
         </div>
       </div>
     </div>`;
@@ -792,6 +917,9 @@ function renderModal() {
   $("#mNext").addEventListener("click", () => modalStep(1));
   $("#mNext2").addEventListener("click", () => modalStep(1));
   $("#mClose").addEventListener("click", closeModal);
+  // '이 파일 다운로드': 현재 형식 선택에 맞춰 해당 파일을 받는다(단건 경로 없으면 ZIP).
+  const md = $("#mDownload");
+  if (md) md.addEventListener("click", () => downloadOne(r, apiFmt()));
 }
 $("#lightbox").addEventListener("click", (e) => { if (e.target.id === "lightbox") closeModal(); });
 document.addEventListener("keydown", (e) => {
@@ -819,7 +947,11 @@ function renderSummary() {
 
 // ====== Step orchestration ======
 function canAdvance() {
-  return [!!patternId, design === "pass", ORDER.length > 0, genDone >= RESULTS.length, true][step];
+  // 디자인: pass(정상) 또는 warn(완성본이지만 진행 허용) 이면 다음 단계로.
+  const designOk = design === "pass" || design === "warn";
+  // 생성 단계(3): 작업이 done 으로 끝나 결과(jobResult)가 도착하면 검수로 진행.
+  const genOk = !!jobResult && genDone >= (jobTotal || 1);
+  return [!!patternId, designOk, ORDER.length > 0, genOk, true][step];
 }
 function showPanel() {
   for (let i = 0; i < 5; i++) $("#panel-" + i).classList.toggle("hidden", i !== step);
@@ -846,12 +978,15 @@ function goTo(n) {
   step = Math.max(0, Math.min(4, n));
   if (step === 3) startGenerate(); else clearInterval(genTimer);
   if (step === 4) renderReview();
-  if (step !== 3) { $("#genProgress").classList.remove("progress--pass"); $("#genCancel").classList.remove("hidden"); $("#genLabel").textContent = outFmt() + " 생성 중…"; }
+  if (step !== 3) { $("#genProgress").classList.remove("progress--pass", "progress--fail"); $("#genCancel").classList.remove("hidden"); $("#genLabel").textContent = outFmt() + " 생성 중…"; }
   update();
 }
 
 $("#btnPrev").addEventListener("click", () => goTo(step - 1));
-$("#btnNext").addEventListener("click", () => { if (step < 4) goTo(step + 1); });
+$("#btnNext").addEventListener("click", () => {
+  if (step < 4) goTo(step + 1);
+  else downloadZip(apiFmt());   // 검수 단계에서 '다음' = ZIP 다운로드
+});
 document.addEventListener("click", (e) => { if (e.target.closest("#genCancel")) { clearInterval(genTimer); goTo(2); } });
 
 // ====== 서버 헬스체크 → 사이드바 '서버 연결됨' 표식 ======
@@ -891,12 +1026,25 @@ function loadPatterns() {
     });
 }
 
+// ====== 설정 기본값(출력 형식) 로드 ======
+// 세그먼트를 아직 안 눌렀을 때(localStorage=vector) API 로 보낼 기본 형식을 정한다.
+function loadSettings() {
+  return fetch("/api/settings")
+    .then((r) => r.ok ? r.json() : Promise.reject())
+    .then((s) => {
+      const f = (s.output_format || "pdf").toLowerCase();
+      serverFmtDefault = (f === "eps" || f === "both") ? f : "pdf";
+    })
+    .catch(() => { serverFmtDefault = "pdf"; });
+}
+
 // ====== Init ======
 renderPatterns();   // 처음엔 빈 화면(패턴 도착 전)
 renderDesign();
 renderOrder();
 update();
 refreshServerPill();
+loadSettings();     // 출력 형식 기본값
 loadPatterns();     // 서버에서 실제 패턴을 받아 다시 그린다.
 </script>
 </body>
