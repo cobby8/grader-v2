@@ -3,14 +3,16 @@
 ## 파일별 요약
 | 파일 | 항목 수 | 최종 업데이트 |
 |------|--------|------------|
-| architecture.md | 6 | 2026-06-20 |
+| architecture.md | 7 | 2026-06-20 |
 | errors.md | 6 | 2026-06-20 |
 | conventions.md | 3 | 2026-06-15 |
 | decisions.md | 10 | 2026-06-20 |
 | lessons.md | 1 | 2026-06-15 |
 
 ## 최근 추가된 지식 (최근 5건)
-- [2026-06-20] errors: 자산 결함(원본 .ai 사이즈 중복: 3XL≡5XL) — 조각수·viewBox·정렬·verify·selftest 6신호 다 초록불인데 치수만 틀림. 인접 사이즈 좌표 동일 검사(단조성 가드)만 탐지. + disabled 봉인이 한 경로(job)만 막고 다른 경로(grade)는 통과 → sizes 밖 disabled_sizes로 이동
+- [2026-06-20] architecture: 웹 도구 — webapp/ FastAPI(정적 _handoff 복사본 서빙 + /api: patterns·order/parse·design/check 5케이스·jobs 비동기·preview·zip·patterns등록·settings). 엔진 호출만, 빌드0, 폴더+JSON. 출력형식 PDF/EPS/both(flatten Form그룹제거→eps2write, 페이지 /CS 보존, GS 없으면 PDF fallback). 디자인 본체는 "PDF 호환 저장" 필수(아니면 3.4KB 흰화면)
+- [2026-06-20] errors: 자산 결함(원본 .ai 사이즈 중복: 3XL≡5XL) — 6신호 초록불인데 치수만 틀림. 인접 사이즈 좌표 동일 검사(단조성 가드)만 탐지. + disabled는 sizes 밖 disabled_sizes로(grade/job 양쪽 안전)
+- [2026-06-20] decisions: 정합보정 4이슈 — 번호 잉크bbox 중앙정렬 / 재단선 extra_ops 클립밖 / 암홀X 3조각+보조선필터 AND / 번호 글리프셋(폰트 폴백)
 - [2026-06-20] decisions: 정합보정 4이슈 — 번호 잉크bbox 중앙정렬(advance 아님) / 재단선=디자인 빨강stroke를 extra_ops 클립밖 드로잉 / 암홀X 3조각(앞·뒤·밴드) + 보조선필터 OR→AND+최소면적 / 번호=디자이너 outline 0~9 글리프셋(없으면 폰트 폴백)
 - [2026-06-19] errors: V넥 변환 함정 — viewBox 세로/음수좌표면 비-XL 앞판 소실, 비-XL 미리보기 육안 필수. + STIZ 헤더 nbsp
 - [2026-06-19] decisions: 완성본기준 주입 통합 — path SVG svg_normalize 전처리 / 글자=디자인좌표 ops를 조각 transform 감싸 주입 / STIZ 신양식 파서
