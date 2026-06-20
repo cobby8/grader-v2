@@ -1,0 +1,569 @@
+<!-- @dsCard group="grader · 정적 핸드오프" viewport="1280x3420" name="상태 · 엣지케이스 명세" subtitle="빈·로딩·업로드·추출실패·검증·모달·토스트·대량·조각매핑 · 시안보강(본체누락·글리프셋·자동추출·건너뜀) -->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>STIZ grader · 상태 명세</title>
+<link rel="icon" href="../assets/logos/stiz-favicon-32.png" />
+<link rel="stylesheet" href="../styles.css" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-25..0" />
+<link rel="stylesheet" href="app.css" />
+<style>
+  body { background: var(--surface-canvas); }
+  .doc { max-width: 1216px; margin: 0 auto; padding: 40px var(--space-8) 72px; }
+  .doc__head { border-bottom: 1px solid var(--border-subtle); padding-bottom: 22px; margin-bottom: 36px;
+    display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
+  .doc__head img { height: 24px; }
+  .block { margin-bottom: 44px; }
+  .block > h2 { font: var(--text-h2); color: var(--text-strong); margin-bottom: 4px; }
+  .block > p { font: var(--text-sm); color: var(--text-muted); margin-bottom: 20px; }
+  .specgrid { display: grid; gap: 16px; }
+  .g2 { grid-template-columns: repeat(2, 1fr); }
+  .g3 { grid-template-columns: repeat(3, 1fr); }
+  .g4 { grid-template-columns: repeat(4, 1fr); }
+  .spec { border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); overflow: hidden; background: var(--surface-card); display: flex; flex-direction: column; }
+  .spec__cap { padding: 9px 14px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken);
+    display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .spec__name { font: var(--text-sm-strong); color: var(--text-strong); }
+  .spec__tag { font: var(--text-caption); font-family: var(--font-mono); color: var(--text-subtle); white-space: nowrap; }
+  .spec__body { padding: 18px; flex: 1; display: flex; flex-direction: column; gap: 12px; justify-content: center; }
+  .spec__body.center { align-items: center; }
+  .spec__body.canvas { background: var(--surface-canvas); }
+</style>
+</head>
+<body>
+<div class="doc">
+  <header class="doc__head">
+    <div>
+      <div class="eyebrow" style="margin-bottom:8px;">FACTORY OUTPUT · STATE SPEC</div>
+      <h2 style="font:var(--text-h1); color:var(--text-strong); margin-bottom:4px;">상태 · 엣지케이스 명세</h2>
+      <p style="font:var(--text-sm); color:var(--text-muted);">모든 화면의 빈 상태·로딩·부분 실패·경고를 한 곳에. 각 specimen은 app.css 클래스 그대로입니다.</p>
+    </div>
+    <img src="../assets/logos/stiz-logo-black.png" alt="STIZ" />
+  </header>
+
+  <!-- 1. 빈 상태 -->
+  <section class="block">
+    <h2>1 · 빈 상태</h2>
+    <p>처음 진입했거나 필터 결과가 없을 때. 다음에 할 일을 한 줄로 안내합니다.</p>
+    <div class="specgrid g3">
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">패턴 없음</span><span class="spec__tag">.empty</span></div>
+        <div class="spec__body canvas">
+          <div class="empty">
+            <div class="empty__icon"><span class="material-symbols-outlined">dashboard_customize</span></div>
+            <div class="empty__title">등록된 패턴이 없습니다</div>
+            <div class="empty__desc">패턴을 먼저 등록하면 작업 화면에서 선택할 수 있습니다.</div>
+            <button class="btn btn--primary" style="margin-top:14px;"><span class="material-symbols-outlined">add</span>패턴 등록</button>
+          </div>
+        </div>
+      </div>
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">작업 기록 없음</span><span class="spec__tag">.empty</span></div>
+        <div class="spec__body canvas">
+          <div class="empty">
+            <div class="empty__icon"><span class="material-symbols-outlined">history</span></div>
+            <div class="empty__title">작업 기록이 없습니다</div>
+            <div class="empty__desc">주문을 생성하면 여기에 기록됩니다.</div>
+          </div>
+        </div>
+      </div>
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">필터 결과 없음</span><span class="spec__tag">.empty</span></div>
+        <div class="spec__body canvas">
+          <div class="empty">
+            <div class="empty__icon"><span class="material-symbols-outlined">filter_alt_off</span></div>
+            <div class="empty__title">해당 상태의 작업이 없습니다</div>
+            <div class="empty__desc">다른 탭을 선택하거나 필터를 해제하세요.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. 로딩 / 진행 -->
+  <section class="block">
+    <h2>2 · 로딩 · 진행</h2>
+    <p>업로드·생성·다운로드는 시간이 걸립니다. 진행률과 예상 상태를 분명히 보여줍니다.</p>
+    <div class="specgrid g4">
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">생성 진행 중</span><span class="spec__tag">.progress</span></div>
+        <div class="spec__body">
+          <div class="progress progress--lg">
+            <div class="progress__head"><span class="progress__label">EPS 생성 중…</span><span class="progress__count">완료 <strong>32</strong> / 전체 48</span></div>
+            <div class="progress__track"><div class="progress__fill" style="width:66%"></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">생성 완료</span><span class="spec__tag">--pass</span></div>
+        <div class="spec__body">
+          <div class="progress progress--lg progress--pass">
+            <div class="progress__head"><span class="progress__label">생성 완료</span><span class="progress__count">완료 <strong>48</strong> / 전체 48</span></div>
+            <div class="progress__track"><div class="progress__fill" style="width:100%"></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">버튼 로딩</span><span class="spec__tag">.spinner</span></div>
+        <div class="spec__body center">
+          <button class="btn btn--primary" disabled><span class="spinner" style="border-top-color:#fff; border-color:rgba(255,255,255,.4);"></span>생성 중…</button>
+        </div>
+      </div>
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">다운로드 준비 중</span><span class="spec__tag">.toast--info</span></div>
+        <div class="spec__body center">
+          <div class="toast toast--info" style="box-shadow:none; min-width:0;">
+            <span class="material-symbols-outlined toast__icon">hourglass_top</span>
+            <div><div class="toast__title">ZIP 준비 중</div><div class="toast__body">48개 파일을 묶고 있습니다</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. 업로드 상태 -->
+  <section class="block">
+    <h2>3 · 디자인 업로드 상태</h2>
+    <p>유휴 → 점검 결과. 투명도·형식 문제는 친절하지만 단호하게 진행을 막습니다.</p>
+    <div class="specgrid g2">
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">유휴 (드롭존)</span><span class="spec__tag">.dropzone</span></div>
+        <div class="spec__body">
+          <div class="dropzone" style="cursor:default;">
+            <span class="material-symbols-outlined dropzone__icon">upload_file</span>
+            <span class="dropzone__title">디자인 파일을 업로드하세요</span>
+            <span class="dropzone__hint">끌어다 놓거나 클릭하여 선택</span>
+            <span class="dropzone__accept">PDF 호환 AI / PDF · 기준 사이즈 1개</span>
+          </div>
+        </div>
+      </div>
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">정상 (평탄화 완료)</span><span class="spec__tag">.filecard--pass</span></div>
+        <div class="spec__body">
+          <div class="filecard filecard--pass">
+            <span class="material-symbols-outlined filecard__chip">check_circle</span>
+            <div class="filecard__body"><div class="filecard__name">u-neck_M_기준_flat.pdf</div><div class="filecard__meta">CMYK · 투명도 없음 · 평탄화 완료 · 2.4MB</div></div>
+            <button class="icon-btn icon-btn--sm" aria-label="제거"><span class="material-symbols-outlined">close</span></button>
+          </div>
+          <div class="note" style="padding:0;"><span class="material-symbols-outlined">check</span>다음 단계로 진행할 수 있습니다.</div>
+        </div>
+      </div>
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">투명도 경고 (진행 차단)</span><span class="spec__tag">.alert--warn</span></div>
+        <div class="spec__body">
+          <div class="filecard filecard--warn">
+            <span class="material-symbols-outlined filecard__chip">warning</span>
+            <div class="filecard__body"><div class="filecard__name">design_final.pdf</div><div class="filecard__meta">CMYK · 투명도 발견 · 3.1MB</div></div>
+            <button class="icon-btn icon-btn--sm" aria-label="제거"><span class="material-symbols-outlined">close</span></button>
+          </div>
+          <div class="alert alert--warn">
+            <span class="material-symbols-outlined alert__icon">warning</span>
+            <div>
+              <div class="alert__title">이 디자인은 투명도가 있어 출력 시 래스터화됩니다</div>
+              <div class="alert__body">원본에서 투명도를 평탄화한 뒤 다시 업로드하세요. 평탄화 전에는 다음 단계로 진행할 수 없습니다.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">형식 오류 (PostScript AI)</span><span class="spec__tag">.alert--fail</span></div>
+        <div class="spec__body">
+          <div class="filecard filecard--fail">
+            <span class="material-symbols-outlined filecard__chip">error</span>
+            <div class="filecard__body"><div class="filecard__name">old_design.ai</div><div class="filecard__meta">PostScript 형식 · 지원하지 않음</div></div>
+            <button class="icon-btn icon-btn--sm" aria-label="제거"><span class="material-symbols-outlined">close</span></button>
+          </div>
+          <div class="alert alert--fail">
+            <span class="material-symbols-outlined alert__icon">error</span>
+            <div>
+              <div class="alert__title">PDF 호환 형식이 아닙니다</div>
+              <div class="alert__body">PostScript 기반 AI는 받을 수 없습니다. Illustrator에서 "PDF 호환 파일 만들기"로 다시 저장해 업로드하세요.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. 주문 추출 -->
+  <section class="block">
+    <h2>4 · 주문서 추출 표</h2>
+    <p>엑셀에서 자동 추출. 추출 실패한 셀은 붉게 강조하고 인라인 입력을 요구합니다.</p>
+    <div class="specgrid" style="grid-template-columns:1fr;">
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">추출 실패 셀 강조 + 확인 필요 배지</span><span class="spec__tag">.dtable--edit · .is-warn</span></div>
+        <div class="spec__body">
+          <div class="row" style="gap:8px; margin-bottom:4px;">
+            <span class="muted" style="font:var(--text-sm);">order_2026.xlsx에서 <strong class="strong">6행</strong> 추출됨</span>
+            <span class="badge badge--warn badge--sm"><span class="material-symbols-outlined">error</span>1개 확인 필요</span>
+          </div>
+          <div class="tablewrap">
+            <table class="dtable dtable--edit">
+              <thead><tr><th>사이즈</th><th class="num">수량</th><th>이름</th><th class="num">배번</th><th style="width:40px;"></th></tr></thead>
+              <tbody>
+                <tr><td><input class="cell-input" value="S" style="font-weight:600;color:var(--text-strong);"></td><td><input class="cell-input num" value="2"></td><td><input class="cell-input" value="김민준"></td><td><input class="cell-input num mono" value="07"></td><td style="text-align:center;"><button class="icon-btn icon-btn--sm icon-btn--danger" aria-label="삭제"><span class="material-symbols-outlined">close</span></button></td></tr>
+                <tr class="is-warn"><td><input class="cell-input" value="2XL" style="font-weight:600;color:var(--text-strong);"></td><td><input class="cell-input num" value="1"></td><td><input class="cell-input is-error" value="" placeholder="추출 실패 — 입력 필요"><div class="cell-error" style="margin-top:3px;padding-left:7px;"><span class="material-symbols-outlined">error</span>추출 실패 — 입력 필요</div></td><td><input class="cell-input num mono" value="44"></td><td style="text-align:center;"><button class="icon-btn icon-btn--sm icon-btn--danger" aria-label="삭제"><span class="material-symbols-outlined">close</span></button></td></tr>
+                <tr><td><input class="cell-input" value="M" style="font-weight:600;color:var(--text-strong);"></td><td><input class="cell-input num" value="4"></td><td><input class="cell-input" value="정하준"></td><td><input class="cell-input num mono" value="21"></td><td style="text-align:center;"><button class="icon-btn icon-btn--sm icon-btn--danger" aria-label="삭제"><span class="material-symbols-outlined">close</span></button></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. 검증 결과 -->
+  <section class="block">
+    <h2>5 · 검증 결과 가시성</h2>
+    <p>"이 결과를 공장에 보내도 되는가"가 한눈에. 제품 신뢰가 여기서 나옵니다.</p>
+    <div class="specgrid g2" style="margin-bottom:16px;">
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">전부 전달 가능</span><span class="spec__tag">.verdict--pass</span></div>
+        <div class="spec__body">
+          <div class="verdict verdict--pass">
+            <div class="verdict__left"><span class="material-symbols-outlined verdict__icon">verified</span>
+              <div><div class="verdict__title tnum">48 / 48 공장 전달 가능</div><div class="verdict__sub">색은 참고용이며 실제 출력색은 공장 기준입니다.</div></div></div>
+            <button class="btn btn--primary"><span class="material-symbols-outlined">download</span>ZIP 다운로드</button>
+          </div>
+        </div>
+      </div>
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">부분 실패</span><span class="spec__tag">.verdict--warn</span></div>
+        <div class="spec__body">
+          <div class="verdict verdict--warn">
+            <div class="verdict__left"><span class="material-symbols-outlined verdict__icon">warning</span>
+              <div><div class="verdict__title tnum">46 / 48 공장 전달 가능</div><div class="verdict__sub">2건 확인 필요 — 해당 항목만 재작업하세요.</div></div></div>
+            <button class="btn btn--secondary"><span class="material-symbols-outlined">filter_alt</span>확인 필요만</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="specgrid g4">
+      <div class="spec"><div class="spec__cap"><span class="spec__name">PASS 타일</span><span class="spec__tag">.tile</span></div>
+        <div class="spec__body center">
+          <div class="tile" style="width:140px;"><div class="tile__img"><span class="material-symbols-outlined">checkroom</span><span class="tile__num">07</span><span class="tile__badge"><span class="badge badge--pass badge--sm"><span class="material-symbols-outlined">check</span>PASS</span></span></div><div class="tile__foot"><div class="tile__name">김민준</div><div class="tile__size">S</div></div></div>
+        </div>
+      </div>
+      <div class="spec"><div class="spec__cap"><span class="spec__name">확인 필요 타일</span><span class="spec__tag">.badge--warn</span></div>
+        <div class="spec__body center">
+          <div class="tile" style="width:140px;"><div class="tile__img"><span class="material-symbols-outlined">checkroom</span><span class="tile__num">44</span><span class="tile__badge"><span class="badge badge--warn badge--sm"><span class="material-symbols-outlined">warning</span>확인</span></span></div><div class="tile__foot"><div class="tile__name">강서준</div><div class="tile__size">2XL</div></div></div>
+        </div>
+      </div>
+      <div class="spec"><div class="spec__cap"><span class="spec__name">검증 배지</span><span class="spec__tag">.badge</span></div>
+        <div class="spec__body" style="justify-content:center;">
+          <div class="wrap-2"><span class="badge badge--pass badge--sm"><span class="material-symbols-outlined">check_circle</span>전달 가능</span><span class="badge badge--warn badge--sm"><span class="material-symbols-outlined">warning</span>투명도</span><span class="badge badge--fail badge--sm"><span class="material-symbols-outlined">cancel</span>오류</span><span class="badge badge--info badge--sm"><span class="material-symbols-outlined">info</span>안내</span></div>
+        </div>
+      </div>
+      <div class="spec"><div class="spec__cap"><span class="spec__name">진행 칩</span><span class="spec__tag">.pill</span></div>
+        <div class="spec__body" style="justify-content:center;">
+          <div class="wrap-2" style="gap:6px;"><span class="pill is-done"><span class="material-symbols-outlined">check_circle</span>M · 07</span><span class="pill"><span class="material-symbols-outlined">schedule</span>L · 11</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6. 경고 모달 + 토스트 -->
+  <section class="block">
+    <h2>6 · 경고 모달 · 토스트</h2>
+    <p>되돌릴 수 없는 작업은 모달로 확인. 완료·오류는 토스트로 알립니다.</p>
+    <div class="specgrid g2">
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">삭제 확인 모달</span><span class="spec__tag">.dialog</span></div>
+        <div class="spec__body canvas" style="padding:24px;">
+          <div class="dialog" style="box-shadow:var(--shadow-md); animation:none;">
+            <div class="dialog__icon is-fail"><span class="material-symbols-outlined" style="font-size:24px;">delete</span></div>
+            <div class="dialog__title">패턴을 삭제할까요?</div>
+            <div class="dialog__body">'U넥 양면 스탠다드'와 등록된 사이즈 파일·영역 설정이 모두 삭제됩니다. 이 작업은 되돌릴 수 없습니다.</div>
+            <div class="dialog__foot"><button class="btn btn--secondary">취소</button><button class="btn btn--danger">삭제</button></div>
+          </div>
+        </div>
+      </div>
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">토스트 4종</span><span class="spec__tag">.toast--*</span></div>
+        <div class="spec__body canvas">
+          <div class="toast toast--pass" style="position:static;"><span class="material-symbols-outlined toast__icon">check_circle</span><div><div class="toast__title">패턴이 저장되었습니다</div><div class="toast__body">배번 1개 · 이름 1개 · 사이즈 4/7</div></div></div>
+          <div class="toast toast--warn" style="position:static;"><span class="material-symbols-outlined toast__icon">warning</span><div><div class="toast__title">2건은 확인이 필요합니다</div><div class="toast__body">검수 그리드에서 확인하세요</div></div></div>
+          <div class="toast toast--fail" style="position:static;"><span class="material-symbols-outlined toast__icon">error</span><div><div class="toast__title">업로드 실패</div><div class="toast__body">지원하지 않는 형식입니다</div></div></div>
+          <div class="toast toast--info" style="position:static;"><span class="material-symbols-outlined toast__icon">info</span><div><div class="toast__title">서버에 저장됨</div><div class="toast__body">작업 기록에서 다시 열 수 있습니다</div></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7. 버튼 -->
+  <section class="block" style="margin-bottom:0;">
+    <h2>7 · 버튼 상태</h2>
+    <p>주(검정) · 보조 · 고스트 · 위험(빨강). 기본 / 비활성 / 로딩.</p>
+    <div class="spec">
+      <div class="spec__cap"><span class="spec__name">변형 × 상태</span><span class="spec__tag">.btn--*</span></div>
+      <div class="spec__body">
+        <div class="wrap-2" style="gap:10px; align-items:center;">
+          <button class="btn btn--primary">생성</button>
+          <button class="btn btn--secondary">취소</button>
+          <button class="btn btn--ghost"><span class="material-symbols-outlined">arrow_back</span>이전</button>
+          <button class="btn btn--danger"><span class="material-symbols-outlined">delete</span>삭제</button>
+          <button class="btn btn--primary" disabled>다음 단계<span class="material-symbols-outlined">arrow_forward</span></button>
+          <button class="btn btn--primary"><span class="material-symbols-outlined">download</span>ZIP 다운로드</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8. 검수 상세(줌) 모달 · 2차 -->
+  <section class="block">
+    <h2>8 · 검수 상세(줌) 모달 <span style="font:var(--text-sm); color:var(--text-subtle);">· 2차 추가</span></h2>
+    <p>검수 그리드의 결과 1건을 클릭하면 열림. 배번·이름 영역을 확대 검수하고 검증 항목을 항목별로 확인합니다. ←/→ 이동, Esc 닫기.</p>
+    <div class="spec">
+      <div class="spec__cap"><span class="spec__name">상세 모달 (확인 필요 결과)</span><span class="spec__tag">.lightbox · .lb</span></div>
+      <div class="spec__body canvas" style="padding:0;">
+        <div class="lb" style="box-shadow:var(--shadow-md); max-width:none;">
+          <div class="lb__head">
+            <div class="lb__title">
+              <span class="num">44</span>
+              <div><div class="meta">강서준 · 2XL</div><div class="sub">23 / 48 · 확인 필요</div></div>
+              <span class="badge badge--warn badge--sm" style="margin-left:4px;"><span class="material-symbols-outlined">warning</span>확인 필요</span>
+            </div>
+            <div class="lb__nav">
+              <button class="icon-btn" aria-label="이전"><span class="material-symbols-outlined">chevron_left</span></button>
+              <button class="icon-btn" aria-label="다음"><span class="material-symbols-outlined">chevron_right</span></button>
+              <button class="icon-btn" aria-label="닫기"><span class="material-symbols-outlined">close</span></button>
+            </div>
+          </div>
+          <div class="lb__body">
+            <div class="lb__preview">
+              <div class="lb__jersey">
+                <div class="lb__overlay lb__overlay--number" style="left:34%; top:20%; width:32%; height:18%;"><span class="tag">배번</span>44</div>
+                <div class="lb__overlay lb__overlay--name" style="left:28%; top:48%; width:44%; height:11%; font-size:13px;"><span class="tag">이름</span>강서준</div>
+              </div>
+              <div class="lb__zoomtag"><span class="material-symbols-outlined">center_focus_strong</span>배번·이름 영역 오버레이 (preset 좌표)</div>
+            </div>
+            <div class="lb__side">
+              <div>
+                <div class="eyebrow" style="margin-bottom:8px;">검증 항목</div>
+                <div class="lb__checks">
+                  <div class="check"><span class="material-symbols-outlined check__ic ok">check_circle</span><div><div class="check__name">무손실 보존</div><div class="check__detail">원본 벡터 경로를 손실 없이 보존</div></div></div>
+                  <div class="check"><span class="material-symbols-outlined check__ic ok">check_circle</span><div><div class="check__name">단일 임베드</div><div class="check__detail">디자인을 1회만 임베드</div></div></div>
+                  <div class="check"><span class="material-symbols-outlined check__ic ok">check_circle</span><div><div class="check__name">CMYK 유지</div><div class="check__detail">색공간 CMYK 그대로 유지</div></div></div>
+                  <div class="check"><span class="material-symbols-outlined check__ic no">cancel</span><div><div class="check__name">투명도</div><div class="check__detail no">원본에 투명도가 남아 출력 시 래스터화됩니다. 평탄화 후 재생성하세요.</div></div></div>
+                  <div class="check"><span class="material-symbols-outlined check__ic ok">check_circle</span><div><div class="check__name">합성 정확</div><div class="check__detail">조각·배번·이름 위치 정확</div></div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="lb__foot">
+            <span class="muted" style="font:var(--text-caption);">←/→ 이동 · Esc 닫기</span>
+            <div class="row" style="gap:8px;">
+              <button class="btn btn--secondary btn--sm">다음<span class="material-symbols-outlined">arrow_forward</span></button>
+              <button class="btn btn--primary btn--sm"><span class="material-symbols-outlined">download</span>이 파일 다운로드</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 9. 대량 주문 UX · 2차 -->
+  <section class="block">
+    <h2>9 · 대량 주문 UX <span style="font:var(--text-sm); color:var(--text-subtle);">· 2차 추가</span></h2>
+    <p>수십~수백 선수에서도 무너지지 않게: 검색·필터·정렬 툴바, 결과 수 요약, 페이지네이션, 고정 헤더.</p>
+    <div class="specgrid g2" style="margin-bottom:16px;">
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">테이블 툴바</span><span class="spec__tag">.toolbar · .search · .fchip · .select</span></div>
+        <div class="spec__body">
+          <div class="toolbar">
+            <div class="search"><span class="material-symbols-outlined">search</span><input type="text" placeholder="이름 · 배번 검색" /></div>
+            <button class="fchip is-active"><span class="material-symbols-outlined">filter_alt</span>확인 필요만<span class="count">3</span></button>
+            <select class="select"><option>정렬: 사이즈</option></select>
+          </div>
+        </div>
+      </div>
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">페이지네이션</span><span class="spec__tag">.pager</span></div>
+        <div class="spec__body">
+          <div class="pager">
+            <span class="pager__info">13–24 / 48</span>
+            <div class="pager__ctrl">
+              <button class="pager__btn" aria-label="이전"><span class="material-symbols-outlined">chevron_left</span></button>
+              <button class="pager__btn">1</button>
+              <button class="pager__btn is-active">2</button>
+              <button class="pager__btn">3</button>
+              <span class="pager__dots">…</span>
+              <button class="pager__btn">4</button>
+              <button class="pager__btn" aria-label="다음"><span class="material-symbols-outlined">chevron_right</span></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="spec">
+      <div class="spec__cap"><span class="spec__name">검수 필터 탭 + 결과 요약</span><span class="spec__tag">.tabs · .tab__count</span></div>
+      <div class="spec__body">
+        <div class="tabs">
+          <button class="tab is-active">전체<span class="tab__count">48</span></button>
+          <button class="tab">전달 가능<span class="tab__count">45</span></button>
+          <button class="tab">확인 필요<span class="tab__count">3</span></button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10. 디자인↔조각 매핑 · 2차 -->
+  <section class="block" style="margin-bottom:0;">
+    <h2>10 · 디자인↔조각 매핑 <span style="font:var(--text-sm); color:var(--text-subtle);">· 2차 추가</span></h2>
+    <p>패턴 등록의 신규 단계. 조각을 고른 뒤 디자인 위에 영역을 그리면 좌표가 페이지 pt(좌하단 원점)로 환산됩니다. 미매핑 조각은 진행 차단.</p>
+    <div class="specgrid g3">
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">조각 행 · 지정됨</span><span class="spec__tag">.piecerow</span></div>
+        <div class="spec__body">
+          <div class="piecerow"><span class="piecerow__dot" style="background:#2F6BD8;"></span><div style="flex:1;"><div class="piecerow__name">앞판</div><div class="coord" style="margin-top:4px; display:inline-block;">[468, 2877, 2098, 5287]</div></div><span class="piecerow__state is-set"><span class="material-symbols-outlined">check_circle</span>지정됨</span></div>
+        </div>
+      </div>
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">조각 행 · 미지정</span><span class="spec__tag">.piecerow</span></div>
+        <div class="spec__body">
+          <div class="piecerow"><span class="piecerow__dot" style="background:#C25A2E;"></span><div style="flex:1;"><div class="piecerow__name">소매</div><div class="coord" style="margin-top:4px; display:inline-block;">[미지정]</div></div><span class="piecerow__state"><span class="material-symbols-outlined">radio_button_unchecked</span>지정</span></div>
+        </div>
+      </div>
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">미매핑 경고</span><span class="spec__tag">.alert--warn</span></div>
+        <div class="spec__body">
+          <div class="alert alert--warn"><span class="material-symbols-outlined alert__icon">warning</span><div><div class="alert__title">미매핑 조각 1개</div><div class="alert__body">소매 영역을 지정해야 다음 단계로 진행할 수 있습니다.</div></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11. 디자인 업로드 점검 · 시안보강 -->
+  <section class="block">
+    <h2>11 · 디자인 업로드 점검 <span style="font:var(--text-sm); color:var(--text-subtle);">· 시안보강</span></h2>
+    <p>빈 본체 템플릿 명시 · 본체 누락(PDF는 맞지만 그림이 빔)·베이크된 글자 경고·통과 시 본체 포함 ✓. 모두 진행 차단.</p>
+    <div class="specgrid g2">
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">빈 본체 드롭존</span><span class="spec__tag">.dropzone</span></div>
+        <div class="spec__body">
+          <div class="dropzone" style="cursor:default;">
+            <span class="material-symbols-outlined dropzone__icon">upload_file</span>
+            <span class="dropzone__title">빈 본체 템플릿을 업로드하세요</span>
+            <span class="dropzone__hint">번호·이름 없는 기준 사이즈 1개</span>
+            <span class="dropzone__accept">PDF 호환 AI / PDF · 본체 포함 필수</span>
+          </div>
+        </div>
+      </div>
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">정상 · 본체 포함 ✓</span><span class="spec__tag">.filecard--pass</span></div>
+        <div class="spec__body">
+          <div class="filecard filecard--pass">
+            <span class="material-symbols-outlined filecard__chip">check_circle</span>
+            <div class="filecard__body"><div class="filecard__name">u-neck_M_빈본체_flat.pdf</div><div class="filecard__meta">CMYK · 투명도 없음 · 본체 포함 · 2.4MB</div></div>
+            <button class="icon-btn icon-btn--sm" aria-label="제거"><span class="material-symbols-outlined">close</span></button>
+          </div>
+        </div>
+      </div>
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">본체 누락 (진행 차단)</span><span class="spec__tag">.alert--fail</span></div>
+        <div class="spec__body">
+          <div class="filecard filecard--fail">
+            <span class="material-symbols-outlined filecard__chip">error</span>
+            <div class="filecard__body"><div class="filecard__name">design_export.pdf</div><div class="filecard__meta">PDF · 본체 누락 · 0.1MB</div></div>
+            <button class="icon-btn icon-btn--sm" aria-label="제거"><span class="material-symbols-outlined">close</span></button>
+          </div>
+          <div class="alert alert--fail" style="margin-top:12px;">
+            <span class="material-symbols-outlined alert__icon">error</span>
+            <div>
+              <div class="alert__title">디자인 본체가 PDF에 포함되지 않았습니다</div>
+              <div class="alert__body">일러스트레이터에서 ‘PDF 호환 파일 만들기’를 켜고 다시 저장하면 본체가 포함됩니다. (파일은 열리지만 그림이 비어 있는 상태예요.)</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">베이크된 글자 경고</span><span class="spec__tag">.alert--warn</span></div>
+        <div class="spec__body">
+          <div class="filecard filecard--warn">
+            <span class="material-symbols-outlined filecard__chip">warning</span>
+            <div class="filecard__body"><div class="filecard__name">완성본_07_김민준.pdf</div><div class="filecard__meta">PDF · 번호·이름 베이크됨 · 2.6MB</div></div>
+            <button class="icon-btn icon-btn--sm" aria-label="제거"><span class="material-symbols-outlined">close</span></button>
+          </div>
+          <div class="alert alert--warn" style="margin-top:12px;">
+            <span class="material-symbols-outlined alert__icon">warning</span>
+            <div>
+              <div class="alert__title">이 파일엔 번호·이름이 이미 들어 있어요 — 빈 본체를 올려주세요</div>
+              <div class="alert__body">번호·이름이 박힌 완성본(샘플)은 패턴 등록의 ‘기준’으로만 쓰입니다.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 12. 검수 보강 · 시안보강 -->
+  <section class="block">
+    <h2>12 · 검수 보강 <span style="font:var(--text-sm); color:var(--text-subtle);">· 시안보강</span></h2>
+    <p>검증 체크리스트에 ‘재단선·너치 보존’ 추가 · 생성에서 제외된 주문을 사유와 함께 표시.</p>
+    <div class="specgrid g2">
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">검증 항목 (재단선·너치 포함)</span><span class="spec__tag">.check</span></div>
+        <div class="spec__body">
+          <div class="lb__checks">
+            <div class="check"><span class="material-symbols-outlined check__ic ok">check_circle</span><div><div class="check__name">CMYK 유지</div><div class="check__detail">색공간 CMYK 그대로 유지</div></div></div>
+            <div class="check"><span class="material-symbols-outlined check__ic ok">check_circle</span><div><div class="check__name">재단선·너치 보존</div><div class="check__detail">조각 외곽 재단선 3 + 너치 6</div></div></div>
+            <div class="check"><span class="material-symbols-outlined check__ic ok">check_circle</span><div><div class="check__name">합성 정확</div><div class="check__detail">조각·배번·이름 위치 정확</div></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">건너뜀 N건 배너</span><span class="spec__tag">.alert--warn</span></div>
+        <div class="spec__body">
+          <div class="alert alert--warn">
+            <span class="material-symbols-outlined alert__icon">block</span>
+            <div style="flex:1;">
+              <div class="alert__title">건너뜀 7건 — 생성에서 제외됨</div>
+              <div class="alert__body" style="margin-top:6px;">
+                <div class="row" style="gap:7px; margin-top:3px;"><span class="badge badge--warn badge--sm tnum">3XL 5건</span><span class="muted">패턴 파일 결함으로 제외</span></div>
+                <div class="row" style="gap:7px; margin-top:3px;"><span class="badge badge--warn badge--sm tnum">XS 2건</span><span class="muted">사이즈 누락 — 주문서에 없음</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 13. 패턴 등록 입력 · 시안보강 -->
+  <section class="block" style="margin-bottom:0;">
+    <h2>13 · 패턴 등록 입력 <span style="font:var(--text-sm); color:var(--text-subtle);">· 시안보강</span></h2>
+    <p>번호 글리프셋(0~9 아웃라인) 업로드 · 완성본에서 영역 자동 추출 탭.</p>
+    <div class="specgrid g2">
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">글리프셋 인식됨</span><span class="spec__tag">.filecard--pass</span></div>
+        <div class="spec__body">
+          <div class="filecard filecard--pass">
+            <span class="material-symbols-outlined filecard__chip">123</span>
+            <div class="filecard__body">
+              <div class="filecard__name">number_glyphs_0-9.ai</div>
+              <div class="row" style="gap:6px; margin-top:6px;"><span class="mono" style="font-weight:800; font-size:15px; color:var(--text-strong); width:18px; text-align:center;">0</span><span class="mono" style="font-weight:800; font-size:15px; color:var(--text-strong); width:18px; text-align:center;">1</span><span class="mono" style="font-weight:800; font-size:15px; color:var(--text-strong); width:18px; text-align:center;">2</span><span class="mono" style="font-weight:800; font-size:15px; color:var(--text-strong); width:18px; text-align:center;">3</span><span class="mono" style="font-weight:800; font-size:15px; color:var(--text-strong); width:18px; text-align:center;">…</span><span class="mono" style="font-weight:800; font-size:15px; color:var(--text-strong); width:18px; text-align:center;">9</span></div>
+              <div class="filecard__meta" style="margin-top:6px;">10자 인식됨 ✓ · 아웃라인 글리프</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="spec">
+        <div class="spec__cap"><span class="spec__name">자동 추출 탭 + 결과</span><span class="spec__tag">.seg · .filecard--pass</span></div>
+        <div class="spec__body">
+          <div class="seg" style="width:100%; margin-bottom:12px;">
+            <button class="is-active" style="flex:1;">완성본에서 자동 추출 (권장)</button>
+            <button style="flex:1;">직접 드래그</button>
+          </div>
+          <div class="filecard filecard--pass">
+            <span class="material-symbols-outlined filecard__chip">auto_awesome</span>
+            <div class="filecard__body"><div class="filecard__name">완성본_07_김민준.pdf</div><div class="filecard__meta">배번·이름 영역 자동 인식됨 ✓</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+</body>
+</html>

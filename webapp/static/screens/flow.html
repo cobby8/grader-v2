@@ -1,0 +1,185 @@
+<!-- @dsCard group="grader · 정적 핸드오프" viewport="1280x1180" name="UX 플로우 다이어그램" subtitle="3개 화면 이동 + 작업 화면 6단계 흐름 + 엣지케이스 분기" -->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>STIZ grader · UX 플로우</title>
+<link rel="icon" href="../assets/logos/stiz-favicon-32.png" />
+<link rel="stylesheet" href="../styles.css" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-25..0" />
+<link rel="stylesheet" href="app.css" />
+<style>
+  body { background: var(--surface-canvas); }
+  .doc { max-width: 1216px; margin: 0 auto; padding: 40px var(--space-8) 64px; }
+  .doc__head { border-bottom: 1px solid var(--border-subtle); padding-bottom: 22px; margin-bottom: 36px;
+    display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
+  .doc__head img { height: 24px; }
+  h2.sec { font: var(--text-h2); color: var(--text-strong); margin-bottom: 4px; }
+  .sec-sub { font: var(--text-sm); color: var(--text-muted); margin-bottom: 22px; }
+  .block { margin-bottom: 48px; }
+
+  .node {
+    background: var(--surface-card); border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg); padding: 16px; box-shadow: var(--shadow-xs);
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .node__ic { width: 38px; height: 38px; border-radius: var(--radius-md); display: flex;
+    align-items: center; justify-content: center; background: var(--surface-sunken); color: var(--text-body); }
+  .node__ic .material-symbols-outlined { font-size: 22px; }
+  .node__t { font: var(--text-body-strong); color: var(--text-strong); }
+  .node__d { font: var(--text-caption); color: var(--text-muted); }
+  .node--primary { border-color: var(--accent); box-shadow: var(--shadow-sm); }
+  .node--primary .node__ic { background: var(--stiz-black); color: #fff; }
+
+  .arrow { display: flex; align-items: center; justify-content: center; color: var(--ink-300); flex: none; }
+  .arrow .material-symbols-outlined { font-size: 24px; }
+  .arrow__label { font: var(--text-caption); color: var(--text-subtle); text-align: center; white-space: nowrap; }
+
+  .screens { display: grid; grid-template-columns: 1fr 28px 1fr 28px 1fr; align-items: center; gap: 14px; }
+  .screens .arrow { flex-direction: column; gap: 4px; }
+  .loopnote { display: flex; align-items: center; gap: 8px; margin-top: 16px; padding: 11px 14px;
+    background: var(--status-info-bg); border: 1px solid var(--status-info-border); border-radius: var(--radius-md);
+    font: var(--text-sm); color: var(--blue-700); }
+  .loopnote .material-symbols-outlined { font-size: 18px; }
+
+  .flowrow { display: flex; align-items: stretch; gap: 6px; }
+  .fstep { flex: 1; display: flex; flex-direction: column; gap: 10px; }
+  .fnode {
+    background: var(--surface-card); border: 1px solid var(--border-default);
+    border-radius: var(--radius-md); padding: 13px 12px; box-shadow: var(--shadow-xs); height: 100%;
+  }
+  .fnode__n { width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff;
+    display: flex; align-items: center; justify-content: center; font: var(--text-caption); font-weight: 700;
+    font-variant-numeric: tabular-nums; margin-bottom: 9px; }
+  .fnode__t { font: var(--text-sm-strong); color: var(--text-strong); }
+  .fnode__d { font: var(--text-caption); color: var(--text-muted); margin-top: 3px; }
+  .farrow { display: flex; align-items: center; color: var(--ink-300); padding-top: 24px; }
+  .farrow .material-symbols-outlined { font-size: 20px; }
+  .annot { font: var(--text-caption); color: var(--text-muted); padding: 0 2px; display: flex; gap: 5px; }
+  .annot .material-symbols-outlined { font-size: 14px; flex: none; margin-top: 1px; }
+  .annot--warn { color: var(--amber-700); }
+  .annot--info { color: var(--blue-700); }
+
+  .edge-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .edge { border: 1px solid; border-radius: var(--radius-lg); padding: 16px; }
+  .edge__h { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .edge__h .material-symbols-outlined { font-size: 20px; font-variation-settings: "FILL" 1; }
+  .edge__t { font: var(--text-body-strong); }
+  .edge__row { display: flex; gap: 7px; font: var(--text-sm); margin-top: 8px; }
+  .edge__k { font: var(--text-sm-strong); color: var(--text-subtle); flex: none; width: 42px; }
+  .edge--warn { background: var(--status-warn-bg); border-color: var(--status-warn-border); }
+  .edge--warn .edge__h, .edge--warn .edge__t { color: var(--amber-700); }
+  .edge--fail { background: var(--status-fail-bg); border-color: var(--status-fail-border); }
+  .edge--fail .edge__h, .edge--fail .edge__t { color: var(--red-700); }
+  .edge--info { background: var(--status-info-bg); border-color: var(--status-info-border); }
+  .edge--info .edge__h, .edge--info .edge__t { color: var(--blue-700); }
+  .edge .edge__body { color: var(--text-body); }
+</style>
+</head>
+<body>
+<div class="doc">
+  <header class="doc__head">
+    <div>
+      <div class="eyebrow" style="margin-bottom:8px;">FACTORY OUTPUT · UX FLOW</div>
+      <h2 class="sec" style="font:var(--text-h1);">grader-v2 — 화면 흐름</h2>
+      <p class="sec-sub" style="margin-bottom:0;">직원이 주문 1건을 패턴 선택부터 ZIP 다운로드까지 한 흐름으로 끝내는 경로.</p>
+    </div>
+    <img src="../assets/logos/stiz-logo-black.png" alt="STIZ" />
+  </header>
+
+  <!-- ===== Section 1: 화면 구조 ===== -->
+  <section class="block">
+    <h2 class="sec">1 · 화면 구조</h2>
+    <p class="sec-sub">3개 화면. 좌측 사이드바로 언제든 전환. 작업이 중심, 패턴 관리는 최초 1회 설정, 작업 기록은 재생성 진입점.</p>
+    <div class="screens">
+      <div class="node">
+        <div class="node__ic"><span class="material-symbols-outlined">dashboard_customize</span></div>
+        <div class="node__t">패턴 관리</div>
+        <div class="node__d">관리자 · 최초 1회. 사이즈별 파일 + 배번/이름 영역 등록.</div>
+      </div>
+      <div class="arrow"><span class="material-symbols-outlined">arrow_forward</span><span class="arrow__label">프리셋 제공</span></div>
+      <div class="node node--primary">
+        <div class="node__ic"><span class="material-symbols-outlined">add_box</span></div>
+        <div class="node__t">작업 (메인)</div>
+        <div class="node__d">직원 · 매 주문. 패턴 선택 → … → ZIP 다운로드.</div>
+      </div>
+      <div class="arrow"><span class="material-symbols-outlined">arrow_forward</span><span class="arrow__label">완료 기록</span></div>
+      <div class="node">
+        <div class="node__ic"><span class="material-symbols-outlined">history</span></div>
+        <div class="node__t">작업 기록</div>
+        <div class="node__d">지난 주문 · 재다운로드 / 같은 설정으로 재생성.</div>
+      </div>
+    </div>
+    <div class="loopnote">
+      <span class="material-symbols-outlined">replay</span>
+      작업 기록의 <strong style="margin:0 3px;">재생성</strong>은 동일 패턴·설정으로 작업 화면을 다시 엽니다 (되먹임 루프).
+    </div>
+  </section>
+
+  <!-- ===== Section 2: 작업 화면 단계 흐름 ===== -->
+  <section class="block">
+    <h2 class="sec">2 · 작업 화면 단계 흐름</h2>
+    <p class="sec-sub">점진적 노출 — 이전 단계가 끝나야 다음 단계가 열립니다. 각 단계 아래는 자동 처리·검증 내용.</p>
+
+    <div class="flowrow">
+      <div class="fstep">
+        <div class="fnode"><div class="fnode__n">1</div><div class="fnode__t">패턴 선택</div><div class="fnode__d">등록된 프리셋에서</div></div>
+        <div class="annot"><span class="material-symbols-outlined">grid_view</span>썸네일 카드 목록</div>
+      </div>
+      <div class="farrow"><span class="material-symbols-outlined">arrow_forward</span></div>
+      <div class="fstep">
+        <div class="fnode"><div class="fnode__n">2</div><div class="fnode__t">디자인 업로드</div><div class="fnode__d">기준 사이즈 1개</div></div>
+        <div class="annot annot--warn"><span class="material-symbols-outlined">policy</span>투명도·색공간 자동 점검</div>
+      </div>
+      <div class="farrow"><span class="material-symbols-outlined">arrow_forward</span></div>
+      <div class="fstep">
+        <div class="fnode"><div class="fnode__n">3</div><div class="fnode__t">주문서 업로드</div><div class="fnode__d">엑셀 자동 추출</div></div>
+        <div class="annot"><span class="material-symbols-outlined">edit_note</span>편집 가능한 표로 확인</div>
+      </div>
+      <div class="farrow"><span class="material-symbols-outlined">arrow_forward</span></div>
+      <div class="fstep">
+        <div class="fnode"><div class="fnode__n">4</div><div class="fnode__t">생성</div><div class="fnode__d">사이즈×선수별 PDF·EPS 출력</div></div>
+        <div class="annot annot--info"><span class="material-symbols-outlined">hourglass_top</span>진행률 · 취소 가능</div>
+      </div>
+      <div class="farrow"><span class="material-symbols-outlined">arrow_forward</span></div>
+      <div class="fstep">
+        <div class="fnode"><div class="fnode__n">5</div><div class="fnode__t">미리보기 검수</div><div class="fnode__d">PNG + 검증 배지</div></div>
+        <div class="annot"><span class="material-symbols-outlined">verified</span>전달 가능 / 확인 필요</div>
+      </div>
+      <div class="farrow"><span class="material-symbols-outlined">arrow_forward</span></div>
+      <div class="fstep">
+        <div class="fnode"><div class="fnode__n">6</div><div class="fnode__t">ZIP 다운로드</div><div class="fnode__d">공장 전달</div></div>
+        <div class="annot"><span class="material-symbols-outlined">folder_zip</span>한 폴더로 묶음</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Section 3: 엣지케이스 분기 ===== -->
+  <section class="block" style="margin-bottom:0;">
+    <h2 class="sec">3 · 엣지케이스 분기</h2>
+    <p class="sec-sub">진행을 막거나 입력을 요구하는 지점. 무엇이 문제인지 + 어떻게 푸는지를 함께 보여줍니다.</p>
+    <div class="edge-grid">
+      <div class="edge edge--warn">
+        <div class="edge__h"><span class="material-symbols-outlined">warning</span><span class="edge__t">투명도 경고 (2단계)</span></div>
+        <div class="edge__body" style="font:var(--text-sm);">출력 시 래스터화되는 투명도 발견.</div>
+        <div class="edge__row"><span class="edge__k">차단</span><span>다음 단계 비활성</span></div>
+        <div class="edge__row"><span class="edge__k">해결</span><span>원본 평탄화 후 재업로드</span></div>
+      </div>
+      <div class="edge edge--fail">
+        <div class="edge__h"><span class="material-symbols-outlined">error</span><span class="edge__t">형식·추출 실패</span></div>
+        <div class="edge__body" style="font:var(--text-sm);">PostScript AI 거부 · 주문서 셀 추출 실패.</div>
+        <div class="edge__row"><span class="edge__k">표시</span><span>거부 안내 · 실패 셀 강조</span></div>
+        <div class="edge__row"><span class="edge__k">해결</span><span>표에서 인라인 수정</span></div>
+      </div>
+      <div class="edge edge--info">
+        <div class="edge__h"><span class="material-symbols-outlined">info</span><span class="edge__t">부분 실패 검수 (5단계)</span></div>
+        <div class="edge__body" style="font:var(--text-sm);">일부 결과만 FAIL — 전체는 차단 안 함.</div>
+        <div class="edge__row"><span class="edge__k">표시</span><span>"46 / 48 전달 가능"</span></div>
+        <div class="edge__row"><span class="edge__k">해결</span><span>해당 항목만 재작업</span></div>
+      </div>
+    </div>
+  </section>
+</div>
+</body>
+</html>

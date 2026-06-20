@@ -1,0 +1,146 @@
+<!-- @dsCard group="grader · 정적 핸드오프" viewport="1280x1480" name="변경 요약 (시안보강)" subtitle="운영 이슈 6건을 어느 화면에 어떻게 반영했는지" -->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>STIZ grader · 변경 요약</title>
+<link rel="icon" href="../assets/logos/stiz-favicon-32.png" />
+<link rel="stylesheet" href="../styles.css" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-25..0" />
+<link rel="stylesheet" href="app.css" />
+<style>
+  body { background: var(--surface-canvas); }
+  .doc { max-width: 1024px; margin: 0 auto; padding: 40px var(--space-8) 72px; }
+  .doc__head { border-bottom: 1px solid var(--border-subtle); padding-bottom: 22px; margin-bottom: 32px;
+    display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
+  .doc__head img { height: 24px; }
+  .item { display: grid; grid-template-columns: 40px 1fr; gap: 16px; padding: 20px 0; border-bottom: 1px solid var(--border-subtle); }
+  .item__n { width: 36px; height: 36px; border-radius: 50%; background: var(--stiz-black); color: #fff;
+    display: flex; align-items: center; justify-content: center; font: var(--text-body-strong); font-variant-numeric: tabular-nums; }
+  .item__n.p2 { background: var(--ink-300); }
+  .item__t { font: var(--text-h3); color: var(--text-strong); margin-bottom: 4px; }
+  .item__why { font: var(--text-sm); color: var(--text-muted); margin-bottom: 12px; }
+  .item__why b { color: var(--text-body); font-weight: 600; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .fl { display: flex; flex-direction: column; gap: 6px; }
+  .fl__row { display: flex; gap: 8px; align-items: baseline; font: var(--text-sm); }
+  .fl__k { flex: none; width: 64px; font: var(--text-sm-strong); color: var(--text-subtle); }
+  .fl__v { color: var(--text-body); }
+  .fl__v code { font-family: var(--font-mono); font-size: 12px; background: var(--surface-sunken); padding: 1px 6px; border-radius: var(--radius-xs); color: var(--text-body); }
+  .legend { display: flex; gap: 16px; font: var(--text-caption); color: var(--text-muted); margin-top: 8px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .dot { width: 9px; height: 9px; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div class="doc">
+  <header class="doc__head">
+    <div>
+      <div class="eyebrow" style="margin-bottom:8px;">FACTORY OUTPUT · 시안보강 2차</div>
+      <h1 style="font:var(--text-h1); color:var(--text-strong); margin-bottom:6px;">변경 요약</h1>
+      <p style="font:var(--text-sm); color:var(--text-muted);">운영에서 실제로 터진 이슈 6건을 기존 토큰·컴포넌트로 반영했습니다. 새 원자 컴포넌트 없음 · 브랜드 유지 · static/ + ui_kits/grader/ + data.js 양쪽 반영.</p>
+    </div>
+    <img src="../assets/logos/stiz-logo-black.png" alt="STIZ" />
+  </header>
+
+  <div class="legend">
+    <span><span class="dot" style="background:var(--stiz-black);"></span>우선순위 1~4 (핵심)</span>
+    <span><span class="dot" style="background:var(--ink-300);"></span>5~6 (구동 편의)</span>
+  </div>
+
+  <div style="margin-top:8px;">
+    <!-- 1 -->
+    <div class="item">
+      <div class="item__n">1</div>
+      <div>
+        <div class="item__t">디자인 ‘본체 누락’ 실패 케이스</div>
+        <div class="item__why">PDF 형식은 맞지만 <b>디자인 본체가 PDF에 안 들어간</b> 경우 출력이 통째로 흰 화면이 됨. 투명도/PostScript와는 다른 점검 항목으로, 진행을 차단.</div>
+        <div class="chips">
+          <span class="badge badge--fail badge--sm"><span class="material-symbols-outlined">error</span>본체 누락 (진행 차단)</span>
+          <span class="badge badge--pass badge--sm"><span class="material-symbols-outlined">check_circle</span>통과 시 “본체 포함 ✓”</span>
+        </div>
+        <div class="fl">
+          <div class="fl__row"><span class="fl__k">화면</span><span class="fl__v">작업 → 디자인 단계 · 점검 케이스 5종(정상/투명도/본체누락/PostScript/베이크)</span></div>
+          <div class="fl__row"><span class="fl__k">파일</span><span class="fl__v"><code>work.html</code> · <code>WorkScreen.jsx</code> · <code>states.html</code> §11</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2 -->
+    <div class="item">
+      <div class="item__n">2</div>
+      <div>
+        <div class="item__t">‘빈 본체’ 슬롯 명확화 + 베이크 감지</div>
+        <div class="item__why">완성본(번호·이름 박힌 것)과 빈 본체(템플릿)를 혼동해 헤맴. 드롭존을 <b>빈 본체 템플릿</b>으로 명시하고, 베이크된 번호/이름이 감지되면 경고.</div>
+        <div class="fl">
+          <div class="fl__row"><span class="fl__k">화면</span><span class="fl__v">드롭존 “빈 본체 템플릿(번호·이름 없는 기준 1개)” + 베이크 경고 노트</span></div>
+          <div class="fl__row"><span class="fl__k">파일</span><span class="fl__v"><code>work.html</code> · <code>WorkScreen.jsx</code> · <code>states.html</code> §11</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3 -->
+    <div class="item">
+      <div class="item__n">3</div>
+      <div>
+        <div class="item__t">검수: 재단선·너치 + 건너뜀 N건</div>
+        <div class="item__why">공장 재단 필수 요소가 검수에 안 보임 + 안전 차단 결과가 안 보임. 체크리스트에 <b>재단선·너치 보존</b> 1줄, 상단에 제외된 주문을 사유와 함께.</div>
+        <div class="chips">
+          <span class="badge badge--pass badge--sm"><span class="material-symbols-outlined">check_circle</span>재단선·너치 보존</span>
+          <span class="badge badge--warn badge--sm"><span class="material-symbols-outlined">block</span>건너뜀 7건 (3XL·XS)</span>
+        </div>
+        <div class="fl">
+          <div class="fl__row"><span class="fl__k">화면</span><span class="fl__v">작업 → 검수 · 검증 체크리스트 + 건너뜀 배너</span></div>
+          <div class="fl__row"><span class="fl__k">파일</span><span class="fl__v"><code>work.html</code> · <code>WorkScreen.jsx</code> · <code>data.js</code>(checks·skipped) · <code>states.html</code> §12</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4 -->
+    <div class="item">
+      <div class="item__n">4</div>
+      <div>
+        <div class="item__t">패턴 등록: 글리프셋 + 자동 추출 탭</div>
+        <div class="item__why"><b>4-A</b> 유니폼 번호는 디자이너가 아웃라인한 0~9 전용 글자 → 글리프셋 업로드 슬롯(폴백 허용). <b>4-B</b> 배번/이름 위치·크기·자간은 완성본 1장에서 자동 추출이 정답 → 권장 탭, 드래그는 폴백.</div>
+        <div class="fl">
+          <div class="fl__row"><span class="fl__k">화면</span><span class="fl__v">패턴 관리 → 등록 · 글리프셋 Dropzone + “완성본 자동 추출(권장)” / “직접 드래그” 탭</span></div>
+          <div class="fl__row"><span class="fl__k">파일</span><span class="fl__v"><code>patterns.html</code> · <code>PatternScreen.jsx</code> · <code>data.js</code>(glyphset) · <code>states.html</code> §13</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 5 -->
+    <div class="item">
+      <div class="item__n p2">5</div>
+      <div>
+        <div class="item__t">설정 화면 신설</div>
+        <div class="item__why">실제 구동엔 경로·색기준·서버 설정이 필요(구버전엔 있었음). 사이드바에 ‘설정’ 추가 + 화면 신설. forms 컴포넌트(Input/Select/Switch) 재사용.</div>
+        <div class="fl">
+          <div class="fl__row"><span class="fl__k">화면</span><span class="fl__v">설정 · 경로(4) · 출력(형식/선수별/구성/PNG) · 색 기준 · 서버</span></div>
+          <div class="fl__row"><span class="fl__k">파일</span><span class="fl__v"><code>settings.html</code> · <code>SettingsScreen.jsx</code> · 사이드바 nav 4개 화면 반영</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 6 -->
+    <div class="item" style="border-bottom:none;">
+      <div class="item__n p2">6</div>
+      <div>
+        <div class="item__t">출력 형식 선택 (PDF / EPS / 둘 다)</div>
+        <div class="item__why">출력은 <b>PDF·EPS 둘 다 지원</b>하고 필요한 걸 선택(둘 다도 가능). 설정 Select에 <b>PDF / EPS / PDF+EPS(둘 다)</b> 추가(벡터 중립은 기본값 유지), <b>생성 단계에 형식 세그먼트</b>를 두어 주문마다 변경. 둘 다일 때 ZIP은 <span class="mono" style="font-size:12px;">pdf/</span>·<span class="mono" style="font-size:12px;">eps/</span> 하위폴더로 분리.</div>
+        <div class="fl">
+          <div class="fl__row"><span class="fl__k">연동</span><span class="fl__v">설정/생성 형식 → <code>{형식} 생성 중…</code> · <code>ZIP 다운로드({형식})</code> · 둘 다 안내 한 줄</span></div>
+          <div class="fl__row"><span class="fl__k">파일</span><span class="fl__v"><code>work.html</code>(생성 세그먼트·localStorage) · <code>settings.html</code> · <code>WorkScreen.jsx</code> · <code>flow.html</code> · <code>data.js</code></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note" style="margin-top:24px;">
+    <span class="material-symbols-outlined">design_services</span>
+    제약 준수: 기존 토큰(<code class="mono" style="font-size:12px;">tokens/*.css</code>)·컴포넌트만 사용 · 새 원자 컴포넌트 없음(조합으로 해결: switch/setrow는 forms/Switch 미러) · 브랜드(앰버·블랙·뉴트럴) 유지 · 카피 “친절하지만 단호”.
+  </div>
+</div>
+</body>
+</html>

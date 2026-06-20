@@ -1,0 +1,264 @@
+<!-- @dsCard group="grader · 정적 핸드오프" viewport="1440x900" name="화면 네비게이터" subtitle="3개 화면 + 문서 2개를 탭으로 전환 · iframe 전체 렌더" -->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>STIZ grader · 화면 네비게이터</title>
+<link rel="icon" href="../assets/logos/stiz-favicon-32.png" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-25..0" />
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Pretendard Variable", Pretendard, -apple-system, sans-serif; background: #0e1114; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+  /* ── Top chrome ── */
+  .chrome {
+    flex: none; height: 52px;
+    display: flex; align-items: center; gap: 0;
+    background: #18191c; border-bottom: 1px solid rgba(255,255,255,.09);
+    padding: 0 16px; user-select: none;
+  }
+  .chrome__logo { display: flex; align-items: center; gap: 9px; margin-right: 20px; flex: none; }
+  .chrome__logo img { height: 18px; filter: invert(1); opacity: .88; }
+  .chrome__logo .sep { width: 1px; height: 16px; background: rgba(255,255,255,.14); }
+  .chrome__logo .label { font-size: 11px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: rgba(255,255,255,.38); }
+
+  /* tabs */
+  .tabs { display: flex; align-items: stretch; gap: 2px; height: 100%; flex: 1; overflow-x: auto; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab {
+    display: inline-flex; align-items: center; gap: 7px; padding: 0 16px;
+    font-size: 13px; font-weight: 500; color: rgba(255,255,255,.42);
+    background: transparent; border: none; cursor: pointer; white-space: nowrap;
+    border-bottom: 2px solid transparent; transition: color .14s, border-color .14s;
+    position: relative;
+  }
+  .tab:hover { color: rgba(255,255,255,.72); }
+  .tab.is-active { color: #fff; border-bottom-color: #e8240c; }
+  .tab .material-symbols-outlined { font-size: 17px; opacity: .7; }
+  .tab.is-active .material-symbols-outlined { opacity: 1; font-variation-settings: "FILL" 1; }
+  .tab .pill {
+    font-size: 10px; font-weight: 700; letter-spacing: .04em; line-height: 1;
+    padding: 2px 7px; border-radius: 20px; background: rgba(255,255,255,.1); color: rgba(255,255,255,.5);
+  }
+  .tab.is-active .pill { background: #e8240c; color: #fff; }
+
+  /* spacer + controls */
+  .chrome__spacer { flex: 1; }
+  .chrome__ctrl { display: flex; align-items: center; gap: 4px; }
+  .ctrl-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; border-radius: 8px; border: none; cursor: pointer;
+    background: transparent; color: rgba(255,255,255,.45);
+    transition: background .14s, color .14s;
+  }
+  .ctrl-btn .material-symbols-outlined { font-size: 19px; }
+  .ctrl-btn:hover { background: rgba(255,255,255,.1); color: #fff; }
+  .ctrl-btn.is-active { background: rgba(255,255,255,.13); color: #fff; }
+
+  /* ── Subbar (breadcrumb + info) ── */
+  .subbar {
+    flex: none; height: 34px; display: flex; align-items: center; justify-content: space-between;
+    padding: 0 16px; background: #111316; border-bottom: 1px solid rgba(255,255,255,.06);
+  }
+  .subbar__crumb { display: flex; align-items: center; gap: 6px; font-size: 12px; color: rgba(255,255,255,.32); }
+  .subbar__crumb .material-symbols-outlined { font-size: 15px; }
+  .subbar__crumb strong { color: rgba(255,255,255,.65); font-weight: 500; }
+  .subbar__hint { font-size: 11px; color: rgba(255,255,255,.22); }
+
+  /* ── Frame area ── */
+  .stage {
+    flex: 1; position: relative; overflow: hidden;
+    background: #1a1c20;
+  }
+  /* zoom track for the zoom-in/out feature */
+  .zoom-track { position: absolute; inset: 0; display: flex; align-items: flex-start; justify-content: center; overflow: auto; }
+  .zoom-track iframe {
+    flex: none; border: none;
+    transform-origin: top center;
+    /* size + scale set by JS */
+  }
+
+  /* ── Status bar ── */
+  .statusbar {
+    flex: none; height: 24px; display: flex; align-items: center; justify-content: space-between;
+    padding: 0 14px; background: #0e1114; border-top: 1px solid rgba(255,255,255,.06);
+  }
+  .statusbar__left, .statusbar__right { display: flex; align-items: center; gap: 12px; }
+  .statusbar .dot { width: 6px; height: 6px; border-radius: 50%; background: #1f9d63; }
+  .status-item { font-size: 11px; color: rgba(255,255,255,.28); }
+  .status-item strong { color: rgba(255,255,255,.5); }
+  .kbd { display: inline-flex; align-items: center; gap: 1px; font-size: 10px; color: rgba(255,255,255,.2); background: rgba(255,255,255,.07); border-radius: 4px; padding: 1px 5px; }
+</style>
+</head>
+<body>
+
+<!-- ── Top chrome ── -->
+<div class="chrome">
+  <div class="chrome__logo">
+    <img src="../assets/logos/stiz-logo-white.png" alt="STIZ" />
+    <span class="sep"></span>
+    <span class="label">grader</span>
+  </div>
+
+  <div class="tabs" id="tabs">
+    <button class="tab is-active" data-src="work.html" data-label="작업 화면">
+      <span class="material-symbols-outlined">add_box</span>작업 화면<span class="pill">메인</span>
+    </button>
+    <button class="tab" data-src="patterns.html" data-label="패턴 관리">
+      <span class="material-symbols-outlined">dashboard_customize</span>패턴 관리
+    </button>
+    <button class="tab" data-src="history.html" data-label="작업 기록">
+      <span class="material-symbols-outlined">history</span>작업 기록
+    </button>
+    <button class="tab" data-src="settings.html" data-label="설정">
+      <span class="material-symbols-outlined">settings</span>설정
+    </button>
+    <button class="tab" data-src="states.html" data-label="상태 명세">
+      <span class="material-symbols-outlined">widgets</span>상태 명세
+    </button>
+    <button class="tab" data-src="flow.html" data-label="UX 플로우">
+      <span class="material-symbols-outlined">account_tree</span>UX 플로우
+    </button>
+    <button class="tab" data-src="changes.html" data-label="변경 요약">
+      <span class="material-symbols-outlined">difference</span>변경 요약
+    </button>
+  </div>
+
+  <div class="chrome__spacer"></div>
+  <div class="chrome__ctrl">
+    <button class="ctrl-btn" id="btnZoomOut" title="축소 (-)"><span class="material-symbols-outlined">zoom_out</span></button>
+    <span style="font-size:12px; color:rgba(255,255,255,.35); min-width:36px; text-align:center;" id="zoomLabel">100%</span>
+    <button class="ctrl-btn" id="btnZoomIn" title="확대 (+)"><span class="material-symbols-outlined">zoom_in</span></button>
+    <button class="ctrl-btn" id="btnZoomReset" title="크기 맞춤"><span class="material-symbols-outlined">fit_screen</span></button>
+    <div style="width:1px;height:18px;background:rgba(255,255,255,.1);margin:0 4px;"></div>
+    <button class="ctrl-btn" id="btnOpen" title="새 탭에서 열기"><span class="material-symbols-outlined">open_in_new</span></button>
+  </div>
+</div>
+
+<!-- ── Subbar ── -->
+<div class="subbar">
+  <div class="subbar__crumb">
+    <span class="material-symbols-outlined">computer</span>
+    <span>grader-v2-static /</span>
+    <strong id="crumbFile">work.html</strong>
+  </div>
+  <span class="subbar__hint" id="subHint">← → 탭 전환 · +/- 줌</span>
+</div>
+
+<!-- ── Frame stage ── -->
+<div class="stage" id="stage">
+  <div class="zoom-track" id="zoomTrack">
+    <iframe id="frame" src="work.html" title="화면 미리보기"></iframe>
+  </div>
+</div>
+
+<!-- ── Status bar ── -->
+<div class="statusbar">
+  <div class="statusbar__left">
+    <span class="dot"></span>
+    <span class="status-item">서버 :8000 연결됨</span>
+    <span class="status-item">순수 HTML · CSS · vanilla JS</span>
+    <span class="status-item">CDN: Pretendard · Material Symbols</span>
+  </div>
+  <div class="statusbar__right">
+    <span class="status-item"><strong id="stSize">1280 × 900</strong> px</span>
+    <span class="status-item"><kbd class="kbd">← →</kbd> 탭 · <kbd class="kbd">+</kbd><kbd class="kbd">-</kbd> 줌</span>
+  </div>
+</div>
+
+<script>
+const frame = document.getElementById('frame');
+const tabs  = document.getElementById('tabs');
+const zoomTrack = document.getElementById('zoomTrack');
+const zoomLabel = document.getElementById('zoomLabel');
+const crumb = document.getElementById('crumbFile');
+const stSize = document.getElementById('stSize');
+
+const HINT = {
+  'work.html':     '5단계 흐름 · 투명도 경고 · 대량 주문표(검색/필터/정렬) · 검수 상세 모달',
+  'patterns.html': '패턴 목록 · 3단계 등록 · 디자인↔조각 매핑 · 배번/이름 드래그 영역 지정',
+  'history.html':  '작업 기록 · 탭 필터 · 재다운로드 / 재생성 · 빈 상태',
+  'settings.html': '설정 · 경로 · 출력 형식(생성/검수와 연동) · 색 기준 · 서버',
+  'changes.html':  '변경 요약 · 시안보강 6건을 어느 화면에 어떻게 반영했는지',
+  'states.html':   '빈 상태 · 로딩 · 업로드 · 추출 실패 · 검증 · 검수 상세 모달 · 대량 UX · 조각 매핑',
+  'flow.html':     'UX 플로우 다이어그램 · 3화면 이동 + 6단계 흐름 + 엣지케이스 분기',
+};
+
+const BASE_WIDTHS = {
+  'work.html': 1280, 'patterns.html': 1280, 'history.html': 1280,
+  'states.html': 1280, 'flow.html': 1280, 'settings.html': 1280, 'changes.html': 1280,
+};
+
+// frame dimensions
+const FRAME_H = { 'work.html':900,'patterns.html':900,'history.html':780,'states.html':3420,'flow.html':1180,'settings.html':880,'changes.html':1480 };
+
+let zoom = 1;
+let current = 'work.html';
+
+function applyZoom() {
+  const stageW = document.getElementById('stage').clientWidth;
+  const frameW = BASE_WIDTHS[current] || 1280;
+  const scale = zoom;
+  frame.style.width  = frameW + 'px';
+  frame.style.height = (FRAME_H[current] || 900) + 'px';
+  frame.style.transform = `scale(${scale})`;
+  frame.style.marginTop = '0';
+  // update size label
+  stSize.textContent = `${frameW} × ${FRAME_H[current] || 900} px`;
+  zoomLabel.textContent = Math.round(zoom * 100) + '%';
+  // center in zoom-track
+  const scaledW = frameW * scale;
+  zoomTrack.style.justifyContent = scaledW < stageW ? 'center' : 'flex-start';
+}
+
+function fitZoom() {
+  const stageW = document.getElementById('stage').clientWidth - 32;
+  const frameW = BASE_WIDTHS[current] || 1280;
+  zoom = Math.min(1, stageW / frameW);
+  applyZoom();
+}
+
+function switchTab(src) {
+  current = src;
+  frame.src = src;
+  crumb.textContent = src;
+  document.getElementById('subHint').textContent = HINT[src] || '';
+  tabs.querySelectorAll('.tab').forEach(t => t.classList.toggle('is-active', t.dataset.src === src));
+  fitZoom();
+}
+
+// tab clicks
+tabs.addEventListener('click', e => {
+  const t = e.target.closest('.tab');
+  if (t) switchTab(t.dataset.src);
+});
+
+// zoom controls
+document.getElementById('btnZoomIn').addEventListener('click', () => { zoom = Math.min(2, parseFloat((zoom + 0.1).toFixed(1))); applyZoom(); });
+document.getElementById('btnZoomOut').addEventListener('click', () => { zoom = Math.max(0.25, parseFloat((zoom - 0.1).toFixed(1))); applyZoom(); });
+document.getElementById('btnZoomReset').addEventListener('click', fitZoom);
+document.getElementById('btnOpen').addEventListener('click', () => window.open(current, '_blank'));
+
+// keyboard: ← → tabs, + - zoom
+const tabList = () => [...tabs.querySelectorAll('.tab')].map(t => t.dataset.src);
+document.addEventListener('keydown', e => {
+  if (['INPUT','TEXTAREA'].includes(document.activeElement.tagName)) return;
+  const list = tabList();
+  const idx  = list.indexOf(current);
+  if (e.key === 'ArrowRight') switchTab(list[(idx + 1) % list.length]);
+  else if (e.key === 'ArrowLeft')  switchTab(list[(idx - 1 + list.length) % list.length]);
+  else if (e.key === '+' || e.key === '=') { zoom = Math.min(2, parseFloat((zoom + 0.1).toFixed(1))); applyZoom(); }
+  else if (e.key === '-') { zoom = Math.max(0.25, parseFloat((zoom - 0.1).toFixed(1))); applyZoom(); }
+  else if (e.key === '0') fitZoom();
+});
+
+// resize
+const ro = new ResizeObserver(fitZoom);
+ro.observe(document.getElementById('stage'));
+
+// init
+fitZoom();
+</script>
+</body>
+</html>

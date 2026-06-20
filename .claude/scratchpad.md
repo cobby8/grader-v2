@@ -99,6 +99,42 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 - PDF(출고용): `C:\0. Programing\grader-v2\data\jobs\260620_연세대V넥_빈본체\output\XL_11_장혁준.pdf` / `...\output\L_09_이병엽.pdf`
 - 작업폴더 루트: `C:\0. Programing\grader-v2\data\jobs\260620_연세대V넥_빈본체\` (output/ PDF33, preview/ PNG33, job.json)
 
+## 구현 기록 (developer) — 웹앱1 (FastAPI 뼈대 + 정적서빙 + health/patterns/settings) (2026-06-20)
+📝 구현한 기능: **웹앱 1단계** — FastAPI 백엔드 뼈대로 디자인 핸드오프 정적화면을 서빙하고, 화면 패턴목록·server-pill을 실 API에 연결. 엔진은 `load_preset` 호출만(무수정). 빌드0·폴더+JSON.
+
+| 파일 | 변경 내용 | 신규/수정 |
+|------|----------|----------|
+| webapp/__init__.py | 패키지 설명(설계원칙) | 신규 |
+| webapp/state.py | 경로헬퍼(PROJECT_ROOT/STATIC/PATTERNS/JOBS) + read_settings(설정JSON 없으면 DEFAULT_SETTINGS 머지) + DEFAULT_PORT | 신규 |
+| webapp/api.py | APIRouter(/api): GET /health{status,port} · /patterns(data/patterns/*/preset.json 스캔→[{id,name,sizes[],pieces,icon,glyph_source(bool),disabled_sizes[]}]) · /settings | 신규 |
+| webapp/main.py | FastAPI: /api 라우터 + /static 마운트(StaticFiles html=True) + GET / → **RedirectResponse(/static/screens/work.html)** | 신규 |
+| webapp/run.py | uvicorn 기동(127.0.0.1:8000) + 1.2s 뒤 브라우저 자동오픈 | 신규 |
+| webapp/static/ | _handoff/grader-v2-static/ **복사본**(22파일). README에 "복사본·재복사" note 1줄 | 신규(복사) |
+| webapp/static/screens/work.html | PATTERNS 목배열→`let PATTERNS=[]` + loadPatterns()/refreshServerPill() fetch 추가, patternId=null→첫패턴. 마크업·토큰·mock 나머지 유지 | 수정(복사본만) |
+| webapp/static/screens/patterns.html | PATTERNS→[] + renderPatternGrid()/fetch(/api/patterns) + server-pill fetch(/api/health). 나머지 유지 | 수정(복사본만) |
+| requirements.txt | fastapi==0.138.0 · uvicorn==0.49.0 · python-multipart==0.0.32 추가 | 수정 |
+
+**핵심 판단(★)**: GET / 를 work.html 직접반환 대신 **/static/screens/work.html 로 307 리다이렉트**. 이유 = work.html 자산이 `../styles.css` 등 screens/ 기준 상대경로라 루트반환 시 `/styles.css` 404로 스타일 깨짐. 리다이렉트하면 브라우저 base가 /static/screens/ 가 되어 자산이 /static/styles.css 로 정확히 풀림(원본 마크업 무수정).
+
+✅ 검증(완료기준 ①~⑤ 전부 PASS):
+- **①기동**: `uvicorn webapp.main:app --port 8000` 크래시0, /api/health 200 UP.
+- **②curl**: health=`{"status":"ok","port":8000}` / patterns=실목록(농구_U넥_양면 sizes1·pieces3 / **농구_V넥_양면 sizes12·pieces3·glyph_source true·disabled[3XL]**) / settings=`{output_format:pdf, ghostscript_path, preview_enabled:true, color_note}`. (콘솔 surrogate표시뿐, UTF-8 파일덤프로 한글 정상 확인)
+- **③브라우저**(playwright chromium headless): 루트→work.html 리다이렉트, **패턴카드 2개 실데이터**(V넥 12사이즈 칩 전부 렌더), server-pill="서버 연결됨 · :8000"(실 health), patterns.html 그리드도 실데이터·pill 연결. 스크린샷 정상(STIZ 브랜딩·스테퍼·사이드바). 콘솔에러는 외부 CDN Pretendard 404뿐(오프라인 환경, 코드무관·시스템폰트 폴백).
+- **④git diff**: **engine/ 0변경**(diff 없음) + _handoff/grader-v2-static **원본 무수정**(diff -rq: webapp/static 복사본의 work/patterns/README 3개만 다름, 나머지19 byte-identical / _handoff README는 note없는 원본).
+- **⑤종료**: 포트8000 PID로만 taskkill(전역 node/python kill 안 함).
+
+💡 tester 참고:
+- 기동: `python -m uvicorn webapp.main:app --port 8000` (또는 직원용 `python -m webapp.run` = 브라우저 자동오픈).
+- curl 단독검증: `curl localhost:8000/api/health` · `/api/patterns` · `/api/settings`.
+- 정상: health ok·port8000 / patterns에 V넥 sizes12·glyph_source true·disabled[3XL] / 브라우저 localhost:8000 작업화면 뜨고 패턴 실데이터·server-pill 초록.
+- 주의입력: 한글 폴더명 → 콘솔 stdout이 cp949면 깨져 보임(데이터는 정상, UTF-8로 확인). 외부CDN 폰트404는 정상(오프라인). 설정JSON 없으면 기본값 응답.
+- 종료: 포트8000 PID로만(`netstat -ano|findstr :8000`→`taskkill /f /pid`).
+
+⚠️ reviewer 참고:
+- GET / 리다이렉트 결정(자산 상대경로 보존 위함) 타당성.
+- api._scan_one_pattern: 패턴1개 깨져도 try/except로 그것만 skip(목록 안 죽음). glyph_source=앞/뒤 number_area 중 하나라도 glyph_source 키 있으면 true.
+- state.read_settings: 설정파일 없음=정상(에러아님), 깨짐도 기본값 폴백.
+
 ## 구현 기록 (developer) — 출력형식 PDF/EPS/both (2026-06-20)
 📝 구현한 기능: **출력형식 선택(PDF/EPS/둘다)** — flatten Group제거 + engine/eps.py 신설 + run_job 형식분기 + preset settings + CLI --format. 의뢰서 §1~5 전부 구현·검증 완료.
 
@@ -188,8 +224,6 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 | 결과 |
 |------|---------|------|------|
-| 2026-06-19 | pm/팀 | Phase B~E 완성본주입 통합 | 완료·푸시 |
-| 2026-06-19 | dev/test | 이슈2 번호 잉크중앙정렬 | 오차0pt, 6/6 |
 | 2026-06-19 | dev/test | 이슈4 재단선 보존 인프라 | 7/7(실파일 재단선 부재→디자이너 재출력 대기) |
 | 2026-06-20 | dev/test/rev | 이슈3 암홀X 3조각 복원+단조성가드 | 12개 PASS, 3XL 결함 발견 |
 | 2026-06-20 | dev/test | 이슈3 3XL 안전차단+grade회귀 수정 | 5XL오출고0·grade정상 7/7 |
@@ -200,3 +234,4 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 | 2026-06-20 | dev | 실주문 11명 빈본체 전체 재출력(job per_player 38행) | **생성33/verify PASS33/FAIL0/skip5(3XL)**, design Form 88,141B 전수 byte-identical, 겹침없음·Do3·k/K3·금지0, 대표6건 육안PASS, cowork PDF/PNG 경로명시 |
 | 2026-06-20 | dev | 출력형식 PDF/EPS/both(flatten Group제거+eps.py+run_job형식+CLI --format) | 완료기준①~⑤ 전부PASS: 회귀0(픽셀delta>10=0·selftest·job verify)/EPS 305KB벡터·Id0·CMYK/both양쪽생성·verify PASS/GS fallback크래시0/summary집계·checks_eps. 불변제약 무수정. 빌드0 |
 | 2026-06-20 | reviewer | 출력형식 코드리뷰(eps.py/flatten/job/cli/preset) | **통과(치명0)**: 불변제약 무수정확정·flatten Group제거 알파/SMask 이중가드·페이지그룹/CS보존 타당·GS fallback크래시0·verify_eps Id벡터판정 정교. 권장3(origin_ok무의미가드·GS경로/임계 하드코딩·미사용 _alpha_gstates). 후속: PDF경로 output/pdf 이전→기존job 구구조 웹앱 양쪽읽기 권장(의뢰서 §2 정합) |
+| 2026-06-20 | dev | 웹앱1 FastAPI 뼈대(정적서빙+health/patterns/settings) | 완료기준①~⑤ PASS: uvicorn기동크래시0·curl 3종(V넥 sizes12·glyph_source true·disabled[3XL])·브라우저 패턴실데이터+server-pill연결·engine0변경+_handoff원본무수정(복사본 3파일만)·포트PID종료. fastapi/uvicorn requirements추가. 빌드0 |

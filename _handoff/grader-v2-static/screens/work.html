@@ -1,0 +1,757 @@
+<!-- @dsCard group="grader · 정적 핸드오프" viewport="1280x900" name="작업 화면 (정적)" subtitle="5단계 흐름 · 투명도 경고 · 대량 주문표(검색/필터/정렬/페이지) · 검수 상세 줌 모달" -->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>STIZ grader · 작업</title>
+<link rel="icon" href="../assets/logos/stiz-favicon-32.png" />
+<link rel="stylesheet" href="../styles.css" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-25..0" />
+<link rel="stylesheet" href="app.css" />
+</head>
+<body>
+<div class="app">
+
+  <!-- ===== Sidebar ===== -->
+  <aside class="sidebar">
+    <div class="sidebar__brand">
+      <img src="../assets/logos/stiz-logo-black.png" alt="STIZ" />
+      <span class="tag">grader</span>
+    </div>
+    <nav class="nav">
+      <a class="nav__item is-active" href="work.html"><span class="material-symbols-outlined">add_box</span>작업</a>
+      <a class="nav__item" href="patterns.html"><span class="material-symbols-outlined">dashboard_customize</span>패턴 관리</a>
+      <a class="nav__item" href="history.html"><span class="material-symbols-outlined">history</span>작업 기록</a>
+      <a class="nav__item" href="settings.html"><span class="material-symbols-outlined">settings</span>설정</a>
+    </nav>
+    <div class="sidebar__foot">
+      <div class="server-pill"><span class="dot"></span>서버 연결됨 · :8000</div>
+      <div class="sidebar__note">스티즈 전사유니폼 출력 자동화</div>
+    </div>
+  </aside>
+
+  <!-- ===== Main ===== -->
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar__left">
+        <h1 class="page-title">주문 생성</h1>
+        <span class="badge badge--neutral">새 주문</span>
+      </div>
+      <div class="topbar__right">
+        <button class="icon-btn" aria-label="도움말"><span class="material-symbols-outlined">help_outline</span></button>
+        <div class="user-pill"><span class="name">출력 1팀</span><span class="avatar">S</span></div>
+      </div>
+    </header>
+
+    <main class="content stack-6">
+      <!-- Stepper -->
+      <div class="card" style="padding:18px 24px;">
+        <div class="stepper" id="stepper"></div>
+      </div>
+
+      <!-- Two columns: panel + summary -->
+      <div style="display:grid; grid-template-columns:1fr 268px; gap:24px; align-items:start;">
+        <div>
+          <h2 class="section-title" id="panelTitle">패턴을 선택하세요</h2>
+          <p class="section-sub" id="panelSub" style="margin-bottom:18px;">등록된 패턴 프리셋 중 하나를 고릅니다.</p>
+
+          <!-- Panel 0 · 패턴 선택 -->
+          <section id="panel-0" class="grid-2"></section>
+
+          <!-- Panel 1 · 디자인 업로드 -->
+          <section id="panel-1" class="hidden stack-4">
+            <div id="designSlot"></div>
+            <div class="note">
+              <span class="material-symbols-outlined">info</span>
+              업로드 즉시 색공간·투명도를 자동 점검합니다. 투명도가 있으면 출력 시 래스터화되므로 평탄화가 필요합니다.
+            </div>
+          </section>
+
+          <!-- Panel 2 · 주문서 -->
+          <section id="panel-2" class="hidden">
+            <div id="orderSlot"></div>
+          </section>
+
+          <!-- Panel 3 · 생성 -->
+          <section id="panel-3" class="hidden" style="padding:8px 2px;">
+            <div class="row-between" style="margin-bottom:16px; gap:16px; flex-wrap:wrap;">
+              <div>
+                <div class="field__label">출력 형식</div>
+                <div class="section-sub" style="margin:0;">주문마다 형식을 바꿀 수 있습니다. 설정 기본값과 연동됩니다.</div>
+              </div>
+              <div class="seg" id="fmtSeg">
+                <button data-fmt="pdf">PDF</button>
+                <button data-fmt="eps">EPS</button>
+                <button data-fmt="both">둘 다</button>
+              </div>
+            </div>
+            <div class="progress progress--lg" id="genProgress" style="margin-bottom:18px;">
+              <div class="progress__head">
+                <span class="progress__label" id="genLabel">생성 중…</span>
+                <span class="progress__count">완료 <strong id="genDone">0</strong> / 전체 <span id="genTotal">8</span></span>
+              </div>
+              <div class="progress__track"><div class="progress__fill" id="genFill" style="width:0%"></div></div>
+            </div>
+            <div class="wrap-2" id="genPills"></div>
+            <div class="row" style="margin-top:18px; gap:6px;">
+              <button class="linkbtn" id="genCancel" style="color:var(--text-muted);"><span class="material-symbols-outlined">cancel</span>생성 취소</button>
+            </div>
+          </section>
+
+          <!-- Panel 4 · 검수 -->
+          <section id="panel-4" class="hidden stack-5">
+            <div class="verdict" id="verdict"></div>
+            <div id="fmtNote"></div>
+            <div id="skipBanner"></div>
+            <div id="reviewControls"></div>
+            <div class="grid-4" id="reviewGrid"></div>
+            <div id="reviewPager"></div>
+          </section>
+        </div>
+
+        <!-- Summary rail -->
+        <aside class="summary">
+          <div class="eyebrow" style="margin-bottom:10px;">주문 요약</div>
+          <div class="summary__card" id="summaryCard"></div>
+        </aside>
+      </div>
+
+      <!-- Action bar -->
+      <div class="actionbar">
+        <button class="btn btn--ghost" id="btnPrev" disabled><span class="material-symbols-outlined">arrow_back</span>이전</button>
+        <button class="btn btn--primary" id="btnNext" disabled>다음 단계<span class="material-symbols-outlined">arrow_forward</span></button>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- ===== 검수 상세(줌) 모달 ===== -->
+<div class="lightbox hidden" id="lightbox"></div>
+
+<script>
+// ====== Mock data (matches the grader-v2 API contract shapes) ======
+const PATTERNS = [
+  { id:"u-neck-double", name:"U넥 양면 스탠다드", sizes:["XS","S","M","L","XL","2XL","3XL"], pieces:8, icon:"checkroom" },
+  { id:"round-single",  name:"라운드넥 단면",     sizes:["S","M","L","XL","2XL"],            pieces:5, icon:"apparel" },
+  { id:"sleeveless",    name:"나시 양면",         sizes:["S","M","L","XL"],                  pieces:6, icon:"dry_cleaning" },
+  { id:"v-neck",        name:"V넥 양면 프로",     sizes:["XS","S","M","L","XL","2XL","3XL","4XL"], pieces:9, icon:"checkroom" },
+];
+const SIZE_ORDER = ["XS","S","M","L","XL","2XL","3XL","4XL","5XL"];
+const sizeRank = (s) => { const i = SIZE_ORDER.indexOf(s); return i < 0 ? 99 : i; };
+
+// --- generate a realistic large roster (대량 주문 시연용) ---
+const FIRST = ["김","이","박","최","정","강","조","윤","장","임","한","오","서","신","권","황"];
+const GIVEN = ["민준","서연","도윤","지우","하준","서준","지호","수아","예준","지유","주원","하은","건우","서아","현우","민서","우진","지민","선우","유나","도현","채원","시우","예린"];
+const SZ = ["S","S","M","M","M","L","L","XL","XL","2XL"];
+function buildRoster(n) {
+  const rows = [];
+  const failRows = new Set([5, 19, 33]); // 추출 실패(이름 누락) 시연
+  for (let i = 0; i < n; i++) {
+    const name = failRows.has(i) ? "" : FIRST[i % FIRST.length] + GIVEN[(i * 7) % GIVEN.length];
+    rows.push({ size: SZ[i % SZ.length], qty: (i % 4) + 1, name, number: String((i * 3 + 7) % 99).padStart(2, "0") });
+  }
+  return rows;
+}
+let ORDER = buildRoster(48);
+
+const CHECK_NAMES = ["무손실 보존", "단일 임베드", "CMYK 유지", "투명도", "재단선·너치 보존", "합성 정확"];
+function buildChecks(transparencyFail) {
+  return CHECK_NAMES.map((name) => {
+    if (name === "투명도" && transparencyFail)
+      return { name, ok: false, detail: "원본에 투명도가 남아 있어 출력 시 래스터화됩니다. 평탄화 후 재생성하세요." };
+    const detail = {
+      "무손실 보존": "원본 벡터 경로를 손실 없이 보존",
+      "단일 임베드": "디자인을 1회만 임베드 (중복 없음)",
+      "CMYK 유지": "색공간 CMYK 그대로 유지",
+      "투명도": "투명도 없음 · 평탄 합성",
+      "재단선·너치 보존": "조각 외곽 재단선 3 + 너치 6",
+      "합성 정확": "조각·배번·이름 위치 정확",
+    }[name];
+    return { name, ok: true, detail };
+  });
+}
+// RESULTS: 48 결과, 일부 투명도 FAIL
+const FAIL_RESULT = new Set([7, 22, 40]);
+let RESULTS = ORDER.map((r, i) => {
+  const warn = FAIL_RESULT.has(i);
+  return {
+    size: r.size,
+    name: r.name || ("선수 " + (i + 1)),
+    number: r.number,
+    url: null,                       // 서버 제공 PNG 경로 자리
+    status: warn ? "warn" : "pass",
+    checks: buildChecks(warn),
+  };
+});
+
+// 패턴 결함·사이즈 누락으로 생성에서 제외된 주문 (의뢰 3)
+const SKIPPED = [
+  { size:"3XL", count:5, reason:"패턴 파일 결함으로 제외" },
+  { size:"XS",  count:2, reason:"사이즈 누락 — 주문서에 없음" },
+];
+// 출력 형식 — 설정 + 작업 흐름에서 선택(localStorage). PDF·EPS·둘 다 지원 (의뢰 6)
+const OUT_FMT_MAP = { vector:"벡터 CMYK 출력", pdf:"PDF", eps:"EPS", both:"PDF+EPS" };
+function outFmtKey() { return localStorage.getItem("stiz-grader-output-format") || "vector"; }
+function outFmt() { return OUT_FMT_MAP[outFmtKey()] || OUT_FMT_MAP.vector; }
+function setOutFmt(k) { localStorage.setItem("stiz-grader-output-format", k); }
+
+const STEPS = ["패턴 선택","디자인","주문서","생성","검수"];
+const TITLES = ["패턴을 선택하세요","기준 디자인 업로드","주문서 확인 · 수정","출력 파일 생성","미리보기 검수"];
+const SUBS = [
+  "등록된 패턴 프리셋 중 하나를 고릅니다.",
+  "기준 사이즈 디자인 1개를 올리면 전 사이즈로 자동 확장됩니다.",
+  "엑셀에서 추출된 행을 확인하고 필요하면 수정하세요. 검색·필터·정렬로 빠르게 좁힙니다.",
+  "사이즈 × 선수별 {fmt}를 생성합니다.",
+  "각 결과를 클릭해 배번·이름을 확대 검수하고 ZIP으로 내려받으세요.",
+];
+
+// ====== State ======
+let step = 0;
+let patternId = "u-neck-double";
+let design = "idle";      // idle | warn | pass
+let orderUploaded = false;
+let genDone = 0;
+let genTimer = null;
+// bulk-order controls
+let oQuery = "", oFailOnly = false, oSort = "default", oPage = 1;
+const O_PAGE = 12;
+// bulk-review controls
+let rTab = "all", rQuery = "", rPage = 1;
+const R_PAGE = 12;
+// modal
+let modalList = [], modalPos = -1;
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;" }[c]));
+
+// ====== Stepper ======
+function renderStepper() {
+  let h = "";
+  STEPS.forEach((s, i) => {
+    const cls = i < step ? "is-done" : i === step ? "is-active" : "";
+    const inner = i < step ? '<span class="material-symbols-outlined">check</span>' : (i + 1);
+    h += `<div class="step ${cls}"><span class="step__dot">${inner}</span><span class="step__label">${s}</span></div>`;
+    if (i < STEPS.length - 1) h += '<span class="step__line"></span>';
+  });
+  $("#stepper").innerHTML = h;
+}
+
+// ====== Panel 0 · pattern picker ======
+function renderPatterns() {
+  $("#panel-0").innerHTML = PATTERNS.map((p) => {
+    const active = patternId === p.id;
+    const sizeChips = p.sizes.map((s) =>
+      `<span style="font:9px/1.4 var(--font-mono); color:var(--text-subtle); background:var(--surface-sunken); border-radius:var(--radius-xs); padding:2px 5px;">${s}</span>`
+    ).join("");
+    return `
+      <div class="card card--interactive ${active ? "is-selected" : ""}" data-pattern="${p.id}" style="padding:0;">
+        <div style="display:flex; gap:14px; padding:16px; align-items:center;">
+          <div style="width:56px; height:56px; border-radius:var(--radius-md); flex:none; display:flex; align-items:center; justify-content:center; transition:background var(--dur-base) var(--ease-out); background:${active ? "var(--stiz-black)" : "var(--surface-sunken)"};">
+            <span class="material-symbols-outlined" style="font-size:28px; color:${active ? "#fff" : "var(--text-subtle)"};">${p.icon}</span>
+          </div>
+          <div style="flex:1; min-width:0;">
+            <div style="font:var(--text-body-strong); color:var(--text-strong);">${p.name}</div>
+            <div class="tnum" style="font:var(--text-caption); color:var(--text-muted); margin-top:3px;">${p.sizes.length}개 사이즈 · ${p.pieces}조각</div>
+            <div class="wrap-2" style="gap:4px; margin-top:8px;">${sizeChips}</div>
+          </div>
+          ${active ? '<span class="material-symbols-outlined msf" style="font-size:22px; color:var(--accent); flex:none;">check_circle</span>' : ""}
+        </div>
+      </div>`;
+  }).join("");
+  $("#panel-0").querySelectorAll("[data-pattern]").forEach((el) => {
+    el.addEventListener("click", () => { patternId = el.dataset.pattern; renderPatterns(); update(); });
+  });
+}
+
+// ====== Panel 1 · design upload (빈 본체 + 점검 5케이스) ======
+// 점검 결과 케이스. block:true면 진행 차단. (의뢰 1·2)
+const DESIGN_CASES = {
+  pass:         { tone:"pass", chip:"check_circle", block:false, file:"u-neck_M_빈본체_flat.pdf", meta:"CMYK · 투명도 없음 · 본체 포함 · 평탄화 완료 · 2.4MB" },
+  transparency: { tone:"warn", chip:"warning", block:true, file:"design_final.pdf", meta:"CMYK · 투명도 발견 · 본체 포함 · 3.1MB",
+    title:"이 디자인은 투명도가 있어 출력 시 래스터화됩니다",
+    body:"원본에서 투명도를 평탄화한 뒤 다시 업로드하세요. 평탄화 전에는 다음 단계로 진행할 수 없습니다." },
+  nobody:       { tone:"fail", chip:"error", block:true, file:"design_export.pdf", meta:"PDF · 본체 누락 · 0.1MB",
+    title:"디자인 본체가 PDF에 포함되지 않았습니다",
+    body:"일러스트레이터에서 ‘PDF 호환 파일 만들기’를 켜고 다시 저장하면 본체가 포함됩니다. (파일은 열리지만 그림이 비어 있는 상태예요.)" },
+  postscript:   { tone:"fail", chip:"error", block:true, file:"old_design.ai", meta:"PostScript 형식 · 지원하지 않음",
+    title:"PDF 호환 형식이 아닙니다",
+    body:"PostScript 기반 AI는 받을 수 없습니다. Illustrator에서 ‘PDF 호환 파일 만들기’로 다시 저장해 업로드하세요." },
+  baked:        { tone:"warn", chip:"warning", block:true, file:"완성본_07_김민준.pdf", meta:"PDF · 번호·이름 베이크됨 · 2.6MB",
+    title:"이 파일엔 번호·이름이 이미 들어 있어요 — 빈 본체를 올려주세요",
+    body:"번호·이름이 박힌 완성본(샘플)은 패턴 등록의 ‘기준’으로만 쓰입니다. 작업에는 번호·이름 없는 빈 본체 템플릿이 필요합니다." },
+};
+const DEMO_LABELS = { pass:"정상", transparency:"투명도", nobody:"본체 누락", postscript:"PostScript", baked:"베이크됨" };
+
+function renderDesign() {
+  const slot = $("#designSlot");
+  if (design === "idle") {
+    slot.innerHTML = `
+      <button class="dropzone" id="designDrop">
+        <span class="material-symbols-outlined dropzone__icon">upload_file</span>
+        <span class="dropzone__title">빈 본체 템플릿을 업로드하세요</span>
+        <span class="dropzone__hint">번호·이름 없는 기준 사이즈 1개 · 끌어다 놓거나 클릭</span>
+        <span class="dropzone__accept">PDF 호환 AI / PDF · 본체 포함 필수</span>
+      </button>
+      <div class="note" style="margin-top:10px;"><span class="material-symbols-outlined">info</span>완성본(번호·이름 샘플)은 패턴 등록의 ‘기준’으로만 쓰입니다. 작업에는 빈 본체를 올려주세요.</div>`;
+    $("#designDrop").addEventListener("click", () => { design = "pass"; renderDesign(); update(); });
+    return;
+  }
+  const c = DESIGN_CASES[design];
+  const alertTone = c.tone === "fail" ? "alert--fail" : "alert--warn";
+  const alertIcon = c.tone === "fail" ? "error" : "warning";
+  slot.innerHTML = `
+    <div class="stack-4">
+      <div class="filecard filecard--${c.tone}">
+        <span class="material-symbols-outlined filecard__chip">${c.chip}</span>
+        <div class="filecard__body">
+          <div class="filecard__name">${c.file}</div>
+          <div class="filecard__meta">${c.meta}</div>
+        </div>
+        <button class="icon-btn icon-btn--sm" aria-label="제거" id="designRemove"><span class="material-symbols-outlined">close</span></button>
+      </div>
+      ${c.block ? `
+        <div class="alert ${alertTone}">
+          <span class="material-symbols-outlined alert__icon">${alertIcon}</span>
+          <div>
+            <div class="alert__title">${c.title}</div>
+            <div class="alert__body">${c.body}</div>
+            <button class="alert__action" id="designFix">빈 본체(본체 포함) 파일로 교체 (데모)</button>
+          </div>
+        </div>` : `
+        <div class="note" style="padding:0;"><span class="material-symbols-outlined">check</span>본체 포함 · 빈 본체 확인됨. 다음 단계로 진행할 수 있습니다.</div>`}
+      <div class="row" style="gap:6px; align-items:center; padding-top:2px;">
+        <span class="muted" style="font:var(--text-caption);">데모 케이스:</span>
+        ${Object.keys(DEMO_LABELS).map((k) => `<button class="fchip ${design===k?"is-active":""}" data-case="${k}" style="height:26px; padding:0 10px; font:var(--text-caption); font-weight:600;">${DEMO_LABELS[k]}</button>`).join("")}
+      </div>
+    </div>`;
+  $("#designRemove").addEventListener("click", () => { design = "idle"; renderDesign(); update(); });
+  const fix = $("#designFix"); if (fix) fix.addEventListener("click", () => { design = "pass"; renderDesign(); update(); });
+  slot.querySelectorAll("[data-case]").forEach((b) => b.addEventListener("click", () => { design = b.dataset.case; renderDesign(); update(); }));
+}
+
+// ====== Panel 2 · order table (대량 대응) ======
+function orderView() {
+  let rows = ORDER.map((r, i) => ({ ...r, _i: i }));
+  if (oQuery.trim()) {
+    const q = oQuery.trim().toLowerCase();
+    rows = rows.filter((r) => (r.name || "").toLowerCase().includes(q) || String(r.number).includes(q));
+  }
+  if (oFailOnly) rows = rows.filter((r) => !r.name);
+  if (oSort === "size") rows.sort((a, b) => sizeRank(a.size) - sizeRank(b.size));
+  else if (oSort === "name") rows.sort((a, b) => (a.name || "힣").localeCompare(b.name || "힣", "ko"));
+  else if (oSort === "number") rows.sort((a, b) => (+a.number) - (+b.number));
+  return rows;
+}
+function renderOrder() {
+  const slot = $("#orderSlot");
+  if (!orderUploaded) {
+    slot.innerHTML = `
+      <button class="dropzone" id="orderDrop">
+        <span class="material-symbols-outlined dropzone__icon">table_view</span>
+        <span class="dropzone__title">주문서를 업로드하세요</span>
+        <span class="dropzone__hint">엑셀(.xlsx)에서 자동 추출</span>
+        <span class="dropzone__accept">사이즈 · 수량 · 이름 · 배번</span>
+      </button>`;
+    $("#orderDrop").addEventListener("click", () => { orderUploaded = true; oPage = 1; renderOrder(); update(); });
+    return;
+  }
+  const failTotal = ORDER.filter((r) => !r.name).length;
+  const view = orderView();
+  const totalPages = Math.max(1, Math.ceil(view.length / O_PAGE));
+  if (oPage > totalPages) oPage = totalPages;
+  const pageRows = view.slice((oPage - 1) * O_PAGE, oPage * O_PAGE);
+  const sortIcon = (k) => oSort === k ? "is-sorted" : "";
+
+  const rowsHtml = pageRows.map((r) => {
+    const warn = !r.name;
+    const i = r._i;
+    return `
+      <tr class="${warn ? "is-warn" : ""}" data-row="${i}">
+        <td><input class="cell-input" data-f="size" value="${esc(r.size)}" style="font-weight:600; color:var(--text-strong);"></td>
+        <td><input class="cell-input num" data-f="qty" value="${r.qty}" inputmode="numeric"></td>
+        <td>
+          <input class="cell-input ${warn ? "is-error" : ""}" data-f="name" value="${esc(r.name)}" placeholder="추출 실패 — 입력 필요">
+          ${warn ? '<div class="cell-error" style="margin-top:3px; padding-left:7px;"><span class="material-symbols-outlined">error</span>추출 실패 — 입력 필요</div>' : ""}
+        </td>
+        <td><input class="cell-input num mono" data-f="number" value="${esc(r.number)}" inputmode="numeric"></td>
+        <td style="text-align:center;"><button class="icon-btn icon-btn--sm icon-btn--danger" data-del="${i}" aria-label="행 삭제"><span class="material-symbols-outlined">close</span></button></td>
+      </tr>`;
+  }).join("");
+
+  slot.innerHTML = `
+    <div class="stack-4">
+      <div class="toolbar">
+        <div class="search">
+          <span class="material-symbols-outlined">search</span>
+          <input id="oSearch" type="text" placeholder="이름 · 배번 검색" value="${esc(oQuery)}" />
+        </div>
+        <button class="fchip ${oFailOnly ? "is-active" : ""}" id="oFail">
+          <span class="material-symbols-outlined">${oFailOnly ? "filter_alt" : "error"}</span>확인 필요만<span class="count">${failTotal}</span>
+        </button>
+        <select class="select" id="oSort">
+          <option value="default" ${oSort==="default"?"selected":""}>정렬: 입력순</option>
+          <option value="size" ${oSort==="size"?"selected":""}>정렬: 사이즈</option>
+          <option value="name" ${oSort==="name"?"selected":""}>정렬: 이름</option>
+          <option value="number" ${oSort==="number"?"selected":""}>정렬: 배번</option>
+        </select>
+        <div class="toolbar__spacer"></div>
+        <button class="linkbtn" id="addRow"><span class="material-symbols-outlined">add</span>행 추가</button>
+      </div>
+
+      <div class="row" style="gap:8px;">
+        <span class="muted tnum" style="font:var(--text-sm);">order_2026.xlsx · <strong class="strong">${ORDER.length}행</strong>${view.length !== ORDER.length ? ` · 표시 ${view.length}` : ""}</span>
+        ${failTotal > 0 ? `<span class="badge badge--warn badge--sm"><span class="material-symbols-outlined">error</span>확인 필요 ${failTotal}</span>` : `<span class="badge badge--pass badge--sm"><span class="material-symbols-outlined">check_circle</span>모두 입력됨</span>`}
+      </div>
+
+      <div class="tablewrap tablewrap--scroll">
+        <table class="dtable dtable--edit">
+          <thead><tr>
+            <th class="sortable ${sortIcon("size")}" data-sort="size">사이즈 <span class="material-symbols-outlined">unfold_more</span></th>
+            <th class="num">수량</th>
+            <th class="sortable ${sortIcon("name")}" data-sort="name">이름 <span class="material-symbols-outlined">unfold_more</span></th>
+            <th class="num sortable ${sortIcon("number")}" data-sort="number">배번 <span class="material-symbols-outlined">unfold_more</span></th>
+            <th style="width:40px;"></th>
+          </tr></thead>
+          <tbody>${pageRows.length ? rowsHtml : `<tr><td colspan="5" style="padding:0;"><div class="empty" style="padding:36px;"><div class="empty__icon"><span class="material-symbols-outlined">filter_alt_off</span></div><div class="empty__title">조건에 맞는 행이 없습니다</div><div class="empty__desc">검색어나 필터를 바꿔보세요.</div></div></td></tr>`}</tbody>
+        </table>
+      </div>
+      <div id="orderPager"></div>
+      <div class="note"><span class="material-symbols-outlined">edit</span>셀을 클릭해 바로 수정. 헤더로 정렬, 위 검색·필터로 좁힐 수 있습니다. 추출 실패 셀은 붉게 표시됩니다.</div>
+    </div>`;
+
+  // pager
+  renderPager($("#orderPager"), view.length, oPage, O_PAGE, (p) => { oPage = p; renderOrder(); });
+
+  // wire toolbar
+  const sEl = $("#oSearch");
+  sEl.addEventListener("input", (e) => { oQuery = e.target.value; oPage = 1; renderOrder(); const x=$("#oSearch"); x.focus(); x.setSelectionRange(x.value.length,x.value.length); });
+  $("#oFail").addEventListener("click", () => { oFailOnly = !oFailOnly; oPage = 1; renderOrder(); });
+  $("#oSort").addEventListener("change", (e) => { oSort = e.target.value; oPage = 1; renderOrder(); });
+  slot.querySelectorAll("th.sortable").forEach((th) => th.addEventListener("click", () => {
+    oSort = oSort === th.dataset.sort ? "default" : th.dataset.sort; oPage = 1; renderOrder();
+  }));
+  // wire cells
+  slot.querySelectorAll(".cell-input").forEach((inp) => {
+    inp.addEventListener("input", (e) => {
+      const i = +e.target.closest("[data-row]").dataset.row;
+      ORDER[i][e.target.dataset.f] = e.target.value;
+      if (e.target.dataset.f === "name") { renderOrder(); update(); }
+    });
+  });
+  slot.querySelectorAll("[data-del]").forEach((b) => {
+    b.addEventListener("click", () => { ORDER.splice(+b.dataset.del, 1); renderOrder(); update(); });
+  });
+  $("#addRow").addEventListener("click", () => { ORDER.push({ size:"M", qty:1, name:"", number:"00" }); oPage = Math.ceil((orderView().length)/O_PAGE); renderOrder(); update(); });
+}
+
+// ====== shared pager ======
+function renderPager(container, total, page, pageSize, onGo) {
+  if (!container) return;
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  if (pages <= 1) { container.innerHTML = ""; return; }
+  const from = total ? (page - 1) * pageSize + 1 : 0;
+  const to = Math.min(total, page * pageSize);
+  // build compact page buttons
+  const btns = [];
+  const add = (p) => btns.push(`<button class="pager__btn ${p === page ? "is-active" : ""}" data-go="${p}">${p}</button>`);
+  const dots = () => btns.push('<span class="pager__dots">…</span>');
+  let pset = new Set([1, pages, page, page - 1, page + 1]);
+  let prev = 0;
+  [...pset].filter((p) => p >= 1 && p <= pages).sort((a, b) => a - b).forEach((p) => {
+    if (p - prev > 1) dots();
+    add(p); prev = p;
+  });
+  container.innerHTML = `
+    <div class="pager">
+      <span class="pager__info">${from}–${to} / ${total}</span>
+      <div class="pager__ctrl">
+        <button class="pager__btn" data-go="${page - 1}" ${page === 1 ? "disabled" : ""} aria-label="이전"><span class="material-symbols-outlined">chevron_left</span></button>
+        ${btns.join("")}
+        <button class="pager__btn" data-go="${page + 1}" ${page === pages ? "disabled" : ""} aria-label="다음"><span class="material-symbols-outlined">chevron_right</span></button>
+      </div>
+    </div>`;
+  container.querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", () => {
+    const p = +b.dataset.go; if (p >= 1 && p <= pages) onGo(p);
+  }));
+}
+
+// ====== Panel 3 · generate ======
+function renderFmtSeg() {
+  const k = outFmtKey();
+  $("#fmtSeg").querySelectorAll("button").forEach((b) => b.classList.toggle("is-active", b.dataset.fmt === k));
+}
+$("#fmtSeg").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
+  setOutFmt(b.dataset.fmt);
+  renderFmtSeg();
+  $("#genLabel").textContent = (genDone >= RESULTS.length ? "생성 완료" : outFmt() + " 생성 중…");
+}));
+function startGenerate() {
+  clearInterval(genTimer);
+  genDone = 0;
+  renderFmtSeg();
+  renderGenPills();
+  $("#genTotal").textContent = RESULTS.length;
+  tickGenerate();
+  genTimer = setInterval(tickGenerate, 55);
+}
+function tickGenerate() {
+  if (genDone >= RESULTS.length) {
+    clearInterval(genTimer);
+    $("#genLabel").textContent = "생성 완료";
+    $("#genProgress").classList.add("progress--pass");
+    $("#genCancel").classList.add("hidden");
+    update();
+    return;
+  }
+  genDone += 4; if (genDone > RESULTS.length) genDone = RESULTS.length;
+  $("#genDone").textContent = genDone;
+  $("#genFill").style.width = (genDone / RESULTS.length * 100) + "%";
+  renderGenPills();
+  update();
+}
+function renderGenPills() {
+  // show a window of pills to stay compact at 48
+  const shown = RESULTS.slice(0, 16);
+  $("#genPills").innerHTML = shown.map((r, i) => {
+    const done = i < genDone;
+    return `<span class="pill ${done ? "is-done" : ""}"><span class="material-symbols-outlined">${done ? "check_circle" : "schedule"}</span>${r.size} · ${r.number}</span>`;
+  }).join("") + (RESULTS.length > 16 ? `<span class="pill">+${RESULTS.length - 16}</span>` : "");
+}
+
+// ====== Panel 4 · review (대량 대응 + 상세 모달) ======
+function reviewView() {
+  let list = RESULTS.map((r, i) => ({ ...r, _i: i }));
+  if (rTab === "pass") list = list.filter((r) => r.status === "pass");
+  else if (rTab === "warn") list = list.filter((r) => r.status === "warn");
+  if (rQuery.trim()) {
+    const q = rQuery.trim().toLowerCase();
+    list = list.filter((r) => r.name.toLowerCase().includes(q) || String(r.number).includes(q));
+  }
+  return list;
+}
+function renderReview() {
+  const passCount = RESULTS.filter((r) => r.status === "pass").length;
+  const warnCount = RESULTS.length - passCount;
+  const allPass = warnCount === 0;
+  $("#verdict").className = "verdict " + (allPass ? "verdict--pass" : "verdict--warn");
+  $("#verdict").innerHTML = `
+    <div class="verdict__left">
+      <span class="material-symbols-outlined verdict__icon">${allPass ? "verified" : "warning"}</span>
+      <div>
+        <div class="verdict__title tnum">${passCount} / ${RESULTS.length} 공장 전달 가능</div>
+        <div class="verdict__sub">${allPass ? "색은 참고용이며 실제 출력색은 공장 기준입니다." : `${warnCount}건 확인 필요 — 결과를 클릭해 상세를 검수하세요.`}</div>
+      </div>
+    </div>
+    <button class="btn btn--primary"><span class="material-symbols-outlined">download</span>ZIP 다운로드(${outFmt()})</button>`;
+
+  // 둘 다(both)일 때 ZIP 하위폴더 안내 (의뢰 6)
+  $("#fmtNote").innerHTML = outFmtKey() === "both" ? `
+    <div class="note" style="padding:0;"><span class="material-symbols-outlined">folder_zip</span>두 형식을 함께 출력합니다. ZIP 안에서 <span class="mono">pdf/</span> · <span class="mono">eps/</span> 하위폴더로 분리됩니다.</div>` : "";
+
+  // 건너뜀 N건 배너 (의뢰 3)
+  const skipTotal = SKIPPED.reduce((a, s) => a + s.count, 0);
+  $("#skipBanner").innerHTML = skipTotal ? `
+    <div class="alert alert--warn">
+      <span class="material-symbols-outlined alert__icon">block</span>
+      <div style="flex:1;">
+        <div class="alert__title">건너뜀 ${skipTotal}건 — 생성에서 제외됨</div>
+        <div class="alert__body" style="margin-top:6px;">
+          ${SKIPPED.map((s) => `<div class="row" style="gap:7px; margin-top:3px;"><span class="badge badge--warn badge--sm tnum">${s.size} ${s.count}건</span><span class="muted">${s.reason}</span></div>`).join("")}
+        </div>
+      </div>
+    </div>` : "";
+
+  // controls: tabs + search
+  $("#reviewControls").innerHTML = `
+    <div class="stack-4">
+      <div class="tabs">
+        <button class="tab ${rTab==="all"?"is-active":""}" data-tab="all">전체<span class="tab__count">${RESULTS.length}</span></button>
+        <button class="tab ${rTab==="pass"?"is-active":""}" data-tab="pass">전달 가능<span class="tab__count">${passCount}</span></button>
+        <button class="tab ${rTab==="warn"?"is-active":""}" data-tab="warn">확인 필요<span class="tab__count">${warnCount}</span></button>
+      </div>
+      <div class="toolbar">
+        <div class="search">
+          <span class="material-symbols-outlined">search</span>
+          <input id="rSearch" type="text" placeholder="이름 · 배번 검색" value="${esc(rQuery)}" />
+        </div>
+        <div class="toolbar__spacer"></div>
+        <span class="pager__info" id="rCount"></span>
+      </div>
+    </div>`;
+
+  const view = reviewView();
+  const totalPages = Math.max(1, Math.ceil(view.length / R_PAGE));
+  if (rPage > totalPages) rPage = totalPages;
+  const pageItems = view.slice((rPage - 1) * R_PAGE, rPage * R_PAGE);
+  $("#rCount").textContent = `${view.length}건 표시`;
+
+  if (!pageItems.length) {
+    $("#reviewGrid").className = "";
+    $("#reviewGrid").innerHTML = `<div class="card"><div class="empty"><div class="empty__icon"><span class="material-symbols-outlined">filter_alt_off</span></div><div class="empty__title">조건에 맞는 결과가 없습니다</div><div class="empty__desc">다른 탭을 고르거나 검색어를 바꿔보세요.</div></div></div>`;
+  } else {
+    $("#reviewGrid").className = "grid-4";
+    $("#reviewGrid").innerHTML = pageItems.map((r) => {
+      const pass = r.status === "pass";
+      return `
+        <div class="tile card--interactive" data-open="${r._i}" style="cursor:pointer;">
+          <div class="tile__img">
+            <span class="material-symbols-outlined">checkroom</span>
+            <span class="tile__num">${esc(r.number)}</span>
+            <span class="tile__badge"><span class="badge ${pass ? "badge--pass" : "badge--warn"} badge--sm"><span class="material-symbols-outlined">${pass ? "check" : "warning"}</span>${pass ? "PASS" : "확인"}</span></span>
+          </div>
+          <div class="tile__foot">
+            <div class="tile__name">${esc(r.name)}</div>
+            <div class="tile__size">${esc(r.size)}</div>
+          </div>
+        </div>`;
+    }).join("");
+  }
+
+  renderPager($("#reviewPager"), view.length, rPage, R_PAGE, (p) => { rPage = p; renderReview(); });
+
+  // wire
+  $("#reviewControls").querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => { rTab = t.dataset.tab; rPage = 1; renderReview(); }));
+  const rs = $("#rSearch");
+  rs.addEventListener("input", (e) => { rQuery = e.target.value; rPage = 1; renderReview(); const x=$("#rSearch"); x.focus(); x.setSelectionRange(x.value.length,x.value.length); });
+  $("#reviewGrid").querySelectorAll("[data-open]").forEach((el) => el.addEventListener("click", () => openModal(+el.dataset.open)));
+}
+
+// ====== 검수 상세(줌) 모달 ======
+function openModal(resultIndex) {
+  modalList = reviewView().map((r) => r._i);     // navigate within current filter
+  modalPos = modalList.indexOf(resultIndex);
+  if (modalPos < 0) { modalList = RESULTS.map((_, i) => i); modalPos = resultIndex; }
+  renderModal();
+  $("#lightbox").classList.remove("hidden");
+}
+function closeModal() { $("#lightbox").classList.add("hidden"); modalPos = -1; }
+function modalStep(d) {
+  if (modalPos < 0) return;
+  modalPos = (modalPos + d + modalList.length) % modalList.length;
+  renderModal();
+}
+function renderModal() {
+  const r = RESULTS[modalList[modalPos]];
+  const pass = r.status === "pass";
+  const checksHtml = r.checks.map((c) => `
+    <div class="check">
+      <span class="material-symbols-outlined check__ic ${c.ok ? "ok" : "no"}">${c.ok ? "check_circle" : "cancel"}</span>
+      <div>
+        <div class="check__name">${esc(c.name)}</div>
+        <div class="check__detail ${c.ok ? "" : "no"}">${esc(c.detail)}</div>
+      </div>
+    </div>`).join("");
+  $("#lightbox").innerHTML = `
+    <div class="lb" role="dialog" aria-modal="true">
+      <div class="lb__head">
+        <div class="lb__title">
+          <span class="num">${esc(r.number)}</span>
+          <div>
+            <div class="meta">${esc(r.name)} · ${esc(r.size)}</div>
+            <div class="sub">${modalPos + 1} / ${modalList.length} · ${pass ? "전달 가능" : "확인 필요"}</div>
+          </div>
+          <span class="badge ${pass ? "badge--pass" : "badge--warn"} badge--sm" style="margin-left:4px;"><span class="material-symbols-outlined">${pass ? "verified" : "warning"}</span>${pass ? "전달 가능" : "확인 필요"}</span>
+        </div>
+        <div class="lb__nav">
+          <button class="icon-btn" id="mPrev" aria-label="이전 결과 (←)"><span class="material-symbols-outlined">chevron_left</span></button>
+          <button class="icon-btn" id="mNext" aria-label="다음 결과 (→)"><span class="material-symbols-outlined">chevron_right</span></button>
+          <button class="icon-btn" id="mClose" aria-label="닫기"><span class="material-symbols-outlined">close</span></button>
+        </div>
+      </div>
+      <div class="lb__body">
+        <div class="lb__preview">
+          <div class="lb__jersey">
+            <div class="lb__overlay lb__overlay--number" style="left:34%; top:20%; width:32%; height:18%;"><span class="tag">배번</span>${esc(r.number)}</div>
+            <div class="lb__overlay lb__overlay--name" style="left:28%; top:48%; width:44%; height:11%; font-size:13px;"><span class="tag">이름</span>${esc(r.name)}</div>
+          </div>
+          <div class="lb__zoomtag"><span class="material-symbols-outlined">center_focus_strong</span>배번·이름 영역 오버레이 (preset 좌표)</div>
+        </div>
+        <div class="lb__side">
+          <div>
+            <div class="eyebrow" style="margin-bottom:8px;">검증 항목</div>
+            <div class="lb__checks">${checksHtml}</div>
+          </div>
+        </div>
+      </div>
+      <div class="lb__foot">
+        <span class="muted" style="font:var(--text-caption);">←/→ 이동 · Esc 닫기</span>
+        <div class="row" style="gap:8px;">
+          <button class="btn btn--secondary btn--sm" id="mNext2">다음<span class="material-symbols-outlined">arrow_forward</span></button>
+          <button class="btn btn--primary btn--sm"><span class="material-symbols-outlined">download</span>이 파일 다운로드</button>
+        </div>
+      </div>
+    </div>`;
+  $("#mPrev").addEventListener("click", () => modalStep(-1));
+  $("#mNext").addEventListener("click", () => modalStep(1));
+  $("#mNext2").addEventListener("click", () => modalStep(1));
+  $("#mClose").addEventListener("click", closeModal);
+}
+$("#lightbox").addEventListener("click", (e) => { if (e.target.id === "lightbox") closeModal(); });
+document.addEventListener("keydown", (e) => {
+  if ($("#lightbox").classList.contains("hidden")) return;
+  if (e.key === "Escape") closeModal();
+  else if (e.key === "ArrowLeft") modalStep(-1);
+  else if (e.key === "ArrowRight") modalStep(1);
+});
+
+// ====== Summary rail ======
+function renderSummary() {
+  const p = PATTERNS.find((x) => x.id === patternId);
+  const rows = [
+    ["패턴", p ? p.name : null, !!p],
+    ["디자인", design === "pass" ? "본체 포함 · 빈 본체" : design === "idle" ? null : "점검 경고", design === "pass"],
+    ["주문 행", ORDER.length ? ORDER.length + "행" : null, ORDER.length > 0],
+    ["예상 출력", p && ORDER.length ? RESULTS.length + "개 파일" : null, false],
+  ];
+  $("#summaryCard").innerHTML = rows.map(([label, val, ok]) => `
+    <div class="summary__row">
+      <span class="summary__label">${label}</span>
+      <span class="summary__val ${val ? "is-set" : ""}">${ok ? '<span class="material-symbols-outlined">check_circle</span>' : ""}${val || "—"}</span>
+    </div>`).join("");
+}
+
+// ====== Step orchestration ======
+function canAdvance() {
+  return [!!patternId, design === "pass", ORDER.length > 0, genDone >= RESULTS.length, true][step];
+}
+function showPanel() {
+  for (let i = 0; i < 5; i++) $("#panel-" + i).classList.toggle("hidden", i !== step);
+  $("#panelTitle").textContent = TITLES[step];
+  $("#panelSub").textContent = SUBS[step].replace("{fmt}", outFmt());
+}
+function update() {
+  renderStepper();
+  showPanel();
+  renderSummary();
+  $("#btnPrev").disabled = step === 0;
+  const next = $("#btnNext");
+  next.disabled = !canAdvance();
+  if (step === 4) {
+    next.innerHTML = '<span class="material-symbols-outlined">download</span>ZIP 다운로드';
+    next.disabled = false;
+  } else if (step === 3) {
+    next.innerHTML = '검수로 이동<span class="material-symbols-outlined">arrow_forward</span>';
+  } else {
+    next.innerHTML = '다음 단계<span class="material-symbols-outlined">arrow_forward</span>';
+  }
+}
+function goTo(n) {
+  step = Math.max(0, Math.min(4, n));
+  if (step === 3) startGenerate(); else clearInterval(genTimer);
+  if (step === 4) renderReview();
+  if (step !== 3) { $("#genProgress").classList.remove("progress--pass"); $("#genCancel").classList.remove("hidden"); $("#genLabel").textContent = outFmt() + " 생성 중…"; }
+  update();
+}
+
+$("#btnPrev").addEventListener("click", () => goTo(step - 1));
+$("#btnNext").addEventListener("click", () => { if (step < 4) goTo(step + 1); });
+document.addEventListener("click", (e) => { if (e.target.closest("#genCancel")) { clearInterval(genTimer); goTo(2); } });
+
+// ====== Init ======
+renderPatterns();
+renderDesign();
+renderOrder();
+update();
+</script>
+</body>
+</html>
