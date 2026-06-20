@@ -23,6 +23,9 @@ data/jobs/
 # 웹앱 업로드 임시저장소 (브라우저가 올린 주문서·디자인을 엔진에 넘기려 잠시 보관)
 data/uploads/
 
+# 웹앱 설정 (직원 PC별 GS 경로·출력형식 등 — 환경마다 달라 추적 대상 아님)
+data/settings.json
+
 # 디자인 원본 .ai (1.7~1.9MB 바이너리, preset design_file/글리프셋 소스가 참조)
 # clone 시 디자이너에게 별도 확보 필요. design_source/README.md 참고.
 design_source/*.ai

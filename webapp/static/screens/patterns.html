@@ -261,6 +261,29 @@ function toast(tone, icon, title, body) {
   setTimeout(() => t.remove(), 3600);
 }
 
+// ── 패턴 등록 실제 입력 저장소(서버 POST /api/patterns 로 보낼 것들) ──────────
+//   화면 마크업은 그대로 두고, 사용자가 고른 '진짜 파일'만 여기 모았다가 저장 때 전송.
+const REG = {
+  sizeFiles: {},   // { "XL": File, "M": File, ... } 사이즈별 패턴 파일
+  glyphFile: null, // 번호 글리프셋 소스(.ai/.pdf/.svg) — 선택
+  refFile: null,   // 완성본(번호·이름 박힌 1장) — 선택
+};
+
+// 숨김 파일 선택창을 띄워 고른 File 을 콜백으로 돌려준다(마크업 무수정 위해 동적 생성).
+function pickFile(accept, onPick) {
+  const inp = document.createElement("input");
+  inp.type = "file";
+  inp.accept = accept || "";
+  inp.style.display = "none";
+  document.body.appendChild(inp);
+  inp.addEventListener("change", () => {
+    const f = inp.files && inp.files[0];
+    inp.remove();
+    if (f) onPick(f);
+  });
+  inp.click();
+}
+
 // ---- list grid (서버 패턴으로 렌더) ----
 function renderPatternGrid() {
   const grid = $("#patternGrid");
@@ -307,16 +330,33 @@ fetch("/api/patterns")
   .then((list) => { PATTERNS = Array.isArray(list) ? list : []; renderPatternGrid(); })
   .catch(() => { PATTERNS = []; renderPatternGrid(); });
 
-// ---- size chips ----
-const SIZES = ["XS","S","M","L","XL","2XL","3XL"];
-$("#sizeChips").innerHTML = SIZES.map((s, i) => {
-  const done = i < 4;
-  return `<div style="display:flex; align-items:center; gap:7px; padding:7px 10px 7px 12px; border-radius:var(--radius-md);
-    border:1px solid ${done ? "var(--status-pass-border)" : "var(--border-default)"}; background:${done ? "var(--status-pass-bg)" : "var(--surface-card)"};">
-    <span style="font:var(--text-sm-strong); color:var(--text-strong);">${s}</span>
-    <span class="material-symbols-outlined" style="font-size:16px; color:${done ? "var(--green-600)" : "var(--text-subtle)"};">${done ? "check_circle" : "upload"}</span>
-  </div>`;
-}).join("");
+// ---- size chips (실제 파일 선택과 연결) ----
+//   각 칩을 클릭하면 그 사이즈의 패턴 파일(.ai/.svg)을 고른다. 고른 사이즈는
+//   초록 체크로 표시한다. REG.sizeFiles 에 사이즈→File 로 저장한다.
+const SIZES = ["5XS","4XS","3XS","2XS","XS","S","M","L","XL","2XL","3XL","4XL","5XL"];
+function renderSizeChips() {
+  $("#sizeChips").innerHTML = SIZES.map((s) => {
+    const done = !!REG.sizeFiles[s];   // 이 사이즈 파일을 골랐는가
+    return `<div data-size="${s}" style="cursor:pointer; display:flex; align-items:center; gap:7px; padding:7px 10px 7px 12px; border-radius:var(--radius-md);
+      border:1px solid ${done ? "var(--status-pass-border)" : "var(--border-default)"}; background:${done ? "var(--status-pass-bg)" : "var(--surface-card)"};">
+      <span style="font:var(--text-sm-strong); color:var(--text-strong);">${s}</span>
+      <span class="material-symbols-outlined" style="font-size:16px; color:${done ? "var(--green-600)" : "var(--text-subtle)"};">${done ? "check_circle" : "upload"}</span>
+    </div>`;
+  }).join("");
+  // 칩 클릭 → 그 사이즈 파일 선택.
+  $("#sizeChips").querySelectorAll("[data-size]").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      const sz = chip.dataset.size;
+      pickFile(".ai,.svg,.pdf", (f) => {
+        REG.sizeFiles[sz] = f;       // 사이즈→File 저장
+        renderSizeChips();           // 체크 표시 갱신
+        const n = Object.keys(REG.sizeFiles).length;
+        toast("info", "upload", `${sz} 패턴 등록됨`, `${f.name} · 현재 ${n}개 사이즈`);
+      });
+    });
+  });
+}
+renderSizeChips();
 
 // =====================================================================
 //  Generic region editor core — shared by mapping(B) and number/name(C)
@@ -605,6 +645,8 @@ function seedRgn() {
 //  4-A · 번호 글리프셋 업로드
 // =====================================================================
 let glyphLoaded = false;
+// 서버가 글리프셋 추출 후 알려준 인식 글자 수(없으면 0). 결과 카드에 보여준다.
+let glyphCount = 0;
 function renderGlyph() {
   const slot = $("#glyphSlot");
   if (!glyphLoaded) {
@@ -615,21 +657,33 @@ function renderGlyph() {
         <span class="dropzone__hint">0~9 아웃라인 · 끌어다 놓거나 클릭</span>
         <span class="dropzone__accept">AI / PDF / SVG</span>
       </button>`;
-    $("#glyphDrop").addEventListener("click", () => { glyphLoaded = true; renderGlyph(); });
+    // 클릭 → 실제 글리프셋 파일 선택(저장 때 서버로 보내 0~9 추출).
+    $("#glyphDrop").addEventListener("click", () => {
+      pickFile(".ai,.pdf,.svg", (f) => {
+        REG.glyphFile = f; glyphLoaded = true; glyphCount = 0; renderGlyph();
+      });
+    });
   } else {
+    // 아직 추출 전이면 "추출 대기"로, 저장 후 서버가 준 인식 글자수를 표시한다.
+    const recognized = glyphCount > 0
+      ? `${glyphCount}자 인식됨 ✓ · 아웃라인 글리프`
+      : `선택됨 · 저장 시 0~9 자동 추출`;
+    const fname = (REG.glyphFile && REG.glyphFile.name) || "글리프셋";
     slot.innerHTML = `
       <div class="filecard filecard--pass">
         <span class="material-symbols-outlined filecard__chip">123</span>
         <div class="filecard__body">
-          <div class="filecard__name">number_glyphs_0-9.ai</div>
+          <div class="filecard__name">${fname}</div>
           <div class="row" style="gap:6px; margin-top:6px;">
             ${[...Array(10)].map((_, n) => `<span class="mono" style="font-weight:800; font-size:15px; color:var(--text-strong); width:18px; text-align:center;">${n}</span>`).join("")}
           </div>
-          <div class="filecard__meta" style="margin-top:6px;">10자 인식됨 ✓ · 아웃라인 글리프</div>
+          <div class="filecard__meta" style="margin-top:6px;" id="glyphMeta">${recognized}</div>
         </div>
         <button class="icon-btn icon-btn--sm" aria-label="제거" id="glyphRemove"><span class="material-symbols-outlined">close</span></button>
       </div>`;
-    $("#glyphRemove").addEventListener("click", () => { glyphLoaded = false; renderGlyph(); });
+    $("#glyphRemove").addEventListener("click", () => {
+      REG.glyphFile = null; glyphLoaded = false; glyphCount = 0; renderGlyph();
+    });
   }
 }
 
@@ -637,6 +691,8 @@ function renderGlyph() {
 //  4-B · 완성본 자동 추출 vs 직접 드래그
 // =====================================================================
 let extractMethod = "auto", extracted = false;
+// 저장 후 서버가 준 area 추출 결과(없으면 null). {front_number, back_number, back_name}
+let areaResult = null;
 function renderAutoPanel() {
   const slot = $("#autoPanel");
   if (!extracted) {
@@ -647,36 +703,40 @@ function renderAutoPanel() {
         <span class="dropzone__hint">번호·이름이 박힌 1장 · 위치·크기·자간 자동 인식</span>
         <span class="dropzone__accept">AI / PDF</span>
       </button>`;
-    $("#extractDrop").addEventListener("click", () => { extracted = true; renderAutoPanel(); });
+    // 클릭 → 실제 완성본 파일 선택(저장 때 서버 build_area_preset 로 area 추출).
+    $("#extractDrop").addEventListener("click", () => {
+      pickFile(".ai,.pdf", (f) => {
+        REG.refFile = f; extracted = true; areaResult = null; renderAutoPanel();
+      });
+    });
     return;
   }
+  // 추출 결과 배지(저장 후 채워짐). 저장 전에는 "저장 시 자동 추출" 안내.
+  const fname = (REG.refFile && REG.refFile.name) || "완성본";
+  const ar = areaResult;
+  const ok = (v) => v ? `<span class="badge badge--pass badge--sm"><span class="material-symbols-outlined">check_circle</span>인식</span>`
+                      : `<span class="badge badge--warn badge--sm"><span class="material-symbols-outlined">warning</span>미인식</span>`;
+  const resultRows = ar
+    ? `<div class="card card--pad stack-3" id="areaResultCard">
+        <div class="row-between"><span class="field__label">앞 배번 영역</span>${ok(ar.front_number)}</div>
+        <div class="row-between"><span class="field__label">뒤 배번 영역</span>${ok(ar.back_number)}</div>
+        <div class="row-between"><span class="field__label">뒤 이름 영역</span>${ok(ar.back_name)}</div>
+        <div class="note" style="padding:0;"><span class="material-symbols-outlined">check_circle</span>완성본에서 배번·이름 위치를 자동 추출해 preset 에 저장했습니다.</div>
+      </div>`
+    : `<div class="note" style="padding:0;"><span class="material-symbols-outlined">edit</span>완성본이 선택되었습니다. ‘패턴 저장’을 누르면 배번·이름 위치를 자동 추출합니다.</div>`;
   slot.innerHTML = `
     <div class="filecard filecard--pass">
       <span class="material-symbols-outlined filecard__chip">auto_awesome</span>
       <div class="filecard__body">
-        <div class="filecard__name">완성본_07_김민준.pdf</div>
-        <div class="filecard__meta">배번·이름 영역 자동 인식됨 ✓</div>
+        <div class="filecard__name">${fname}</div>
+        <div class="filecard__meta">${ar ? "배번·이름 영역 자동 인식됨 ✓" : "저장 시 자동 인식"}</div>
       </div>
       <button class="icon-btn icon-btn--sm" aria-label="다시" id="extractRedo"><span class="material-symbols-outlined">refresh</span></button>
     </div>
-    <div class="card card--pad stack-4">
-      <div class="field" style="gap:5px;">
-        <label class="field__label">배번 — 중심 Y · 높이</label>
-        <div class="grid-2" style="gap:8px;">
-          <input class="input" value="63%" />
-          <input class="input" value="20%" />
-        </div>
-      </div>
-      <div class="field" style="gap:5px;">
-        <label class="field__label">이름 — 위치 Y · 자간</label>
-        <div class="grid-2" style="gap:8px;">
-          <input class="input" value="50%" />
-          <input class="input" value="+1.2pt" />
-        </div>
-      </div>
-      <div class="note" style="padding:0;"><span class="material-symbols-outlined">edit</span>자동 인식 값입니다. 필요하면 수정하거나 ‘직접 드래그’로 미세조정하세요.</div>
-    </div>`;
-  $("#extractRedo").addEventListener("click", () => { extracted = false; renderAutoPanel(); });
+    ${resultRows}`;
+  $("#extractRedo").addEventListener("click", () => {
+    REG.refFile = null; extracted = false; areaResult = null; renderAutoPanel();
+  });
 }
 function setMethod(m) {
   extractMethod = m;
@@ -725,12 +785,100 @@ function regForward() {
     return;
   }
   if (rs === 2) {
-    const n = rgnCanvas.querySelectorAll(".region--number").length;
-    const m = rgnCanvas.querySelectorAll(".region--name").length;
-    toast("pass", "check_circle", "패턴이 저장되었습니다", `조각 ${PIECES.length} · 배번 ${n} · 이름 ${m} · 글리프셋 ${glyphLoaded ? "포함" : "기본폰트"} · 사이즈 4/7`);
+    savePattern();   // 마지막 단계: 실제 서버에 패턴 등록(FormData POST)
     return;
   }
   rs++; showSub();
+}
+
+// ── 실제 패턴 등록: REG 의 파일들을 FormData 로 모아 POST /api/patterns ─────
+let saving = false;
+function savePattern() {
+  if (saving) return;   // 중복 클릭 방지
+  const name = ($("#pname").value || "").trim();
+  if (!name) {
+    toast("warn", "warning", "패턴 이름을 입력하세요", "이름은 폴더명으로 쓰입니다.");
+    return;
+  }
+  const sizes = Object.keys(REG.sizeFiles);
+  if (!sizes.length) {
+    toast("warn", "warning", "사이즈 파일이 없습니다", "1단계에서 사이즈별 패턴을 한 개 이상 올려주세요.");
+    return;
+  }
+
+  // FormData 조립: 사이즈 파일명을 "<사이즈>.확장자"로 바꿔 보낸다(서버가 파일명에서
+  // 사이즈 토큰을 읽기 때문 — 원본 파일명이 한글/잡다해도 정확히 매칭된다).
+  const fd = new FormData();
+  fd.append("name", name);
+  fd.append("base_size", sizes.includes("XL") ? "XL" : sizes[0]);
+  sizes.forEach((sz) => {
+    const f = REG.sizeFiles[sz];
+    const ext = (f.name.split(".").pop() || "ai").toLowerCase();
+    fd.append("files", f, `${sz}.${ext}`);   // 파일명을 사이즈로 재지정
+  });
+  if (REG.glyphFile) fd.append("glyphset", REG.glyphFile, REG.glyphFile.name);
+  if (REG.refFile) fd.append("reference", REG.refFile, REG.refFile.name);
+
+  saving = true;
+  const btn = $("#regNext");
+  const orig = btn.innerHTML;
+  btn.innerHTML = '<span class="material-symbols-outlined">hourglass_top</span>저장 중…';
+  btn.disabled = true;
+  toast("info", "cloud_upload", "패턴 등록 중", `${sizes.length}개 사이즈 변환·검증 중입니다…`);
+
+  fetch("/api/patterns", { method: "POST", body: fd })
+    .then((r) => r.json().then((j) => ({ ok: r.ok, body: j })))
+    .then(({ ok, body }) => {
+      if (!ok || body.error) {
+        throw new Error(body.error || "등록 실패");
+      }
+      // 성공: 글리프셋·완성본 추출 결과를 화면 카드에 반영.
+      glyphCount = (body.glyph && body.glyph.count) || 0;
+      if (glyphLoaded) renderGlyph();           // 글리프셋 N자 인식 표시
+      areaResult = body.area && body.area.used ? body.area : null;
+      if (extracted) renderAutoPanel();         // 완성본 추출 결과 카드
+
+      const dis = (body.disabled_sizes || []).map((d) => d.name);
+      const disMsg = dis.length ? ` · 비활성 ${dis.join(",")}` : "";
+      const glyphMsg = body.glyph_source ? `글리프셋 ${glyphCount}자` : "기본폰트";
+      toast("pass", "check_circle", "패턴이 저장되었습니다",
+        `${body.pattern_id} · 조각 ${body.pieces} · 사이즈 ${(body.active_sizes||[]).length}개 · ${glyphMsg}${disMsg}`);
+
+      // 경고가 있으면 안내(부분 실패 등).
+      (body.warnings || []).slice(0, 2).forEach((w) =>
+        toast("warn", "warning", "확인 필요", w));
+
+      // 목록을 새로고침하고 1.4초 뒤 목록 화면으로 복귀.
+      setTimeout(() => {
+        reloadPatterns();
+        backToList();
+        resetRegister();
+      }, 1400);
+    })
+    .catch((e) => {
+      toast("warn", "error", "패턴 등록 실패", String(e.message || e));
+    })
+    .finally(() => {
+      saving = false;
+      btn.disabled = false;
+      btn.innerHTML = orig;
+    });
+}
+
+// 서버에서 패턴 목록을 다시 받아 그리드 갱신(등록 직후 호출).
+function reloadPatterns() {
+  fetch("/api/patterns")
+    .then((r) => r.ok ? r.json() : Promise.reject())
+    .then((list) => { PATTERNS = Array.isArray(list) ? list : []; renderPatternGrid(); })
+    .catch(() => {});
+}
+
+// 등록 폼 상태를 초기화(다음 등록을 깨끗하게).
+function resetRegister() {
+  REG.sizeFiles = {}; REG.glyphFile = null; REG.refFile = null;
+  glyphLoaded = false; glyphCount = 0; extracted = false; areaResult = null;
+  seeded = { A: false, B: false, C: false };
+  renderSizeChips();
 }
 function regBack() {
   if (rs === 0) { backToList(); return; }

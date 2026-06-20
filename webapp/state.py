@@ -115,6 +115,34 @@ def read_settings() -> Dict[str, Any]:
     return settings
 
 
+def write_settings(patch: Dict[str, Any]) -> Dict[str, Any]:
+    """설정 JSON 을 '머지' 방식으로 저장하고, 저장 후 전체 설정을 돌려준다.
+
+    왜 머지(부분 갱신)인가(비유):
+      설정 화면이 '출력 형식' 하나만 바꿔 보내도, 다른 칸(GS 경로·색 메모)이
+      날아가면 안 된다. 그래서 기존에 저장돼 있던 값 위에 이번에 바뀐 값만
+      덮어쓴다(빈 종이에 새로 쓰는 게 아니라, 기존 장부에 줄만 고쳐 쓴다).
+
+    안전장치:
+      - 받은 patch 중 dict 가 아니거나 None 이면 무시한다.
+      - data/ 폴더가 없으면 만든다(첫 실행이면 정상적으로 없음).
+      - UTF-8 로 저장(한글 색 메모 보존).
+
+    반환: 저장 직후의 '전체' 설정 dict(화면이 곧장 반영할 수 있게).
+    """
+    # 1) 현재 저장된(또는 기본) 설정을 먼저 읽어 온다.
+    current = read_settings()
+    # 2) 이번에 들어온 부분 값(patch)만 덮어쓴다(부분 갱신 = 머지).
+    if isinstance(patch, dict):
+        for k, v in patch.items():
+            current[k] = v
+    # 3) data/ 폴더 보장 후 JSON 으로 영구 저장(UTF-8, 사람이 읽기 쉽게 indent).
+    os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
+    with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+        json.dump(current, f, ensure_ascii=False, indent=2)
+    return current
+
+
 # ── 비동기 작업(job) 진행상태 메모리 저장소 ──────────────────────────────────
 # 왜 메모리 딕셔너리인가(비유):
 #   생성은 시간이 걸린다(수십 개 파일 합성·검증). 브라우저가 "생성 시작" 버튼을

@@ -18,7 +18,7 @@ import traceback
 import zipfile
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, UploadFile, File, Body
+from fastapi import APIRouter, UploadFile, File, Body, Form
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 
 from . import state
@@ -30,9 +30,15 @@ from engine.grade import load_preset
 from engine.order import parse_order
 from engine.flatten import flatten_transparency
 from engine.verify import scan_transparency
-from engine.reference import _collect_fills
+from engine.reference import _collect_fills, build_area_preset
 # 생성 본체. run_job 은 '호출' 만 한다(시그니처·동작 무수정).
 from engine.job import run_job
+# 패턴 등록(2단계 핵심)에서 호출만 하는 엔진 API 들(전부 무수정).
+from engine.svg_normalize import normalize_svg, check_size_monotonicity
+from engine.number_glyphs import extract_number_glyphs, save_glyphset_json
+
+# .ai → path SVG 추출 보조 스크립트(scripts/, engine 코어 아님). 함수만 호출.
+import importlib.util as _ilu
 
 import json
 
@@ -145,6 +151,131 @@ def patterns() -> List[Dict[str, Any]]:
 def settings() -> Dict[str, Any]:
     """설정값. 설정 JSON 이 있으면 그 값을, 없으면 안전한 기본값을 돌려준다."""
     return state.read_settings()
+
+
+@router.put("/settings")
+def update_settings(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    """설정을 '머지' 방식으로 저장한다(부분 갱신 → 전체 반환).
+
+    화면(settings.html)이 바뀐 값만 보내도, 나머지 값은 보존된다(state.write_settings
+    가 기존 값 위에 덮어쓰기). 저장 직후의 전체 설정을 돌려줘 화면이 곧장 반영한다.
+
+    반환: 저장된 전체 설정 dict.
+    """
+    try:
+        saved = state.write_settings(payload or {})
+    except Exception as e:
+        # 디스크 쓰기 실패 등(권한·디스크 가득) — 한국어로 원인+다음 행동 안내.
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"설정을 저장하지 못했습니다: {e} "
+                              "data 폴더 쓰기 권한·디스크 공간을 확인해 주세요."})
+    return saved
+
+
+# ── 작업 기록(jobs) 목록 ─────────────────────────────────────────────────
+def _job_summary(job_dir: str) -> Dict[str, Any] | None:
+    """작업 폴더 1개의 job.json 을 읽어 기록 목록용 요약 dict 로 만든다(실패 시 None).
+
+    화면(history.html)의 JOBS 한 줄과 모양을 맞춘다:
+      {id, date, name, pattern, count, status}
+
+    구·신 경로/스키마 모두 방어적으로 읽는다(키가 없어도 안 죽게):
+      - id      : 폴더명(예: web_260620_120000_ab12cd / 260620_연세대V넥_빈본체).
+      - date    : job.json 의 생성시각(created/finished) 또는 폴더 수정시각.
+      - name    : summary.order_name 또는 주문서 파일명 → 없으면 폴더명.
+      - pattern : summary.preset_name(preset 이름) → 없으면 "-".
+      - count   : produced(생성 수) 또는 outputs 길이.
+      - status  : verify_fail 0 이면 done, 1개라도 있으면 warn.
+    """
+    job_json = os.path.join(job_dir, "job.json")
+    if not os.path.exists(job_json):
+        return None  # job.json 없는 폴더는 작업 결과가 아니므로 건너뛴다.
+
+    folder = os.path.basename(os.path.normpath(job_dir))
+    data: Dict[str, Any] = {}
+    try:
+        with open(job_json, "r", encoding="utf-8") as f:
+            data = json.load(f) or {}
+    except Exception:
+        # job.json 이 깨졌어도 목록 전체가 죽으면 안 되므로, 폴더명만으로 최소 표기.
+        data = {}
+
+    summary = data.get("summary", {}) or {}
+    outputs = data.get("outputs", []) or []
+
+    # 날짜: job.json 기록 우선 → 없으면 폴더 수정시각으로 폴백.
+    date_raw = (summary.get("created") or summary.get("finished")
+                or data.get("created_at") or data.get("created"))
+    if not date_raw:
+        try:
+            import time as _t
+            date_raw = _t.strftime(
+                "%Y-%m-%d %H:%M", _t.localtime(os.path.getmtime(job_dir)))
+        except Exception:
+            date_raw = ""
+
+    # 주문명: 여러 후보 키를 차례로 본다(스키마 차이 흡수).
+    name = (summary.get("order_name") or summary.get("order")
+            or data.get("order_name")
+            or os.path.basename(str(summary.get("order_file") or "")) or "")
+    if not name:
+        name = folder  # 끝까지 없으면 폴더명으로 표시(빈칸 방지).
+
+    pattern = (summary.get("preset_name") or summary.get("pattern")
+               or data.get("preset_name") or "-")
+
+    # 파일 수: produced(생성 수) → 없으면 outputs 길이.
+    count = summary.get("produced")
+    if count is None:
+        count = len(outputs)
+
+    # 상태: verify 실패가 1건이라도 있으면 '확인 필요(warn)', 없으면 '완료(done)'.
+    fail = summary.get("verify_fail", 0) or 0
+    status = "warn" if fail else "done"
+
+    return {
+        "id": folder,
+        "date": str(date_raw),
+        "name": str(name),
+        "pattern": str(pattern),
+        "count": int(count or 0),
+        "status": status,
+    }
+
+
+@router.get("/jobs")
+def list_jobs() -> List[Dict[str, Any]]:
+    """완료된 작업 기록 목록. data/jobs/*/job.json 을 스캔한다.
+
+    반환: [{id, date, name, pattern, count, status}, ...]
+      최신 폴더가 위로 오도록 폴더 수정시각 내림차순 정렬.
+    """
+    base = state.get_jobs_dir()
+    rows: List[Dict[str, Any]] = []
+    if not os.path.isdir(base):
+        return rows  # jobs 폴더 자체가 없으면 빈 목록(에러 아님).
+
+    for name in os.listdir(base):
+        job_dir = os.path.join(base, name)
+        if not os.path.isdir(job_dir):
+            continue
+        try:
+            item = _job_summary(job_dir)
+        except Exception:
+            # 한 작업이 깨져도 전체 목록이 죽지 않게 그 작업만 건너뛴다.
+            item = None
+        if item:
+            rows.append(item)
+
+    # 최신순 정렬(폴더 수정시각 내림차순). 시각 못 읽으면 맨 뒤로.
+    def _mtime(r: Dict[str, Any]) -> float:
+        try:
+            return os.path.getmtime(os.path.join(base, r["id"]))
+        except Exception:
+            return 0.0
+    rows.sort(key=_mtime, reverse=True)
+    return rows
 
 
 # ── 주문서 파싱 엔드포인트 ────────────────────────────────────────────────
@@ -768,3 +899,443 @@ def job_zip(job_id: str, format: str = "pdf"):
     return StreamingResponse(
         buf, media_type="application/zip",
         headers={"Content-Disposition": disp})
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  패턴 등록(2단계 — 핵심)  POST /api/patterns
+# ════════════════════════════════════════════════════════════════════════════
+#  화면(patterns.html)이 FormData 로 보내는 것을 받아 data/patterns/{이름}/ 폴더와
+#  preset.json 을 만든다. 비유로 보면 '레시피 카드' 한 장을 정식 등록하는 과정이다.
+#
+#  처리 순서(부분 실패해도 죽지 않고 경고로 흘린다 — 직원이 보충하게):
+#    1) 사이즈별 패턴(size_<사이즈>): .ai → ai_to_path_svg → normalize_svg → <사이즈>.svg
+#                                     / .svg 는 그대로 복사. 조각수 검증.
+#       2개 이상이면 check_size_monotonicity 로 자산결함(좌표동일) → disabled_sizes.
+#    2) 글리프셋(glyphset, 선택): extract_number_glyphs → number_glyphs.json.
+#       없으면 폰트 폴백(glyph_source 생략).
+#    3) 완성본(reference, 선택): build_area_preset → front/back number_area + back_name_area.
+#    4) preset.json 생성(design/sizes/pieces/area/glyph_source/disabled_sizes).
+
+# ── 사이즈 정렬 순서(작은→큰). 단조성(높이 증가) 검사와 화면 표기에 쓴다. ──
+_SIZE_ORDER = ["5XS", "4XS", "3XS", "2XS", "XS", "S", "M", "L", "XL",
+               "2XL", "3XL", "4XL", "5XL"]
+
+# ai_to_path_svg.py 를 한 번만 동적 로드해 캐시한다(scripts/ 는 패키지가 아니라서
+# import 가 안 되므로 파일 경로로 모듈을 직접 읽어 함수만 빌려 쓴다 — engine 무관).
+_AI_TO_PATH_MOD = None
+
+
+def _ai_to_path_svg(in_path: str, out_path: str) -> dict:
+    """scripts/ai_to_path_svg.py 의 ai_to_path_svg() 를 동적 로드해 호출한다.
+
+    왜 동적 로드인가(비유): 그 파일은 '엔진 코어'가 아니라 scripts/ 의 독립 도구라
+    패키지 import 경로가 없다. 그래서 파일 주소로 직접 펼쳐 함수만 빌려 온다.
+    원본 파일은 절대 수정하지 않는다(호출만).
+    """
+    global _AI_TO_PATH_MOD
+    if _AI_TO_PATH_MOD is None:
+        script_path = os.path.join(
+            state.PROJECT_ROOT, "scripts", "ai_to_path_svg.py")
+        spec = _ilu.spec_from_file_location("ai_to_path_svg", script_path)
+        mod = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _AI_TO_PATH_MOD = mod
+    return _AI_TO_PATH_MOD.ai_to_path_svg(in_path, out_path)
+
+
+def _fix_mojibake(s: Optional[str]) -> str:
+    """multipart 텍스트 필드의 한글 깨짐(mojibake)을 복원한다.
+
+    왜 필요한가(원인):
+      starlette(1.3.x) multipart 파서는 파트에 charset 이 안 붙어 있으면 텍스트
+      필드를 'latin-1'로 디코딩한다(self._charset="" → LookupError → latin-1 폴백).
+      브라우저 FormData 는 charset 을 안 붙이므로, UTF-8 한글이 latin-1 로 잘못
+      읽혀 '웹앱' → 'ì›¹ì•±' 같은 깨짐이 생긴다.
+
+    복원(비유): 잘못된 안경(latin-1)으로 읽은 글자를 원래 바이트로 되돌린 뒤
+      올바른 안경(utf-8)으로 다시 읽는다. 이미 정상(ASCII 등)이면 그대로 둔다.
+    """
+    if not s:
+        return s or ""
+    # 모두 ASCII 면 깨질 일이 없다(영문 사이즈명 등) → 그대로.
+    if all(ord(c) < 128 for c in s):
+        return s
+    # latin-1 폴백으로 디코딩된 문자열을 '원래 바이트'로 되돌린다.
+    try:
+        raw = s.encode("latin-1")
+    except UnicodeEncodeError:
+        # latin-1 범위를 벗어남 = 이미 정상 유니코드(깨진 게 아님) → 그대로.
+        return s
+    # 원래 바이트를 올바른 인코딩으로 다시 읽는다.
+    #   1순위 utf-8(브라우저 FormData 표준), 2순위 cp949(일부 한글 윈도 클라이언트).
+    for codec in ("utf-8", "cp949"):
+        try:
+            return raw.decode(codec)
+        except UnicodeDecodeError:
+            continue
+    return s  # 어느 것으로도 못 읽으면 원본 유지(파괴 금지).
+
+
+def _safe_pattern_dirname(name: str) -> str:
+    """패턴 이름을 폴더명으로 안전하게 다듬는다(경로조작·금지문자 제거).
+
+    한글·영문·숫자·언더스코어는 그대로 두고, 경로 구분자나 윈도 금지문자만 '_'로.
+    공백은 '_'로 모아 폴더명을 깔끔하게 한다.
+    """
+    raw = (name or "").strip()
+    # 폴더 탈출·금지문자 차단(\\ / : * ? " < > |) + 제어문자.
+    bad = set('\\/:*?"<>|')
+    cleaned = "".join("_" if (c in bad or ord(c) < 32) else c for c in raw)
+    cleaned = "_".join(cleaned.split())  # 연속 공백 → 단일 '_'
+    # 양끝의 점(.)만 제거(경로 탈출 ".."·"." 방지). 선행 언더스코어(_test_*)는
+    # 의미가 있으니 보존한다(테스트 패턴 정리·식별에 쓰임).
+    cleaned = cleaned.strip(".")
+    return cleaned or "패턴"
+
+
+def _build_pieces(svg_index_count: int, page_w: float, page_h: float,
+                  warnings: List[str]) -> List[Dict[str, Any]]:
+    """조각 개수만큼 pieces 항목을 만든다(svg_index 매핑 + design_region 추정).
+
+    왜 추정값인가(중요·솔직):
+      디자인↔조각 영역(design_region_pt)은 본래 '완성본 자동추출' 대상이 아니라
+      디자이너가 매핑해 주는 값이다(화면 B단계). API 단독 등록에서는 그 값을 알 수
+      없으므로, 일단 페이지를 조각 수로 세로 균등분할한 '추정 영역'을 넣고 경고를
+      남긴다. 직원이 preset.json 에서 design_region_pt 를 보정하면 된다.
+      (조각 분류·svg_index 자체는 정확하다 — 추정은 design_region 좌표뿐.)
+    """
+    pieces: List[Dict[str, Any]] = []
+    # 조각 id/이름: 통념상 0=앞판, 1=뒤판, 2=밴드, 그 외는 piece_N.
+    default_names = [("front", "앞판"), ("back", "뒤판"), ("band", "넥밴드")]
+    n = max(1, svg_index_count)
+    band = page_h / n  # 세로 균등분할 높이(추정용)
+    for i in range(n):
+        if i < len(default_names):
+            pid, pname = default_names[i]
+        else:
+            pid, pname = (f"piece_{i}", f"조각{i}")
+        # 위에서부터 i번째 띠를 추정 영역으로(좌하단 원점 pt 기준).
+        y1 = round(page_h - band * i, 2)
+        y0 = round(page_h - band * (i + 1), 2)
+        pieces.append({
+            "id": pid,
+            "name": pname,
+            "svg_index": i,
+            "design_region_pt": [0.0, y0, round(page_w, 2), y1],
+        })
+    warnings.append(
+        "🟡 디자인↔조각 영역(design_region_pt)은 페이지 균등분할로 추정해 넣었습니다. "
+        "정확한 합성을 위해 preset.json 의 design_region_pt 를 보정해 주세요.")
+    return pieces
+
+
+@router.post("/patterns")
+async def create_pattern(
+    name: str = Form(...),
+    base_size: Optional[str] = Form(None),
+    glyph_artbox: Optional[str] = Form(None),
+    glyph_order: Optional[str] = Form(None),
+    glyphset: Optional[UploadFile] = File(None),
+    reference: Optional[UploadFile] = File(None),
+    files: List[UploadFile] = File(default=[]),
+) -> Dict[str, Any]:
+    """패턴 1개를 등록한다(폴더 + preset.json 생성). 핵심 2단계 엔드포인트.
+
+    FormData 필드:
+      name        : 패턴 이름(폴더명·preset_name).
+      base_size   : 기준 사이즈(없으면 업로드된 것 중 XL→첫 사이즈 순으로 추정).
+      files       : 사이즈별 패턴 파일들. 각 파일의 filename 앞에 "<사이즈>." 또는
+                    "<사이즈>_" 가 붙어 있으면 그 사이즈로 인식한다(예: "XL.ai",
+                    "M.svg", "2XL_..ai"). 화면이 size_<사이즈> 슬롯으로 모아 보낸다.
+      glyphset    : (선택) 번호 0~9 아웃라인 글리프셋 소스(.ai/.pdf).
+      reference   : (선택) 번호·이름 박힌 완성본 1장(.ai/.pdf) — area 자동추출.
+      glyph_artbox: (선택) "x0,y0,x1,y1" 글리프 추출영역(미지정 시 엔진 기본값).
+      glyph_order : (선택) 글리프 정렬 대응 문자열(미지정 시 "1234567890").
+
+    반환: {ok, pattern_id, preset_path, sizes, pieces, glyph_source,
+           disabled_sizes, warnings, area}
+    """
+    warnings: List[str] = []
+
+    # multipart 텍스트 필드의 한글 깨짐(latin-1 폴백)을 먼저 복원한다.
+    name = _fix_mojibake(name)
+    base_size = _fix_mojibake(base_size) if base_size else base_size
+    glyph_order = _fix_mojibake(glyph_order) if glyph_order else glyph_order
+
+    # ── 0) 폴더 준비(이름 정리 + 중복 차단) ──────────────────────────────
+    pattern_id = _safe_pattern_dirname(name)
+    pattern_dir = os.path.join(state.get_patterns_dir(), pattern_id)
+    if os.path.exists(pattern_dir):
+        return JSONResponse(
+            status_code=409,
+            content={"error": f"이미 같은 이름의 패턴이 있습니다: {pattern_id}. "
+                              "다른 이름을 쓰거나 기존 패턴을 먼저 정리해 주세요."})
+
+    # 사이즈별 파일이 하나도 없으면 등록할 게 없다(차단).
+    size_files = [f for f in (files or []) if f and f.filename]
+    if not size_files:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "사이즈별 패턴 파일이 없습니다. 최소 한 사이즈 이상 "
+                              "올려주세요(.ai 또는 .svg)."})
+
+    os.makedirs(pattern_dir, exist_ok=True)
+
+    # ── 1) 사이즈별 패턴: .ai → path SVG → polyline SVG / .svg 는 그대로 ──
+    #   _tmp_path/ 에 path SVG 중간산출을 떨어뜨렸다가 정리한다.
+    tmp_path_dir = os.path.join(pattern_dir, "_tmp_path")
+    os.makedirs(tmp_path_dir, exist_ok=True)
+
+    sizes_meta: List[Dict[str, Any]] = []  # preset sizes 용 [{name,pattern_file,scale}]
+    converted_map: Dict[str, str] = {}      # {사이즈명: 출력 svg 경로} — 단조성 검사용
+    piece_counts: Dict[str, int] = {}       # {사이즈명: 조각수} — 일치 검증용
+    page_dims: Optional[List[float]] = None  # 첫 .ai 변환에서 viewBox(가로/세로) 회수
+
+    for up in size_files:
+        # 파일명에서 사이즈 토큰을 뽑는다("XL.ai"·"2XL_무엇.svg" → "XL"·"2XL").
+        # 한글 파일명도 mojibake 복원(혹시 한글이 섞여도 안전하게).
+        base = os.path.basename(_fix_mojibake(up.filename) or "")
+        stem = os.path.splitext(base)[0]
+        ext = os.path.splitext(base)[1].lower()
+        # 구분자(., _, 공백) 앞 토큰을 사이즈로 본다.
+        token = stem.replace(" ", "_").split("_")[0].split(".")[0]
+        size_name = token.upper() if token else stem.upper()
+
+        out_svg = os.path.join(pattern_dir, f"{size_name}.svg")
+        try:
+            saved = state.save_upload(up)  # 업로드를 디스크로(엔진은 경로를 먹음)
+            if ext == ".svg":
+                # 이미 polyline SVG 라면 그대로 패턴 폴더로 복사.
+                import shutil as _sh
+                _sh.copyfile(saved, out_svg)
+                rep = {"pieces_written": None}  # 조각수 미상(직접 검증 생략)
+            else:
+                # .ai/.pdf → ① path SVG(tmp) → ② polyline SVG(out_svg).
+                tmp_svg = os.path.join(tmp_path_dir, f"{size_name}.svg")
+                a = _ai_to_path_svg(saved, tmp_svg)
+                # 첫 변환에서 페이지 치수(viewBox 가로·세로)를 회수한다(pieces 추정용).
+                if page_dims is None and a.get("viewBox"):
+                    try:
+                        vb = [float(x) for x in str(a["viewBox"]).split()]
+                        page_dims = [vb[2], vb[3]]  # [w, h]
+                    except Exception:
+                        pass
+                rep = normalize_svg(tmp_svg, out_svg)
+            # 조각수 기록(검증용).
+            pc = rep.get("pieces_written")
+            if pc is not None:
+                piece_counts[size_name] = pc
+            converted_map[size_name] = out_svg
+            sizes_meta.append({"name": size_name,
+                               "pattern_file": f"{size_name}.svg", "scale": 1.0})
+            # normalize 경고가 있으면 사이즈명을 붙여 모은다.
+            for w in (rep.get("warnings") or []):
+                warnings.append(f"[{size_name}] {w}")
+        except Exception as e:
+            warnings.append(
+                f"🔴 [{size_name}] 사이즈 변환 실패(이 사이즈는 제외): {e}")
+
+    # 변환에 성공한 사이즈가 하나도 없으면 등록 실패(폴더 정리 후 에러).
+    if not sizes_meta:
+        _cleanup_dir(tmp_path_dir)
+        return JSONResponse(
+            status_code=400,
+            content={"error": "모든 사이즈 변환에 실패했습니다. 파일이 PDF 호환 .ai "
+                              "또는 polyline SVG 인지 확인해 주세요.",
+                     "warnings": warnings})
+
+    # 사이즈를 표준 순서로 정렬(작은→큰). 목록·단조성 검사 일관성.
+    def _size_key(m: Dict[str, Any]) -> int:
+        try:
+            return _SIZE_ORDER.index(m["name"])
+        except ValueError:
+            return len(_SIZE_ORDER)  # 모르는 사이즈는 맨 뒤로
+    sizes_meta.sort(key=_size_key)
+    order = [m["name"] for m in sizes_meta]
+
+    # 조각수 일관성 점검: 사이즈마다 조각수가 다르면 경고(자산 의심).
+    distinct_pc = set(piece_counts.values())
+    if len(distinct_pc) > 1:
+        warnings.append(
+            f"🟡 사이즈별 조각 수가 다릅니다: {piece_counts}. "
+            "보조선 누락/추가 의심 — 결과를 확인해 주세요.")
+    # 기준 조각수(가장 흔한 값) — pieces 생성에 쓴다.
+    if piece_counts:
+        piece_n = max(set(piece_counts.values()),
+                      key=lambda v: list(piece_counts.values()).count(v))
+    else:
+        piece_n = 3  # SVG 직접 업로드 등으로 조각수 미상 → 앞/뒤/밴드 가정.
+        warnings.append("🟡 조각 수를 확정하지 못해 3조각(앞/뒤/밴드)으로 가정했습니다.")
+
+    # ── 1-b) 사이즈 단조성(자산결함) 검사 → disabled_sizes 산출 ───────────
+    disabled_sizes: List[Dict[str, Any]] = []
+    if len(converted_map) >= 2:
+        try:
+            guard = check_size_monotonicity(converted_map, size_order=order)
+            for w in (guard.get("warnings") or []):
+                warnings.append(w)
+            # 좌표 100% 동일한 쌍이 있으면, '둘 중 더 큰 사이즈'를 비활성한다
+            # (작은 쪽을 살리고 결함 복붙본을 차단 — 이슈3와 같은 안전 정책).
+            seen_disabled = set()
+            for (a_sz, b_sz) in (guard.get("duplicates") or []):
+                bigger = a_sz if _size_key({"name": a_sz}) > _size_key({"name": b_sz}) else b_sz
+                if bigger not in seen_disabled:
+                    seen_disabled.add(bigger)
+                    disabled_sizes.append({
+                        "name": bigger,
+                        "reason": f"{a_sz}·{b_sz} 좌표 100% 동일(자산 복붙 결함) — 재확보 필요"})
+        except Exception as e:
+            warnings.append(f"🟡 사이즈 단조성 검사 건너뜀: {e}")
+
+    # 비활성 사이즈는 sizes 에서 빼서 별도 섹션으로(build_layouts 가 sizes 만 순회).
+    disabled_names = {d["name"] for d in disabled_sizes}
+    active_sizes = [m for m in sizes_meta if m["name"] not in disabled_names]
+    if not active_sizes:
+        # 전부 결함이면 등록 의미가 없다(폴더 정리 후 에러).
+        _cleanup_dir(tmp_path_dir)
+        _cleanup_dir(pattern_dir)
+        return JSONResponse(
+            status_code=400,
+            content={"error": "모든 사이즈가 자산 결함(좌표 동일)으로 비활성됩니다. "
+                              "올바른 사이즈 파일로 다시 등록해 주세요.",
+                     "warnings": warnings})
+
+    # 페이지 치수 폴백(전부 .svg 업로드 등으로 못 구한 경우 V넥 기본값).
+    if page_dims is None:
+        page_dims = [4478.74, 5669.29]
+        warnings.append(
+            "🟡 페이지 치수를 자동으로 못 구해 기본값(4478.74×5669.29)을 넣었습니다. "
+            "preset.json 의 design.page_size_pt 를 확인해 주세요.")
+
+    # ── 2) 글리프셋(선택): 0~9 아웃라인 추출 → number_glyphs.json ──────────
+    glyph_source = None      # preset area 에 부착할 글리프셋 파일명(없으면 폰트 폴백)
+    glyph_result: Dict[str, Any] = {"used": False}
+    if glyphset and glyphset.filename:
+        try:
+            gpath = state.save_upload(glyphset)
+            # artbox/order 파싱(미지정 시 엔진 기본값 사용).
+            kwargs: Dict[str, Any] = {}
+            if glyph_artbox:
+                try:
+                    kwargs["artbox"] = [float(x) for x in glyph_artbox.split(",")]
+                except Exception:
+                    warnings.append("🟡 glyph_artbox 형식이 잘못돼 기본값을 씁니다(x0,y0,x1,y1).")
+            if glyph_order:
+                kwargs["order"] = glyph_order
+            gs = extract_number_glyphs(gpath, **kwargs)
+            n_glyph = len(gs.get("glyphs", {}))
+            out_json = os.path.join(pattern_dir, "number_glyphs.json")
+            save_glyphset_json(gs, out_json)
+            glyph_source = "number_glyphs.json"
+            glyph_result = {"used": True, "count": n_glyph,
+                            "cap_height": gs.get("cap_height")}
+            if n_glyph < 10:
+                warnings.append(
+                    f"🟡 글리프셋에서 {n_glyph}자만 인식했습니다(기대 10자). "
+                    "artbox/순서를 확인하거나 기본 폰트 폴백을 고려하세요.")
+        except Exception as e:
+            warnings.append(
+                f"🟡 글리프셋 추출 실패(기본 폰트로 폴백): {e}")
+            glyph_result = {"used": False, "error": str(e)}
+
+    # ── 3) 완성본(선택): area 자동추출(front/back number + back name) ──────
+    area_result: Dict[str, Any] = {"used": False}
+    areas: Dict[str, Any] = {}
+    if reference and reference.filename:
+        try:
+            rpath = state.save_upload(reference)
+            built = build_area_preset(rpath)
+            areas = built.get("areas", {}) or {}
+            for w in (built.get("warnings") or []):
+                warnings.append(w)
+            area_result = {
+                "used": True,
+                "front_number": areas.get("front_number_area") is not None,
+                "back_number": areas.get("back_number_area") is not None,
+                "back_name": areas.get("back_name_area") is not None,
+            }
+        except Exception as e:
+            warnings.append(f"🟡 완성본 area 자동추출 실패(영역은 직접 입력 필요): {e}")
+            area_result = {"used": False, "error": str(e)}
+
+    # ── 4) preset.json 조립 ──────────────────────────────────────────────
+    base = (base_size or "").strip().upper()
+    if base not in order:
+        base = "XL" if "XL" in order else order[len(order) // 2]  # XL→중앙값
+
+    pieces = _build_pieces(piece_n, page_dims[0], page_dims[1], warnings)
+
+    preset: Dict[str, Any] = {
+        "preset_name": pattern_id,
+        "version": 1,
+        "design": {
+            "base_size": base,
+            # 완성본을 받았으면 그걸, 아니면 빈본체 기본 경로를 넣어 둔다(직원이 교체).
+            "design_file": "../../../design_source/연세대_V넥_빈템플릿_본체포함_XL.ai",
+            "page_size_pt": [round(page_dims[0], 2), round(page_dims[1], 2)],
+        },
+        "sizes": active_sizes,
+        "pieces": pieces,
+        "design_mapping": {
+            "mode": "anchor", "anchor": "bottom-left",
+            "fit": "contain", "preserve_aspect": True,
+        },
+        "shrink": {"x": 1.0, "y": 1.0},
+        "output": {
+            "format": "pdf",
+            "ghostscript_path": state.read_settings().get("ghostscript_path", ""),
+        },
+    }
+    if disabled_sizes:
+        preset["disabled_sizes"] = disabled_sizes
+
+    # area(번호·이름) — 완성본에서 추출된 것만 붙이고, 글리프셋이 있으면 number_area
+    # 에 glyph_source 를 함께 단다(없으면 폰트 폴백이라 키 생략).
+    fa = areas.get("front_number_area")
+    ba = areas.get("back_number_area")
+    na = areas.get("back_name_area")
+    if fa:
+        if glyph_source:
+            fa["glyph_source"] = glyph_source
+        preset["front_number_area"] = fa
+    if ba:
+        if glyph_source:
+            ba["glyph_source"] = glyph_source
+        preset["back_number_area"] = ba
+    if na:
+        preset["back_name_area"] = na
+    if not (fa or ba):
+        warnings.append(
+            "🟡 번호 영역(front/back_number_area)이 없습니다. 완성본을 올리거나 "
+            "preset.json 에 직접 좌표를 넣어야 번호가 합성됩니다.")
+
+    preset_path = os.path.join(pattern_dir, "preset.json")
+    with open(preset_path, "w", encoding="utf-8") as f:
+        json.dump(preset, f, ensure_ascii=False, indent=2)
+
+    # 중간 path SVG 폴더는 정리(결과물은 polyline SVG·json·preset 만 남긴다).
+    _cleanup_dir(tmp_path_dir)
+
+    return {
+        "ok": True,
+        "pattern_id": pattern_id,
+        "preset_path": os.path.relpath(preset_path, state.PROJECT_ROOT).replace("\\", "/"),
+        "sizes": order,
+        "active_sizes": [m["name"] for m in active_sizes],
+        "pieces": piece_n,
+        "glyph_source": bool(glyph_source),
+        "glyph": glyph_result,
+        "area": area_result,
+        "disabled_sizes": disabled_sizes,
+        "warnings": warnings,
+    }
+
+
+def _cleanup_dir(path: str) -> None:
+    """폴더를 통째로 정리한다(없으면 무시, 실패해도 조용히 넘어간다)."""
+    try:
+        import shutil as _sh
+        if os.path.isdir(path):
+            _sh.rmtree(path, ignore_errors=True)
+    except Exception:
+        pass

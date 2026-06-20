@@ -158,7 +158,50 @@
 const $ = (s) => document.querySelector(s);
 // 출력 형식 — work/history/flow가 읽는 localStorage 키와 연동 (의뢰 6)
 const fmtSel = $("#fmt");
-fmtSel.value = localStorage.getItem("stiz-grader-output-format") || "vector";
+
+// 색 메모 input(마크업에 id가 없어 색 기준 섹션의 input 으로 특정한다).
+// 'palette' 섹션의 카드 안 input 한 칸이 색 프로파일 메모다.
+function colorNoteInput() {
+  const inputs = document.querySelectorAll(".card .setrow .input");
+  // 마지막 텍스트 input(색 기준 카드)을 색 메모로 본다.
+  return inputs.length ? inputs[inputs.length - 1] : null;
+}
+
+// 서버에서 미리보기 PNG 생성 스위치를 찾는다(aria-label 로 특정).
+function previewSwitch() {
+  return document.querySelector('[data-switch][aria-label="미리보기 PNG 생성"]');
+}
+
+// ── 서버 설정 로드(GET) → 화면 반영 ──────────────────────────────────────
+function loadSettings() {
+  fetch("/api/settings")
+    .then((r) => r.ok ? r.json() : Promise.reject())
+    .then((s) => {
+      // 출력 형식: 서버값(pdf|eps|both) 우선, 없으면 localStorage, 그래도 없으면 vector.
+      const fmt = s.output_format
+        || localStorage.getItem("stiz-grader-output-format") || "vector";
+      fmtSel.value = fmt;
+      localStorage.setItem("stiz-grader-output-format", fmt);
+      // 색 메모
+      const cn = colorNoteInput();
+      if (cn && s.color_note) cn.value = s.color_note;
+      // 미리보기 스위치
+      const ps = previewSwitch();
+      if (ps) ps.classList.toggle("is-on", s.preview_enabled !== false);
+    })
+    .catch(() => { /* 서버 못 읽어도 화면은 기본값으로 동작 */ });
+}
+
+// 서버 헬스체크 → 사이드바 server-pill
+(function refreshServerPill() {
+  const pill = document.querySelector(".server-pill");
+  if (!pill) return;
+  fetch("/api/health")
+    .then((r) => r.ok ? r.json() : Promise.reject())
+    .then((d) => { pill.innerHTML = `<span class="dot"></span>서버 연결됨 · :${d.port}`; })
+    .catch(() => { pill.innerHTML = `<span class="dot" style="background:var(--red-500,#e5484d);"></span>서버 연결 끊김`; });
+})();
+
 fmtSel.addEventListener("change", () => {
   localStorage.setItem("stiz-grader-output-format", fmtSel.value);
   const label = { vector:"벡터 CMYK 출력", pdf:"PDF", eps:"EPS", both:"PDF+EPS(둘 다)" }[fmtSel.value];
@@ -170,7 +213,34 @@ document.querySelectorAll("[data-switch]").forEach((sw) => sw.addEventListener("
 document.querySelectorAll(".seg").forEach((seg) => seg.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
   seg.querySelectorAll("button").forEach((x) => x.classList.remove("is-active")); b.classList.add("is-active");
 })));
-$("#saveBtn").addEventListener("click", () => toast("pass", "check_circle", "설정이 저장되었습니다", "경로·출력·색 기준이 적용되었습니다."));
+
+// ── 저장(PUT) — 서버 data/settings.json 에 영구 저장 ─────────────────────
+$("#saveBtn").addEventListener("click", () => {
+  // 화면값 → 서버 패치 본문(머지 저장이라 바뀐 값만 보내도 안전).
+  const cn = colorNoteInput();
+  const ps = previewSwitch();
+  const patch = {
+    // 'vector'(중립표기)는 서버 출력형식이 아니므로 보내지 않는다(pdf/eps/both 만).
+    color_note: cn ? cn.value : undefined,
+    preview_enabled: ps ? ps.classList.contains("is-on") : undefined,
+  };
+  if (["pdf", "eps", "both"].includes(fmtSel.value)) {
+    patch.output_format = fmtSel.value;
+  }
+  // undefined 키 제거(서버 머지에 안 보냄).
+  Object.keys(patch).forEach((k) => patch[k] === undefined && delete patch[k]);
+
+  fetch("/api/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  })
+    .then((r) => r.ok ? r.json() : Promise.reject(r))
+    .then(() => toast("pass", "check_circle", "설정이 저장되었습니다", "출력·색 기준이 서버에 적용되었습니다."))
+    .catch(() => toast("warn", "warning", "저장 실패", "서버 연결을 확인해 주세요."));
+});
+
+loadSettings();   // 화면 진입 시 서버 설정을 받아 반영
 function toast(tone, icon, title, body) {
   const t = document.createElement("div");
   t.className = "toast toast--" + tone;

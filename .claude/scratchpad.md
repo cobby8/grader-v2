@@ -280,6 +280,45 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 - ZIP Content-Disposition latin-1 회피(ASCII filename + RFC5987 filename*). preview/zip 경로조작 차단(basename only).
 - SKIPPED const 우회(length=0+push) — 마크업/토큰 무수정 위해 JS만 조정.
 
+## 구현 기록 (developer) — 웹앱4 (기록조회 jobs + 패턴등록 + 설정저장 PUT) (2026-06-20)
+📝 구현한 기능: **웹앱 4단계** — ① GET /api/jobs(작업기록 목록), ② **POST /api/patterns(핵심: 폴더+preset.json 생성)**, ③ PUT /api/settings(머지 저장). 엔진 공개 API는 **호출만**(무수정), _handoff 원본 무수정(webapp/static 복사본의 **JS만**, 마크업·토큰 무수정 확정), 빌드0.
+
+| 파일 | 변경 내용 | 신규/수정 |
+|------|----------|----------|
+| webapp/state.py | write_settings(patch): data/settings.json 머지 저장→전체 반환 | 수정 |
+| webapp/api.py | GET /api/jobs(_job_summary 방어적 파싱·구신경로·mtime정렬) + PUT /api/settings + **POST /api/patterns**(사이즈별 .ai→ai_to_path_svg→normalize_svg / .svg복사·조각수검증·check_size_monotonicity→disabled_sizes / glyphset→extract_number_glyphs→number_glyphs.json / reference→build_area_preset→area / preset.json조립) + _fix_mojibake(utf8·cp949 복원) + _ai_to_path_svg(scripts 동적로드) | 수정 |
+| webapp/static/screens/history.html | mock JOBS→loadJobs() fetch(/api/jobs)·탭카운트·날짜표기·server-pill. 마크업·toast 무수정 | 수정(복사본만) |
+| webapp/static/screens/patterns.html | 사이즈칩·글리프셋·완성본 드롭존→실파일선택(pickFile 동적 input)·REG 저장소·savePattern() FormData POST·글리프셋N자/완성본area 결과카드·목록새로고침. 마크업·토큰·region에디터 무수정 | 수정(복사본만) |
+| webapp/static/screens/settings.html | loadSettings() GET·저장 PUT(머지)·재진입 반영·server-pill. 마크업·토큰 무수정 | 수정(복사본만) |
+| .gitignore | data/settings.json 추가(직원 PC별 설정) | 수정 |
+
+**핵심 판단(★)**:
+- **multipart 한글 깨짐(mojibake) 복원**: starlette 1.3.x 가 charset 없는 텍스트 필드를 latin-1 폴백 디코딩 → `_fix_mojibake`로 latin-1 재인코딩 후 utf-8(브라우저)·cp949(curl) 순 복원. ASCII·정상한글(latin-1 범위밖)은 그대로. 폴더명 `_test_웹앱4` 정상 저장 확인.
+- **ai_to_path_svg 동적로드**: scripts/ 는 패키지 아님 → importlib 로 파일 직접 로드(원본 무수정, fitz만 의존).
+- **사이즈 토큰**: 파일명 첫 토큰(`.`/`_`/공백 앞)을 사이즈로. 화면은 `<사이즈>.확장자`로 rename해 전송(원본명 무관 정확 매칭).
+- **disabled 정책**: check_size_monotonicity 좌표동일 쌍 발견 시 '더 큰 사이즈' 비활성(이슈3 정책). 전부 결함이면 폴더정리+등록거부.
+- **design_region_pt 추정**: API 단독등록은 디자인↔조각 매핑값을 모름 → 페이지 세로균등분할 추정+경고(직원이 preset 보정). 조각 svg_index·분류는 정확.
+- **부분실패 무중단**: 글리프셋/완성본 실패는 경고로 흘리고 등록 진행(폰트폴백·area 직접입력 안내). 사이즈 전부 실패만 등록거부.
+
+✅ 검증(①~⑤ 전부 PASS — 코드/엔진 무수정):
+- **① GET /api/jobs**: HTTP200, 기존작업 18건(260620_연세대V넥_빈본체 count33 등) 목록·mtime 최신순. pattern은 job.json에 preset_name 부재라 "-"(엔진 무수정 폴백 정상). 브라우저 history: 표18행·탭18/18/0·첫행 260620·server-pill 연결.
+- **② POST /api/patterns 실데이터 등록**(글리프셋 아트보드2.ai + 완성본_XL.ai + 암홀X 패턴 S/M/L/XL/2XL): **ok·pattern_id `_test_웹앱4`·active_sizes 5·pieces 3(front0/back1/band2)·page_size_pt[4337.01,3401.57]·glyph count 10·glyph_source true·area front/back number+back name 전부 추출·disabled []**. load_preset 통과, parse_svg 5사이즈 전부 3조각·앞판높이 S<M<L<XL<2XL 단조증가(2249→2475)·밴드175.7 보존. front_number_area center[1389.2,4184.4]cap309.8+glyph_source / back center[3217.1,4342.4]cap538.6 / back_name center_x3219.8 baseline4765.7 em136.4(기존 V넥 값과 일치). 검증 후 _test 패턴·uploads 정리.
+- **③ PUT /api/settings**: output_format pdf→both 저장→GET both 반영(ghostscript_path 머지 보존). 브라우저 settings: 저장토스트·재진입 후 both 유지. 검증 후 pdf 복구.
+- **④ 브라우저 E2E(playwright headless, pageerror 0)**: patterns 목록카드3·사이즈칩13·글리프셋 드롭존·C단계 진입 시 버튼"save"·완성본 자동추출 드롭존·메서드탭2. settings PUT 왕복. (사이즈칩 클릭=OS 다이얼로그라 파일선택 자동화는 불가 → 저장 POST는 curl 실데이터로 완전검증).
+- **⑤ git diff 무수정**: engine/·scripts/·_handoff/ **0변경**. 3 HTML 마크업(스크립트 제외) 원본과 byte-identical(JS만 변경). 변경파일 6개. 빌드0(py_compile+node --check OK).
+
+💡 tester 참고:
+- 기동: `python -m uvicorn webapp.main:app --port 8000` (종료는 포트8000 PID로만, taskkill //f //im node 금지).
+- jobs: `curl localhost:8000/api/jobs` → 18건+. settings: `curl -X PUT ... -d '{"output_format":"both"}'`→GET 반영.
+- 패턴등록: `curl -X POST localhost:8000/api/patterns -F "name=_test_X" -F "base_size=XL" -F "glyphset=@..아트보드2.ai" -F "reference=@..완성본_XL.ai" -F "files=@XL.ai" ...`. 암홀X 패턴은 파일명을 `<사이즈>.ai`로 rename 필요(데스크톱 원본은 `농구유니폼_V넥_스탠다드_암홀X_XL.ai`→사이즈토큰이 "농구유니폼"이 됨). 글리프셋은 design_source/연세대_V넥_숫자글리프셋_아트보드2.ai(기본 artbox로 10자), 완성본은 연세대_V넥_완성본_본체포함_XL.ai.
+- 정상: ok true·preset.json 생성·glyph count 10·area used·disabled []·load_preset 통과. 한글 콘솔 cp949 깨짐은 표시뿐(UTF-8 덤프로 확인).
+- 주의입력: 같은이름 재등록=409. 사이즈 전부 변환실패=400(폴더정리). curl 한글은 cp949 전송돼도 _fix_mojibake가 복원. 브라우저 FormData는 utf-8.
+
+⚠️ reviewer 참고:
+- _fix_mojibake: latin-1 재인코딩→utf-8→cp949 순 복원(한글 유니코드는 latin-1 범위밖이라 정상한글은 보존). name/base_size/glyph_order/filename에 적용.
+- _safe_pattern_dirname: 선행 `_` 보존(strip("."))+금지문자·경로탈출 차단. design_region_pt 추정값(경고동반)·전부결함 등록거부 정책.
+- POST /patterns 부분실패 무중단(글리프셋·완성본 실패=경고, 사이즈 전부실패만 거부). _tmp_path 중간산출 정리. settings.json gitignore.
+
 ## 수정 요청
 | 요청자 | 대상 | 문제 | 상태 |
 |--------|------|------|------|
@@ -289,8 +328,6 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 | 결과 |
 |------|---------|------|------|
-| 2026-06-20 | dev/test | 이슈3 3XL 안전차단+grade회귀 수정 | 5XL오출고0·grade정상 7/7 |
-| 2026-06-20 | dev/test/rev | 이슈1 번호 글리프셋(0~9 outline) | 8/8, 잉크중심0pt, athletic 블록체 |
 | 2026-06-20 | pm | 이슈2/4/3/1 커밋(5개) | 미푸시5(푸시대기) |
 | 2026-06-20 | tester | 본체92K 풀합성 검증(preset design_file→본체) | design Form 3.4KB→91,917B, verify 9/9 PASS, PNG 비흰51%·본체+밴드+번호 정상 |
 | 2026-06-20 | tester | 빈본체 XL11 검증(preset design_file→빈본체 정식설정) | design Form 88,141B 무손실, **겹침없음(30 소멸)**, verify 9/9, PNG 비흰52.6%·번호11/이름 깨끗, 글리프셋 일치확인 |
@@ -300,3 +337,4 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 | 2026-06-20 | dev | 웹앱1 FastAPI 뼈대(정적서빙+health/patterns/settings) | 완료기준①~⑤ PASS: uvicorn기동크래시0·curl 3종(V넥 sizes12·glyph_source true·disabled[3XL])·브라우저 패턴실데이터+server-pill연결·engine0변경+_handoff원본무수정(복사본 3파일만)·포트PID종료. fastapi/uvicorn requirements추가. 빌드0 |
 | 2026-06-20 | dev | 웹앱2(주문서parse API+디자인점검5케이스+work.html fetch연결) | ①~④ PASS: 주문서 total38/이름11/empty0 · 5케이스 정확(빈템플릿pass+flattened·완성본warn·본체누락fail·%!PS fail·SMask fail, **정상↔완성본 또렷구분** Tj0/1·흰글리프12/16임계14) · 브라우저 업로드→표/점검 정상 · engine0+_handoff0 무수정. 빌드0. data/uploads gitignore |
 | 2026-06-20 | dev | 웹앱3(비동기 job API 5개+design_token+work.html 생성→폴링→검수→ZIP) | ①~⑧ 전부 PASS: POST jobs 비동기 즉시 job_id·progress done(6.5s)·GET결과 verify2/2·checks_eps·skip3XL·format both / zip both(pdf/·eps/하위)·pdf·eps / 브라우저 E2E(tiles3·실미리보기3·배지3·판정3/3·건너뜀1·모달미리보기·ZIP download) / GS부재 EPS skip+PDF·크래시0 / 구 구조 job(한글폴더·output/직하) GET·preview·zip 동작 / **engine0+_handoff0 무수정**. const SKIPPED 우회. 빌드0 |
+| 2026-06-20 | dev | 웹앱4(GET jobs+POST patterns핵심+PUT settings) | ①~⑤ PASS: jobs 18건목록·history연결 / **patterns 실데이터등록 ok·5사이즈·3조각·glyph10자·area전부·load_preset통과·단조증가** / settings PUT 머지 both왕복 / 브라우저 E2E pageerror0·C단계 save버튼·완성본드롭존 / **engine·scripts·_handoff 0변경·HTML 마크업무수정(JS만)**. multipart한글복원(_fix_mojibake). settings.json gitignore. 빌드0 |
