@@ -12,6 +12,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import time
+import uuid
 from typing import Any, Dict
 
 # ── 프로젝트 루트 경로 계산 ──────────────────────────────────────────────
@@ -25,6 +28,7 @@ PROJECT_ROOT = os.path.dirname(WEBAPP_DIR)                       # <루트>
 STATIC_DIR = os.path.join(WEBAPP_DIR, "static")                  # 정적 화면(복사본)
 PATTERNS_DIR = os.path.join(PROJECT_ROOT, "data", "patterns")    # 패턴 프리셋들
 JOBS_DIR = os.path.join(PROJECT_ROOT, "data", "jobs")            # 생성 작업 결과
+UPLOADS_DIR = os.path.join(PROJECT_ROOT, "data", "uploads")      # 업로드 임시저장
 SETTINGS_PATH = os.path.join(PROJECT_ROOT, "data", "settings.json")  # 설정 JSON
 
 # 서버가 띄워질 기본 포트(헬스체크 응답·브라우저 자동오픈에서 공통 사용).
@@ -49,6 +53,40 @@ def get_static_dir() -> str:
 def get_patterns_dir() -> str:
     """패턴 프리셋 폴더(절대경로) 를 돌려준다."""
     return PATTERNS_DIR
+
+
+def save_upload(upload) -> str:
+    """업로드된 파일(UploadFile)을 data/uploads/ 에 임시 저장하고 절대경로를 돌려준다.
+
+    왜 디스크에 한 번 떨어뜨리나(비유):
+      엔진(parse_order, flatten_transparency)은 '메모리에 떠 있는 업로드 덩어리'가
+      아니라 '디스크에 있는 파일 주소(경로)'를 받아서 일한다. 그래서 브라우저가
+      올린 파일을 우편함(uploads 폴더)에 한 번 내려놓고, 그 주소를 엔진에 건넨다.
+
+    충돌 방지: 같은 이름의 파일을 여러 번 올려도 덮어쓰지 않도록 파일명 앞에
+      '시각+랜덤8자리' 접두어를 붙인다(예: 1718900000_ab12cd34__주문서.xlsx).
+
+    반환: 저장된 파일의 절대경로(str).
+    """
+    # uploads 폴더가 없으면 만든다(첫 실행이면 정상적으로 없음).
+    os.makedirs(UPLOADS_DIR, exist_ok=True)
+
+    # 원본 파일명에서 폴더 구분자를 떼어 파일명만 안전하게 추린다(경로 조작 방지).
+    raw_name = os.path.basename(upload.filename or "upload.bin")
+
+    # 시각(초)+랜덤8자리 접두어로 충돌·덮어쓰기를 막는다.
+    prefix = f"{int(time.time())}_{uuid.uuid4().hex[:8]}__"
+    dest = os.path.join(UPLOADS_DIR, prefix + raw_name)
+
+    # 업로드 스트림을 처음으로 되감은 뒤(이전에 읽혔을 수 있음) 디스크로 복사한다.
+    try:
+        upload.file.seek(0)
+    except Exception:
+        pass
+    with open(dest, "wb") as out:
+        shutil.copyfileobj(upload.file, out)
+
+    return dest
 
 
 def read_settings() -> Dict[str, Any]:

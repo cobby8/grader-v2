@@ -215,6 +215,38 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 
 (이전 검증 기록은 위 "구현 기록 (developer) — 출력형식" 및 "테스트 결과" 섹션 보존)
 
+## 구현 기록 (developer) — 웹앱2 (주문서 파싱 API + 디자인 점검 5케이스 + 화면 fetch 연결) (2026-06-20)
+📝 구현한 기능: **웹앱 2단계** — ① 주문서 xlsx 파싱 API, ② 디자인 점검 5케이스 API(우선순위 판정), ③ work.html 드롭존을 실 파일 업로드+fetch로 연결. 엔진 공개 API는 호출만(무수정), _handoff 원본 무수정(webapp/static 복사본만).
+
+| 파일 | 변경 내용 | 신규/수정 |
+|------|----------|----------|
+| webapp/state.py | save_upload(upload): data/uploads/ 에 '시각_랜덤8__원본명' 으로 저장→절대경로 반환. UPLOADS_DIR 상수 추가. | 수정 |
+| webapp/api.py | POST /api/order/parse(xlsx→parse_order→{rows,warnings,total,empty_size}) + POST /api/design/check(5케이스 우선순위) + 베이크 헬퍼(_number_areas preset에서 좌표읽기·_count_white_glyphs_in_number_area) + 임계상수 | 수정 |
+| webapp/static/screens/work.html | pickFile/uploadDesign/uploadOrder fetch 헬퍼 + renderDesign(서버 status→톤/체크리스트)·renderOrder(서버 rows→ORDER) JS만 교체. 마크업·토큰·DESIGN_CASES 무수정 | 수정(복사본만) |
+| .gitignore | data/uploads/ 추가(업로드 임시저장소) | 수정 |
+
+**5케이스 우선순위 판정 로직(★)**: ① 첫바이트 %!PS-Adobe → fail(PDF호환 아님) → ② %PDF인데 page0 콘텐츠<10KB → fail(본체누락) → ④ 베이크(Tj 라이브텍스트>0 OR 번호area 흰글리프>임계14) → warn(빈본체 권장, 진행허용) → ③ 투명도(scan_transparency) → flatten_transparency 성공·잔여0 pass(+flattened)/SMask등 잔여 fail(원본평탄화) → ⑤ 정상 pass.
+
+**베이크 area 판정(★ 오판 방지)**: preset front/back_number_area의 center/cap_height를 단일출처로 읽어 번호중심±(cap*2.0가로,1.2세로)로 area를 좁혀 흰색(0,0,0,0) 채움만 카운트. 실측: **정상 빈템플릿 Tj0·흰글리프12 / 완성본 Tj1·흰글리프16** → 임계14로 빈템플릿 pass·완성본 warn 정확히 갈림. 1차 신호 Tj(0 vs 1)만으로도 갈리며 흰글리프는 OR 보조. _collect_fills(reference.py) 재사용.
+
+✅ 검증 결과(①~④ 전부 PASS):
+- **①주문서 curl+직접호출**: parse_order → **total 38 / 고유이름 11명 / empty_size 0 / warnings 0**. 의뢰 "11명·유효38행" 일치.
+- **②design 5케이스(curl HTTP + 직접호출)**: ⑤빈템플릿=pass+flattened(Tj0/흰12, 투명도ca·CA=0.2→평탄화) · ④완성본=warn(Tj1/흰16) · ②본체누락3.4K=fail(3,419<10K) · ①합성%!PS=fail · ③합성SMask=fail(평탄화후 SMask잔여). **정상pass↔완성본warn 또렷이 구분**.
+- **③브라우저(playwright)**: 패턴카드2개 실데이터 / 빈템플릿업로드→filecard pass톤·본체88,141B·평탄화표시 / 완성본업로드→filecard warn톤+alert--warn "빈본체올려주세요" / 주문서업로드→**38행**·첫행"이해솔". 콘솔에러는 외부CDN 폰트404뿐(오프라인·코드무관).
+- **④불변제약 git diff**: **engine/ 0변경 + _handoff/ 0변경**(둘 다 빈 diff). webapp/static은 복사본 work.html만 수정(원본 무수정). 빌드0(py_compile OK). 변경파일 4개(.gitignore·api·state·work.html).
+
+💡 tester 참고:
+- 기동: `python -m uvicorn webapp.main:app --port 8000` (종료는 포트8000 PID로만, taskkill //f //im node 금지).
+- 주문서 테스트: `curl -X POST localhost:8000/api/order/parse -F "file=@<xlsx>"` → total38/이름11.
+- 디자인 테스트: `curl -X POST localhost:8000/api/design/check -F "file=@<ai>"` → status(pass|warn|fail)+checks+message+flattened.
+- 정상 동작: 빈템플릿=pass(flattened true) / 완성본=warn / 3.4K템플릿=fail(본체누락) / %!PS=fail / SMask=fail.
+- 주의입력: SMask 든 PDF=평탄화불가 fail(합성으로만 재현 가능). 한글 콘솔 stdout cp949 깨짐은 표시뿐(UTF-8 덤프로 확인). data/uploads/ 는 gitignore(임시).
+
+⚠️ reviewer 참고:
+- design/check 5케이스 우선순위 순서(① %!PS → ② 본체<10K → ④ 베이크 → ③ 투명도 평탄화 → ⑤ pass) — 베이크가 투명도보다 먼저라 빈템플릿(베이크아님)만 ③평탄화 단계로 진입.
+- 베이크 임계 _BAKED_WHITE_GLYPH_MAX=14, _BODY_MIN_BYTES=10000 소스상수(실측 기반, 디자인 바뀌면 여기만). 번호area는 preset center/cap_height에서 읽음(하드코딩 좌표 없음).
+- save_upload 충돌접두어(시각_랜덤8) + upload.file.seek(0) 후 복사. 평탄화 임시파일 tempfile→점검후 finally cleanup(원본 무손상).
+
 ## 수정 요청
 | 요청자 | 대상 | 문제 | 상태 |
 |--------|------|------|------|
@@ -224,8 +256,6 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 | 결과 |
 |------|---------|------|------|
-| 2026-06-19 | dev/test | 이슈4 재단선 보존 인프라 | 7/7(실파일 재단선 부재→디자이너 재출력 대기) |
-| 2026-06-20 | dev/test/rev | 이슈3 암홀X 3조각 복원+단조성가드 | 12개 PASS, 3XL 결함 발견 |
 | 2026-06-20 | dev/test | 이슈3 3XL 안전차단+grade회귀 수정 | 5XL오출고0·grade정상 7/7 |
 | 2026-06-20 | dev/test/rev | 이슈1 번호 글리프셋(0~9 outline) | 8/8, 잉크중심0pt, athletic 블록체 |
 | 2026-06-20 | pm | 이슈2/4/3/1 커밋(5개) | 미푸시5(푸시대기) |
@@ -235,3 +265,4 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 | 2026-06-20 | dev | 출력형식 PDF/EPS/both(flatten Group제거+eps.py+run_job형식+CLI --format) | 완료기준①~⑤ 전부PASS: 회귀0(픽셀delta>10=0·selftest·job verify)/EPS 305KB벡터·Id0·CMYK/both양쪽생성·verify PASS/GS fallback크래시0/summary집계·checks_eps. 불변제약 무수정. 빌드0 |
 | 2026-06-20 | reviewer | 출력형식 코드리뷰(eps.py/flatten/job/cli/preset) | **통과(치명0)**: 불변제약 무수정확정·flatten Group제거 알파/SMask 이중가드·페이지그룹/CS보존 타당·GS fallback크래시0·verify_eps Id벡터판정 정교. 권장3(origin_ok무의미가드·GS경로/임계 하드코딩·미사용 _alpha_gstates). 후속: PDF경로 output/pdf 이전→기존job 구구조 웹앱 양쪽읽기 권장(의뢰서 §2 정합) |
 | 2026-06-20 | dev | 웹앱1 FastAPI 뼈대(정적서빙+health/patterns/settings) | 완료기준①~⑤ PASS: uvicorn기동크래시0·curl 3종(V넥 sizes12·glyph_source true·disabled[3XL])·브라우저 패턴실데이터+server-pill연결·engine0변경+_handoff원본무수정(복사본 3파일만)·포트PID종료. fastapi/uvicorn requirements추가. 빌드0 |
+| 2026-06-20 | dev | 웹앱2(주문서parse API+디자인점검5케이스+work.html fetch연결) | ①~④ PASS: 주문서 total38/이름11/empty0 · 5케이스 정확(빈템플릿pass+flattened·완성본warn·본체누락fail·%!PS fail·SMask fail, **정상↔완성본 또렷구분** Tj0/1·흰글리프12/16임계14) · 브라우저 업로드→표/점검 정상 · engine0+_handoff0 무수정. 빌드0. data/uploads gitignore |
