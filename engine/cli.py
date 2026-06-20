@@ -19,9 +19,12 @@
       --json 을 주면 결과를 그 경로에 JSON 으로 저장(job 단계에서 읽을 order.json).
 
   python -m engine job --preset PRESET.json --design D.ai --order ORDER.xlsx
-                       [--out DIR] [--split per_player|single] [--no-preview]
-      주문서(선수 명단) × 디자인 → 선수별 배번/이름 갈아끼운 PDF 한 벌 생성 → 검증.
-      --out 미지정 시 data/jobs/<날짜_주문서명>/ 자동 생성. 결과는 job.json 에 덤프.
+                       [--out DIR] [--split per_player|single]
+                       [--format pdf|eps|both] [--no-preview]
+      주문서(선수 명단) × 디자인 → 선수별 배번/이름 갈아끼운 PDF/EPS 한 벌 생성 → 검증.
+      --format: pdf(기본)·eps·both. eps/both 는 Ghostscript 필요(없으면 PDF 만 산출).
+      산출물은 output/pdf, output/eps 로 분리. --out 미지정 시 data/jobs/<날짜_주문서명>/.
+      결과(형식별 produced/verify, checks_eps 포함)는 job.json 에 덤프.
 """
 from __future__ import annotations
 
@@ -222,10 +225,12 @@ def cmd_job(args) -> int:
         out_dir = os.path.join("data", "jobs", f"{today}_{order_stem}")
     os.makedirs(out_dir, exist_ok=True)
 
-    # ── 3) 핵심: run_job 이 선수마다 사이즈 레이아웃+배번/이름으로 PDF 를 굽고 검증한다. ──
+    # ── 3) 핵심: run_job 이 선수마다 사이즈 레이아웃+배번/이름으로 PDF/EPS 를 굽고 검증한다. ──
+    #    --format(pdf|eps|both)은 run_job 인자로 최우선 전달(미지정 시 preset.output.format). ──
     result = run_job(args.preset, args.design, order_rows, out_dir,
                      font_path=args.font, split=args.split,
-                     make_preview=not args.no_preview)
+                     make_preview=not args.no_preview,
+                     out_format=args.format)
 
     s = result["summary"]
     # ── 4) 행 경고/스킵 안내(사람 검수용). ──
@@ -242,7 +247,20 @@ def cmd_job(args) -> int:
     vfail = s["verify_fail"]
     nskip = len(s["skipped"])
     split_name = s["split"]
-    print("\n생성 %d개 / verify PASS %d · FAIL %d / 건너뜀 %d (split=%s)" % (produced, vpass, vfail, nskip, split_name))
+    print("\n생성 %d개 / verify PASS %d · FAIL %d / 건너뜀 %d (split=%s, format=%s)"
+          % (produced, vpass, vfail, nskip, split_name, s.get("format", "pdf")))
+
+    # ── 형식별 산출/검증 요약(PDF·EPS 따로). EPS 는 GS 미설치 시 건너뜀 수도 표시. ──
+    fs = s.get("format_summary")
+    if fs:
+        pdf_fs = fs["pdf"]
+        print("  · PDF: 생성 %d · verify PASS %d" % (pdf_fs["produced"], pdf_fs["verify_pass"]))
+        if s.get("format") in ("eps", "both"):
+            eps_fs = fs["eps"]
+            gs = s.get("ghostscript")
+            print("  · EPS: 생성 %d · verify PASS %d · 건너뜀 %d  (GS=%s)"
+                  % (eps_fs["produced"], eps_fs["verify_pass"], eps_fs["skipped"],
+                     gs or "미설치→PDF fallback"))
     print("작업 폴더: %s" % s["job_dir"])
 
     # 하나도 못 만들었거나 verify 실패가 있으면 비정상 종료코드(사용자가 알아채게).
@@ -540,6 +558,9 @@ def main(argv=None) -> int:
                     help="(선택, 현재 미사용) 폰트 루트 — preset 의 area.font 가 우선")
     jp.add_argument("--split", choices=["per_player", "single"], default="per_player",
                     help="per_player(기본, 선수별 파일) | single(다페이지 1PDF)")
+    jp.add_argument("--format", choices=["pdf", "eps", "both"], default=None,
+                    help="출력 형식 pdf|eps|both. 미지정 시 preset.output.format(없으면 pdf). "
+                         "eps/both 는 GS 필요(없으면 PDF 만 산출=fallback)")
     jp.add_argument("--no-preview", action="store_true", help="검수용 PNG 미리보기 생략")
     jp.set_defaults(func=cmd_job)
 

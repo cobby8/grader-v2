@@ -615,7 +615,8 @@ def run_job(preset: str,
             out_dir: str,
             font_path: Optional[str] = None,
             split: str = "per_player",
-            make_preview: bool = True) -> dict:
+            make_preview: bool = True,
+            out_format: Optional[str] = None) -> dict:
     """주문 행(선수)마다 그 선수 사이즈 1페이지에 배번/이름을 얹어 PDF 한 벌을 만든다.
 
     매개변수
@@ -627,6 +628,12 @@ def run_job(preset: str,
                     인터페이스 안정성을 위해 받되, 추후 area.font 오버라이드 훅으로 활용 예정.
       split       : "per_player"(기본, 선수별 파일) | "single"(다페이지 1PDF).
       make_preview: True 면 출력마다 검수용 PNG 생성(PyMuPDF 있을 때만).
+      out_format  : 출력 형식 "pdf" | "eps" | "both". None 이면 preset.output.format,
+                    그것도 없으면 "pdf"(기본). **run_job 인자가 최종 우선**(의뢰서 §5).
+                    · pdf  : PDF 만 산출(기존 동작).
+                    · eps  : 공통 PDF 를 만든 뒤 EPS 로만 변환(중간 PDF 는 임시).
+                    · both : PDF + EPS 둘 다(output/pdf, output/eps 로 분리 저장).
+                    GS 미설치 시 eps/both 는 PDF 만 산출(graceful fallback, 크래시 0).
 
     반환(dict): {"outputs": [...], "summary": {...}}  — 자세한 형태는 아래 코드 참조.
     실패 정책: 행 단위 실패(사이즈 없음/미지원/렌더 오류)는 skip + 사유 기록으로 흘리고
@@ -639,6 +646,17 @@ def run_job(preset: str,
     preset_dict = load_preset(preset)  # FileNotFoundError/ValueError 친절 메시지
     if not os.path.exists(design_pdf):
         raise FileNotFoundError(f"디자인 파일 없음: {design_pdf}")
+
+    # ── (§5) 출력 형식 결정: run_job 인자 > preset.output.format > 기본 "pdf". ──
+    #    왜 이 우선순위: CLI/호출자가 명시한 형식이 preset 기본값을 덮어쓰는 게 직관적.
+    out_cfg = preset_dict.get("output", {}) or {}
+    fmt = (out_format or out_cfg.get("format") or "pdf").lower()
+    if fmt not in ("pdf", "eps", "both"):
+        raise ValueError(f"out_format 은 'pdf'|'eps'|'both' 여야 합니다(받은 값: {out_format!r})")
+    want_pdf = fmt in ("pdf", "both")   # 최종 산출물에 PDF 를 남기는가
+    want_eps = fmt in ("eps", "both")   # EPS 를 만드는가
+    # GS 경로: preset.output.ghostscript_path → eps.find_ghostscript 의 1순위로 넘긴다.
+    gs_path = out_cfg.get("ghostscript_path")
 
     # 사용 가능한 사이즈 맵(이름 → 사이즈 정의). 주문 사이즈를 여기에 대조한다.
     #   sizes 에는 '출고 가능한' 사이즈만 들어 있다(예: V넥 12개). 주문 사이즈가
@@ -658,9 +676,26 @@ def run_job(preset: str,
     disabled_map = {d["name"]: d.get("reason", "사유 미기재")
                     for d in preset_dict.get("disabled_sizes", [])}
 
-    output_dir = os.path.join(out_dir, "output")
+    # ── 출력 폴더 분리(§4): PDF 는 output/pdf, EPS 는 output/eps. ──
+    #    'eps' 단독 모드에서도 PDF 는 '중간 산출물'로 반드시 만들어야 한다(EPS 는 PDF 에서
+    #    변환되므로). 중간 PDF 는 _epstmp 폴더에 두고 끝에 정리한다(최종엔 EPS 만 남김).
+    pdf_dir = os.path.join(out_dir, "output", "pdf")
+    eps_dir = os.path.join(out_dir, "output", "eps")
+    tmp_pdf_dir = os.path.join(out_dir, "output", "_epstmp")  # eps 단독 모드의 중간 PDF
     preview_dir = os.path.join(out_dir, "preview")
-    os.makedirs(output_dir, exist_ok=True)
+    # 최종 PDF 를 남길 폴더(both/pdf 면 output/pdf, eps 단독이면 임시).
+    pdf_out_dir = pdf_dir if want_pdf else tmp_pdf_dir
+    os.makedirs(pdf_out_dir, exist_ok=True)
+    if want_eps:
+        os.makedirs(eps_dir, exist_ok=True)
+
+    # EPS 변환기 import(여기서만 — eps 미사용 시 의존 회피). GS 1회 탐색 결과를 캐시.
+    _eps = None
+    eps_gs_exe = None
+    eps_gs_warned = False
+    if want_eps:
+        from . import eps as _eps  # noqa: N813  (pdf_to_eps/verify_eps/...)
+        eps_gs_exe = _eps.find_ghostscript(gs_path)
 
     outputs: list = []
     skipped: list = []
@@ -728,6 +763,40 @@ def run_job(preset: str,
                 f"🟡 [재단선] 추출 {n_found}개 < 기대 {n_exp}개 — 일부 재단선이 누락됐을 수 있습니다.")
         else:
             warnings.append(f"[재단선] 추출 {n_found}개 (매핑 {cutline_mapped_expected}개).")
+
+    # ── 형식별 산출 집계(summary.format_summary 용). ──
+    fmt_counts = {
+        "pdf_produced": 0, "pdf_verify_pass": 0,
+        "eps_produced": 0, "eps_verify_pass": 0, "eps_skipped": 0,
+    }
+
+    def _make_eps_for(pdf_path: str, ident: str, sheet_size, page: int = 1):
+        """공통 PDF 1개를 EPS 로 변환 + verify_eps 한다(want_eps 일 때만 호출).
+
+        반환: (eps_rel|None, checks_eps_list|None). GS 미설치/실패면 (None, None)+경고.
+        sheet_size 는 verify_eps 의 BoundingBox 비교용(없으면 존재만 확인).
+        """
+        nonlocal eps_gs_warned
+        eps_out = os.path.join(eps_dir, f"{ident}.eps")
+        conv = _eps.pdf_to_eps(pdf_path, eps_out, ghostscript_path=gs_path, page=page)
+        for w in conv["warnings"]:
+            # GS 미설치 경고는 작업당 1회만(선수마다 반복 안 함).
+            if "찾지 못했" in w:
+                if not eps_gs_warned:
+                    warnings.append(f"[EPS] {w}")
+                    eps_gs_warned = True
+            else:
+                warnings.append(f"[EPS {ident}] {w}")
+        if not conv["produced"]:
+            fmt_counts["eps_skipped"] += 1
+            return None, None
+        fmt_counts["eps_produced"] += 1
+        checks_eps = _eps.eps_checks_to_dicts(
+            _eps.verify_eps(eps_out, sheet_size=sheet_size))
+        if all(c["ok"] for c in checks_eps):
+            fmt_counts["eps_verify_pass"] += 1
+        eps_rel = os.path.relpath(eps_out, out_dir).replace("\\", "/")
+        return eps_rel, checks_eps
 
     # single 모드에서 누적할 (layout, meta) 목록.
     single_layouts: list = []
@@ -810,7 +879,9 @@ def run_job(preset: str,
 
         # ── per_player: 선수 1명 = PDF 1개(원자적 저장) → verify → (옵션)미리보기 ──
         #    base_design = 평탄화된 디자인(투명도 제거본). compose·verify 모두 같은 base 사용.
-        pdf_path = os.path.join(output_dir, f"{ident}.pdf")
+        #    PDF 는 형식과 무관하게 항상 만든다(EPS 도 이 PDF 에서 변환). want_pdf 가 아니면
+        #    임시 폴더(_epstmp)에 두고 EPS 변환 후 정리한다.
+        pdf_path = os.path.join(pdf_out_dir, f"{ident}.pdf")
         try:
             placements = _atomic_save_compose(base_design, [layout], pdf_path)
         except Exception as e:
@@ -820,6 +891,9 @@ def run_job(preset: str,
 
         checks = verify_output(pdf_path, base_design, placements)
         verify_pass = all_passed(checks)
+        fmt_counts["pdf_produced"] += 1
+        if verify_pass:
+            fmt_counts["pdf_verify_pass"] += 1
 
         # ── (이슈4) '재단선 보존' 체크: 출력의 빨간 stroke 수 ≥ 매핑 기대 수. ──
         #    verify_pass(불변 검사) 에는 섞지 않는다 — 재단선은 별도 표식 체크로 보고만 한다.
@@ -845,21 +919,41 @@ def run_job(preset: str,
             except Exception as e:
                 warnings.append(f"[행{idx} {name}] 미리보기 생성 실패(무시): {e}")
 
+        # ── (§4) EPS 변환 + verify_eps (want_eps 일 때만). PDF 시트 크기로 BBox 비교. ──
+        eps_rel = None
+        checks_eps = None
+        if want_eps and _eps is not None:
+            sheet = _eps.sheet_size_from_pdf(pdf_path)
+            eps_rel, checks_eps = _make_eps_for(pdf_path, ident, sheet)
+
+        # 'eps' 단독 모드면 중간 PDF 는 정리(최종엔 EPS 만 남김). both/pdf 면 유지.
+        if not want_pdf and os.path.exists(pdf_path):
+            try:
+                os.remove(pdf_path)
+            except OSError:
+                pass
+
         outputs.append({
             "size": size, "name": name, "number": number,
-            "pdf": os.path.relpath(pdf_path, out_dir).replace("\\", "/"),
+            # want_pdf 가 아니면(eps 단독) PDF 는 임시였으므로 경로를 남기지 않는다.
+            "pdf": (os.path.relpath(pdf_path, out_dir).replace("\\", "/") if want_pdf else None),
+            "eps": eps_rel,
             "preview": preview_rel,
             "checks": check_dicts,
+            "checks_eps": checks_eps,
             "verify_pass": verify_pass,
         })
 
     # ── single 모드 마무리: 누적 레이아웃을 1회 compose → 1회 verify ──
     if split == "single" and single_layouts:
         job_name = os.path.basename(os.path.normpath(out_dir)) or "job"
-        pdf_path = os.path.join(output_dir, f"{_safe_name(job_name)}_all.pdf")
+        pdf_path = os.path.join(pdf_out_dir, f"{_safe_name(job_name)}_all.pdf")
         placements = _atomic_save_compose(base_design, single_layouts, pdf_path)
         checks = verify_output(pdf_path, base_design, placements)
         verify_pass = all_passed(checks)
+        fmt_counts["pdf_produced"] += 1
+        if verify_pass:
+            fmt_counts["pdf_verify_pass"] += 1
 
         # ── (이슈4) '재단선 보존' 체크(single): 전 페이지 합산 stroke ≥ 기대×페이지수. ──
         check_dicts = _checks_to_dicts(checks)
@@ -885,13 +979,35 @@ def run_job(preset: str,
             except Exception as e:
                 warnings.append(f"single 미리보기 생성 실패(무시): {e}")
 
+        # ── (§4) EPS 변환(single): EPS 는 1페이지 포맷이라 페이지별로 1개씩 변환한다. ──
+        eps_list = None
+        checks_eps_list = None
+        if want_eps and _eps is not None:
+            eps_list = []
+            checks_eps_list = []
+            sheet = _eps.sheet_size_from_pdf(pdf_path)
+            for pi in range(len(single_layouts)):
+                ident = single_meta[pi]["ident"]
+                er, ce = _make_eps_for(pdf_path, ident, sheet, page=pi + 1)
+                eps_list.append(er)
+                checks_eps_list.append(ce)
+
+        # 'eps' 단독 모드면 중간 PDF 정리.
+        if not want_pdf and os.path.exists(pdf_path):
+            try:
+                os.remove(pdf_path)
+            except OSError:
+                pass
+
         # single 은 다페이지 1개라 outputs 도 1개로 묶되, 어떤 선수가 몇 페이지인지 players 로 남긴다.
         outputs.append({
             "size": "(multi)", "name": "(전체)", "number": "",
-            "pdf": os.path.relpath(pdf_path, out_dir).replace("\\", "/"),
+            "pdf": (os.path.relpath(pdf_path, out_dir).replace("\\", "/") if want_pdf else None),
+            "eps": eps_list,
             "preview": previews_rel,
             "players": [{"page": i + 1, **single_meta[i]} for i in range(len(single_meta))],
             "checks": check_dicts,
+            "checks_eps": checks_eps_list,
             "verify_pass": verify_pass,
         })
 
@@ -918,6 +1034,8 @@ def run_job(preset: str,
             "flattened_xobjects": flatten_info["flattened_xobjects"],
             "recolored_fills": flatten_info["recolored_fills"],
             "alpha_gstates_fixed": flatten_info["alpha_gstates_fixed"],
+            # 제거한 투명도 그룹 수(EPS 벡터화 트리거 제거 여부 추적). 0 이면 EPS 래스터 위험.
+            "groups_removed": flatten_info.get("groups_removed", 0),
             "transparency_left": flatten_info["transparency_left"],
         } if flatten_info else None),
         # 이슈4 추적용: 재단선 추출/매핑 요약(cutline 키 없으면 None).
@@ -926,8 +1044,34 @@ def run_job(preset: str,
             "expected": int(cutline_cfg.get("expected_strokes", 0)),
             "mapped": cutline_mapped_expected,
         } if cutline_cfg else None),
+        # ── (§4) 출력 형식 + 형식별 산출/검증 집계. ──
+        #    format        : 실제 적용된 형식("pdf"|"eps"|"both").
+        #    ghostscript   : EPS 변환에 쓴 GS 경로(없으면 None — fallback 으로 PDF 만 산출).
+        #    format_summary: 형식별 produced/verify 카운트(PDF·EPS 따로).
+        "format": fmt,
+        "ghostscript": eps_gs_exe if want_eps else None,
+        "format_summary": {
+            "pdf": {"produced": fmt_counts["pdf_produced"],
+                    "verify_pass": fmt_counts["pdf_verify_pass"]},
+            "eps": {"produced": fmt_counts["eps_produced"],
+                    "verify_pass": fmt_counts["eps_verify_pass"],
+                    "skipped": fmt_counts["eps_skipped"]},
+        },
     }
     result = {"outputs": outputs, "summary": summary}
+
+    # ── 'eps' 단독 모드에서 쓴 중간 PDF 임시 폴더 정리(비어 있으면 삭제). ──
+    if not want_pdf and os.path.isdir(tmp_pdf_dir):
+        try:
+            # 남은 파일이 있어도 안전하게 모두 제거(임시 PDF 전용 폴더).
+            for f in os.listdir(tmp_pdf_dir):
+                try:
+                    os.remove(os.path.join(tmp_pdf_dir, f))
+                except OSError:
+                    pass
+            os.rmdir(tmp_pdf_dir)
+        except OSError:
+            pass
 
     # ── job.json 덤프(폴더+JSON 저장 원칙). 원자적으로 쓴다. ──
     job_json = os.path.join(out_dir, "job.json")

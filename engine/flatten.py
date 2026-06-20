@@ -242,6 +242,26 @@ def flatten_transparency(in_path: str, out_path: str,
         except Exception:
             pass
 
+    # ── 투명도 그룹(/Group <</S /Transparency>>) 제거 ──────────────────────────
+    #   왜 필요한가(EPS 벡터 유지의 마지막 빗장):
+    #     알파(ca/CA)·SMask 를 다 없애도, 페이지나 Form XObject 에 '투명도 그룹' 표지판
+    #     (/Group <</S /Transparency>>)이 남아 있으면 Ghostscript eps2write 가 "여긴 투명
+    #     구역"이라 보고 그 영역을 통째로 래스터화(이미지화)해 벡터가 깨질 수 있다.
+    #     알파를 전부 1.0 으로 바꾸고 SMask 가 없으면, 그 그룹은 '아무 합성 효과도 없는'
+    #     껍데기다 → 표지판만 떼어내도 화면 결과(색·모양)는 한 픽셀도 변하지 않는다.
+    #   ⚠️ 안전장치(의뢰서 요구):
+    #     떼기 '직전'에 잔여 알파(ca/CA<1)·SMask 를 다시 한 번 스캔한다. 하나라도 남아
+    #     있으면 그룹을 떼면 합성 결과가 달라질 수 있으므로 제거를 건너뛰고 경고만 남긴다.
+    groups_removed = 0
+    residual = _scan_residual_transparency(pdf)  # (알파/SMask 잔여 목록)
+    if residual:
+        # 잔여 투명도가 있으면 Group 제거는 위험 → 건너뜀(경고). verify 가 최종 판정.
+        warnings.append(
+            "🟡 [Group제거 건너뜀] 알파/SMask 잔여 발견 "
+            f"({residual}) — 투명도 그룹을 제거하면 색이 달라질 수 있어 보존했습니다.")
+    else:
+        groups_removed = _strip_transparency_groups(pdf)
+
     pdf.save(out_path)
 
     # 검증: 평탄화 후에도 투명도가 남았는지 자체 스캔(verify.scan_transparency 와 동일 기준)
@@ -266,6 +286,90 @@ def flatten_transparency(in_path: str, out_path: str,
         "flattened_xobjects": flattened_names,
         "recolored_fills": recolored,
         "alpha_gstates_fixed": fixed,
+        # 페이지 + Form XObject 에서 제거한 투명도 그룹(/Group(/Transparency)) 개수.
+        # 0 이면(잔여 투명도로 건너뜀 또는 애초에 그룹 없음) EPS 단계에서 별도 확인 권장.
+        "groups_removed": groups_removed,
         "warnings": warnings,
         "transparency_left": left,
     }
+
+
+# ── 투명도 그룹 제거 헬퍼 ─────────────────────────────────────────────────────
+def _scan_residual_transparency(pdf: pikepdf.Pdf) -> List[str]:
+    """문서 전체에서 잔여 알파(ca/CA<1)·SMask 흔적을 모은다(Group 제거 전 안전 검사).
+
+    verify.scan_transparency 와 동일 기준(ca/CA<1, SMask≠None)이라, 여기서 빈 리스트면
+    '투명 효과가 실제로 없는' 상태가 보장된다 → Group(껍데기)을 떼도 색이 안 변한다.
+    """
+    found: List[str] = []
+    for obj in pdf.objects:
+        try:
+            if isinstance(obj, pikepdf.Dictionary) and obj.get("/Type") == pikepdf.Name("/ExtGState"):
+                for key in ("/ca", "/CA"):
+                    if key in obj and float(obj[key]) < 1.0:
+                        found.append(f"{key}={float(obj[key]):.3g}")
+                if "/SMask" in obj and obj["/SMask"] != pikepdf.Name("/None"):
+                    found.append("SMask")
+        except Exception:
+            pass
+    return found
+
+
+def _strip_transparency_groups(pdf: pikepdf.Pdf) -> int:
+    """페이지 + 모든 Form XObject 에서 /Group <</S /Transparency>> 를 제거한다.
+    단, **색공간(/CS)을 가진 페이지 그룹은 보존**한다(아래 '왜' 참조).
+
+    반환: 제거한 그룹 수.
+
+    ── 왜 '색공간 가진 페이지 그룹'은 남기는가(실측으로 확정) ──────────────────
+      EPS(eps2write)가 페이지를 통째로 래스터화(20MB+)하게 만드는 진짜 트리거는
+      **Form XObject 의 투명도 그룹**이다. 이것만 제거하면 EPS 가 벡터(≈270KB)로 나오고
+      PDF 렌더 픽셀도 그대로다(델타>10 픽셀 0개 = 시각·색 변화 0).
+      반대로 페이지 그룹의 /CS(ICCBased CMYK 등 '블렌딩 색공간')까지 통째로 지우면,
+      렌더러가 기본 색공간으로 합성을 다시 해 **본판 색이 미세 시프트**된다(렌더 27% 픽셀
+      변화). 게다가 페이지 그룹 제거는 EPS 벡터화에 기여하지도 않는다(제거해도 여전히
+      래스터). 즉 '페이지 그룹의 /CS 제거'는 백해무익 → 색공간 가진 페이지 그룹은 보존.
+
+      · Form XObject 의 /Group(/Transparency): **항상 제거**(벡터화 트리거 + 색 무변).
+      · 페이지의 /Group(/Transparency) 중 /CS 없는 것: 제거(색 영향 없음).
+      · 페이지의 /Group(/Transparency) 중 /CS 있는 것: 보존(색 보존 + 벡터화 무관).
+    ⚠️ 이 함수는 알파·SMask 가 '이미 다 제거된' 뒤에만 호출돼야 한다(호출부 안전검사).
+    """
+    removed = 0
+
+    def _is_transparency_group(grp) -> bool:
+        try:
+            return isinstance(grp, pikepdf.Dictionary) and \
+                grp.get("/S") == pikepdf.Name("/Transparency")
+        except Exception:
+            return False
+
+    def _has_colorspace(grp) -> bool:
+        """그룹에 블렌딩 색공간(/CS)이 정의돼 있으면 True(보존 대상 판단용)."""
+        try:
+            return isinstance(grp, pikepdf.Dictionary) and "/CS" in grp
+        except Exception:
+            return False
+
+    # 1) 페이지 딕셔너리의 /Group — /CS 가 없는 경우에만 제거(색 보존).
+    for page in pdf.pages:
+        pobj = page.obj
+        try:
+            grp = pobj.get("/Group")
+            if "/Group" in pobj and _is_transparency_group(grp) and not _has_colorspace(grp):
+                del pobj["/Group"]
+                removed += 1
+        except Exception:
+            pass
+
+    # 2) 모든 Form XObject 의 /Group — 벡터화 트리거이므로 항상 제거(색 무변).
+    for obj in pdf.objects:
+        try:
+            if isinstance(obj, pikepdf.Stream) and obj.get("/Subtype") == pikepdf.Name("/Form"):
+                if "/Group" in obj and _is_transparency_group(obj.get("/Group")):
+                    del obj["/Group"]
+                    removed += 1
+        except Exception:
+            pass
+
+    return removed

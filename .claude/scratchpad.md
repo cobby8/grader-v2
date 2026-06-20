@@ -99,6 +99,86 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 - PDF(출고용): `C:\0. Programing\grader-v2\data\jobs\260620_연세대V넥_빈본체\output\XL_11_장혁준.pdf` / `...\output\L_09_이병엽.pdf`
 - 작업폴더 루트: `C:\0. Programing\grader-v2\data\jobs\260620_연세대V넥_빈본체\` (output/ PDF33, preview/ PNG33, job.json)
 
+## 구현 기록 (developer) — 출력형식 PDF/EPS/both (2026-06-20)
+📝 구현한 기능: **출력형식 선택(PDF/EPS/둘다)** — flatten Group제거 + engine/eps.py 신설 + run_job 형식분기 + preset settings + CLI --format. 의뢰서 §1~5 전부 구현·검증 완료.
+
+| 파일 | 변경 내용 | 신규/수정 |
+|------|----------|----------|
+| engine/flatten.py | flatten_transparency 끝(save직전) Form투명도그룹 제거 + 잔여알파/SMask 재스캔 안전가드 + groups_removed 카운트. `_scan_residual_transparency`/`_strip_transparency_groups` 추가 | 수정 |
+| engine/eps.py | **신설**: pdf_to_eps(eps2write+EPSCrop, GS탐색 settings→절대→PATH, graceful fallback, 변환직전 Form그룹 strip) + verify_eps(벡터/CMYK/BBox) + find_ghostscript | 신규 |
+| engine/job.py | run_job out_format(pdf\|eps\|both) 인자 + output/pdf·output/eps 분리 + EPS변환·verify_eps + summary format/ghostscript/format_summary + outputs[].eps·checks_eps + flatten groups_removed | 수정 |
+| engine/cli.py | cmd_job --format 추가 + run_job 전달 + 형식별 요약 출력 | 수정 |
+| data/patterns/농구_V넥_양면/preset.json | output{format:"pdf", ghostscript_path} 추가 | 수정 |
+
+**핵심 발견(★)**: EPS 래스터화 트리거는 **Form XObject의 /Group(/Transparency)** 뿐. 페이지 /Group은 /CS(ICC CMYK 블렌딩색공간) 보유→통째 제거 시 본판색 미세시프트(렌더 27%변화)+벡터화 기여0 → **Form그룹만 제거, 페이지그룹(/CS有) 보존**. compose의 as_form_xobject가 디자인 재임베드 시 페이지 /Group을 새 Form으로 옮겨 합성PDF에 투명그룹 부활 → pdf_to_eps가 변환직전 임시사본에서 Form그룹 재제거(compose 무수정).
+
+✅ 검증 결과(완료기준 ①~⑤ 전부 PASS):
+- **①회귀0**: selftest PASS(inkcov편차0) / flatten후 PDF렌더 **delta>10 픽셀 0개**(변화0.006%=AA노이즈, 시각·색변화0) / 기존V넥 job verify PASS(9/9). flatten groups_removed=1(Form그룹, 페이지그룹 보존).
+- **②EPS벡터(XL_11)**: 305,898B(~300KB대) · 실이미지페인트 Id **0개**(래스터 아님, 대조군 래스터EPS=20MB·Id546개) · CMYK유지 · verify_eps 3/3 PASS. EPSCrop 렌더 비흰54.9%(파랑54.2%본판+빨강0.5%재단선+번호) = 시각 정상.
+- **③both(선수2명)**: output/pdf+output/eps 양쪽 생성 / PDF verify 2/2 PASS · EPS verify 6/6 PASS(벡터·CMYK·BBox) / format_summary{pdf:2/2, eps:2/2/0}. 38행 전체도 생성33/verifyPASS33/skip5(3XL).
+- **④GS fallback**: (a)잘못된 ghostscript_path→PATH폴백 경고+EPS생성 (b)GS완전부재→EPS skip2·**PDF만 산출**·경고1회·**크래시0**.
+- **⑤summary집계**: format/ghostscript/format_summary(pdf·eps produced·verify_pass·skipped) + outputs[].checks_eps 정상 기록. eps단독모드=EPS만 남기고 중간PDF(_epstmp) 정리.
+
+✅ 불변제약 준수: compose.py/verify.py/pattern.py/grade.py **git diff 무수정 확정**. verify_output/Piece/parse_svg/build_layouts/grade 시그니처 그대로. device CMYK 무손실. 빌드0(py_compile OK).
+
+💡 tester 참고:
+- 테스트: `python -m engine.cli job --preset data/patterns/농구_V넥_양면/preset.json --design design_source/연세대_V넥_빈템플릿_본체포함_XL.ai --order <xlsx> --out <dir> --split per_player --format both --no-preview`
+- 정상: output/pdf·output/eps 양쪽 생성, EPS ~300KB, "EPS: 생성N·verify PASS N" 출력, job.json에 checks_eps.
+- 주의입력: --format eps(중간PDF 정리되어 EPS만), GS없는 환경(EPS skip+PDF산출), single split(페이지별 EPS).
+- GS: C:/Program Files/gs/gs10.04.0 설치됨 + PATH에 gswin64c.
+
+⚠️ reviewer 참고:
+- flatten 페이지그룹 보존(/CS 有) 판단 로직 — 색보존 핵심. Form그룹은 항상제거.
+- pdf_to_eps의 strip_groups 임시사본 처리(tempfile→변환→cleanup, 원본 무수정).
+- verify_eps BBox 완화판정(EPSCrop=콘텐츠로 자름 → MediaBox 정확일치 불가).
+
+## 테스트 결과 (tester) — 출력형식 PDF/EPS/both 독립검증 (2026-06-20)
+**대상**: 출력형식 구현(eps.py 신설·flatten Group제거·job out_format·cli --format·preset output) 독립 재검증. 코드 무수정, 검증만. 환경: Python 3.11.9, pikepdf 10.8.0, PyMuPDF 1.27.2, GS 10.04.0(절대경로+PATH 둘 다). 빈본체 preset(design_file=빈본체) × 실주문서 38행.
+
+| 테스트 항목 | 결과 | 비고 |
+|-----------|------|------|
+| 1) selftest 회귀 | ✅ 통과 | 종합 PASS, inkcov 최대편차 **0.000000** |
+| 2-a) Form그룹 제거 회귀(색·시각 변화) | ✅ 통과 | 제거본 vs 살림본 렌더 **delta>10 픽셀 0/6,350,400 (0.0000%)**, 최대delta=2(AA). 시각·색 변화 0 |
+| 2-b) 페이지그룹 /CS 보존 입증 | ✅ 통과 | flatten후 페이지 /Group·/CS **둘 다 보존(True)**, 잔존 Form투명도그룹 0, groups_removed=1. /CS 통째제거 대조군은 색시프트 0.233%(maxΔ37) → 보존이 색보존 핵심임 입증 |
+| 2-c) 기존 V넥 job verify | ✅ 통과 | CLI 38행 both → 생성33/verify PASS33/FAIL0/skip5(3XL) |
+| 3) EPS 벡터화(XL_11) | ✅ 통과 | 305,898B(~300KB대) · **이미지페인트 Id 0개** · CMYK유지 · 벡터연산자21 · BBox 시트이내. verify_eps 3/3 PASS |
+| 3-대조) Form그룹 잔존 래스터 | ✅ 통과 | strip=False → **14.98MB·Id 443개**(의뢰서 §0 14.98MB와 일치), 정식대비 **49배**. 합성PDF에 compose 부활 Form그룹 1개 실재 확인 |
+| 4) --format both | ✅ 통과 | output/pdf+output/eps 양쪽 생성. PDF verify·EPS verify 양쪽 PASS. format_summary 형식별 집계·outputs[].checks_eps 기록. 38행 전체 checks_eps 33/33 보유·전부 PASS |
+| 5) --format eps | ✅ 통과 | EPS만 남음(output/eps), output/pdf·_epstmp 정리됨(존재안함), outputs[].pdf=None |
+| 5) --format pdf | ✅ 통과 | PDF만 남음(output/pdf), output/eps 없음, eps produced=0, outputs[].eps=None |
+| 6-a) 잘못된 ghostscript_path 폴백 | ✅ 통과 | PATH GS로 폴백 경고+EPS 정상생성, 크래시 0 |
+| 6-b) GS 완전부재 시뮬 | ✅ 통과 | EPS skip(skipped:1)·**PDF만 산출(파일 실존)**·GS미설치 경고1회·**크래시 0**, ghostscript=None |
+| 7) 불변제약 git diff | ✅ 통과 | compose/verify/pattern/grade/pdfutil/text/order **diff 0건**(무수정 확정) |
+| 8) PDF 경로 변경 영향 | ✅ 통과 | job.json outputs[].pdf=output/pdf/…, eps=output/eps/… **실제 파일과 전부 일치**. preview는 별도 preview/ 폴더라 무영향. 깨지는 곳 0 |
+
+📊 종합: **13개 항목 전부 통과 / 0개 실패** — 출력형식 PDF/EPS/both 구현 독립검증 **PASS**.
+- EPS 33개 크기 분포: 최소304,401B·최대306,182B·평균305,468B·**2MB초과(래스터의심) 0개**(전부 벡터).
+- 핵심 3대 확정: ②색시프트 0(Form그룹 제거 무영향+페이지그룹/CS 보존) · ③EPS 이미지0(벡터, 대조군 래스터 49배) · ⑥fallback 크래시0(폴백·부재 양쪽).
+- 검증 산출물 경로(참고): `C:\0. Programing\grader-v2\_qa_eps\job_cli_both\` (PDF33·EPS33·job.json), `_qa_eps\job_both\`(both 2명), `_qa_eps\contrast_raster.eps`(래스터 대조군 14.98MB).
+
+## 리뷰 결과 (reviewer) — 출력형식 PDF/EPS/both (2026-06-20)
+
+📊 종합 판정: **통과** (치명 0건). 후속 1건은 의뢰서 설계에 이미 반영됨.
+
+✅ 잘된 점:
+- **불변제약 완벽 준수**: git diff 확인 — compose.py/verify.py/pattern.py/grade.py **무수정 확정**. eps.py 신규, flatten/job/cli + preset만 변경. verify_output/Piece/parse_svg/build_layouts/grade 시그니처 그대로. run_job은 out_format 인자를 **기본값 None**으로 추가(기존 호출부 무영향).
+- **flatten Group제거 안전가드 우수(핵심)**: `_strip_transparency_groups` 호출 직전 `_scan_residual_transparency`로 알파(ca/CA<1)·SMask 재스캔 → 잔여 있으면 제거 건너뛰고 경고만(flatten.py 256~263, eps.py 113~119 이중 적용). Form그룹은 항상 제거(벡터화 트리거), 페이지그룹은 /CS(블렌딩 색공간) 있으면 보존(색시프트 방지) — 의뢰서 §1·§6 device CMYK 무손실 요구에 정확히 부합. "표지판만 떼되 색 효과 남았으면 보존" 판단 타당.
+- **graceful fallback 견고**: GS 탐색 settings→절대경로→PATH 순서 정확(eps.py 59~85). subprocess timeout=300·capture_output·try/except, GS 미설치/실행실패/rc≠0/파일미생성 전부 produced=False+경고로 흘림(크래시0). 임시 strip 사본은 finally + _cleanup_tmp로 원본 무손상 정리. GS미설치 경고는 작업당 1회(eps_gs_warned 플래그).
+- **EPS 단독 모드 순서 안전**: verify→preview→EPS변환→PDF삭제 순. 미리보기가 PDF 삭제 전 생성되어 eps 단독에서도 preview 정상(job.py 912~934).
+- **verify_eps 벡터판정 정교**: image토큰(eps2write 정의 2개 상존)을 단독기준에서 배제하고 실제 페인트호출 `Id`로 래스터/벡터 판별 + 크기임계 + 벡터연산자 3중 AND. 오탐 방지 설계 우수.
+- **에러 한국어·네이밍 양호**, 주석으로 "왜"를 충실히 설명.
+
+🟡 권장 수정(후순위, 차단 아님):
+- [eps.py:316 verify_eps origin_ok] `abs(x0) <= bbox_tol + sw` 는 x0가 시트폭(sw)만큼 떨어져도 통과 → 사실상 항상 참인 무의미 가드. EPSCrop BBox 원점은 0 근처여야 정상이므로 `abs(x0) <= bbox_tol`(또는 작은 여백)이 의도에 맞음. **단 과대허용=거짓양성 아님(검증 느슨해질 뿐)**이라 치명 아님. 현 동작(within·has_content가 실질 판정)으로 EPS 품질검증은 유효.
+- [eps.py:42 _GS_ABS_CANDIDATES / verify_eps 임계값들] GS 절대경로 후보·raster_size_limit(2MB)·max_image_ops(4)가 소스 하드코딩. preset.output.ghostscript_path로 1순위 오버라이드는 되므로 실사용 무지장이나, GS 버전 올라가면 후보 목록 갱신 필요. 임계값도 향후 preset화 여지(현재는 합리적 기본값).
+- [flatten.py:117 _alpha_gstates] 빈 dict 반환 자리표시 함수 — 미사용이면 후속 정리 시 제거 검토(현재 무해).
+
+🔶 후속 리스크(치명 아님 — 의뢰서에 이미 반영 확인):
+- **PDF 경로 변경(output/ → output/pdf/)**: 기존 job.json을 읽는 코드는 engine 내 없음(grep 확인). outputs[].pdf는 out_dir 기준 상대경로로 기록되어 경로 변경이 JSON에 자동 반영됨. **후속 FastAPI 웹앱**(의뢰서-CLI-FastAPI §2 `/zip?format=` "둘 다면 pdf/·eps/ 하위폴더")이 신 구조를 전제로 설계되어 있어 **정합**. 단, 260620_연세대V넥_빈본체 등 **이미 생성된 기존 job 폴더는 output/ 직하에 PDF**가 있으므로, 웹앱 기록조회(`GET /api/jobs`)가 구·신 두 구조를 모두 읽도록 해야 함(웹앱 구현 시 처리 권장).
+- eps 단독 모드: outputs[].pdf=null로 기록 → 웹앱/소비자가 null 처리 가정 필요(의뢰서에 형식분기 명시되어 정상).
+
+(이전 검증 기록은 위 "구현 기록 (developer) — 출력형식" 및 "테스트 결과" 섹션 보존)
+
 ## 수정 요청
 | 요청자 | 대상 | 문제 | 상태 |
 |--------|------|------|------|
@@ -118,3 +198,5 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 | 2026-06-20 | tester | 본체92K 풀합성 검증(preset design_file→본체) | design Form 3.4KB→91,917B, verify 9/9 PASS, PNG 비흰51%·본체+밴드+번호 정상 |
 | 2026-06-20 | tester | 빈본체 XL11 검증(preset design_file→빈본체 정식설정) | design Form 88,141B 무손실, **겹침없음(30 소멸)**, verify 9/9, PNG 비흰52.6%·번호11/이름 깨끗, 글리프셋 일치확인 |
 | 2026-06-20 | dev | 실주문 11명 빈본체 전체 재출력(job per_player 38행) | **생성33/verify PASS33/FAIL0/skip5(3XL)**, design Form 88,141B 전수 byte-identical, 겹침없음·Do3·k/K3·금지0, 대표6건 육안PASS, cowork PDF/PNG 경로명시 |
+| 2026-06-20 | dev | 출력형식 PDF/EPS/both(flatten Group제거+eps.py+run_job형식+CLI --format) | 완료기준①~⑤ 전부PASS: 회귀0(픽셀delta>10=0·selftest·job verify)/EPS 305KB벡터·Id0·CMYK/both양쪽생성·verify PASS/GS fallback크래시0/summary집계·checks_eps. 불변제약 무수정. 빌드0 |
+| 2026-06-20 | reviewer | 출력형식 코드리뷰(eps.py/flatten/job/cli/preset) | **통과(치명0)**: 불변제약 무수정확정·flatten Group제거 알파/SMask 이중가드·페이지그룹/CS보존 타당·GS fallback크래시0·verify_eps Id벡터판정 정교. 권장3(origin_ok무의미가드·GS경로/임계 하드코딩·미사용 _alpha_gstates). 후속: PDF경로 output/pdf 이전→기존job 구구조 웹앱 양쪽읽기 권장(의뢰서 §2 정합) |

@@ -2,6 +2,12 @@
 <!-- 담당: planner-architect, developer | 최대 30항목 -->
 <!-- 프로젝트의 폴더 구조, 파일 역할, 핵심 패턴을 기록 -->
 
+### [2026-06-20] 출력형식(PDF/EPS/both) 경로 + EPS 벡터화의 핵심 함정(Form그룹 vs 페이지그룹)
+- **분류**: architecture
+- **발견자**: developer
+- **내용**: PDF→EPS 변환은 **engine/eps.py**(신규)가 담당. `pdf_to_eps(pdf,eps,ghostscript_path,page,strip_groups=True)`(GS eps2write+EPSCrop, graceful fallback) + `verify_eps(eps,sheet_size,...)`(벡터·CMYK·BBox 검사) + `find_ghostscript(settings_path)`(탐색순서: settings → 절대경로후보 → PATH). **★EPS 벡터화의 결정적 함정★**: eps2write가 페이지를 통째 래스터화(20MB+)하는 트리거는 **Form XObject의 `/Group(/Transparency)`** 다. 이것만 제거하면 EPS가 벡터(~270~305KB)로 나오고 PDF 렌더 픽셀도 그대로(delta>10 픽셀 0개). 반대로 **페이지의 `/Group`은 `/CS`(ICCBased CMYK 블렌딩 색공간)를 갖고 있어 통째 지우면 본판 색이 미세 시프트**(렌더 27% 픽셀 변화)되고 EPS 벡터화엔 기여도 안 함. → flatten._strip_transparency_groups는 **Form group은 항상 제거, 페이지 group은 /CS 있으면 보존**(실측 확정). **두 번 strip 필요**: flatten이 디자인 원본의 Form group을 지워도, compose의 `as_form_xobject()`가 디자인을 재임베드할 때 원본 페이지 /Group이 새 Form으로 옮겨붙어 **합성 출력 PDF에 투명도 그룹이 되살아남** → pdf_to_eps(strip_groups=True)가 변환 직전 임시 사본에서 Form group을 다시 제거(compose 무수정 제약 회피). **run_job 흐름**: out_format(pdf|eps|both, run_job인자>preset.output.format>"pdf") → PDF 항상 생성(EPS도 이 PDF에서 변환) → output/pdf·output/eps 분리(eps단독은 중간PDF를 _epstmp에 두고 정리) → job.json summary에 format·ghostscript·format_summary{pdf/eps produced·verify_pass·skipped}, outputs[].eps·checks_eps. CLI `--format`. **verify_eps 판정**: 래스터/벡터 구분은 image 토큰 수가 아니라(eps2write가 `{imagemask}{image}ifelse` 정의 2개를 늘 넣음) **파일크기(2MB임계)+실제 이미지페인트 호출 `Id` 개수(래스터546개·벡터0개)+벡터연산자 존재**. BBox는 EPSCrop이 콘텐츠로 자르므로 MediaBox 정확일치 불가 → "원점0근처+시트이내+시트절반이상" 완화판정.
+- **참조횟수**: 0
+
 ### [2026-06-15] 3개 좌표계 분리 + preset.json → engine 매핑 경로
 - **분류**: architecture
 - **발견자**: planner-architect
