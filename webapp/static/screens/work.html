@@ -4,6 +4,10 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<!-- 옛 버전이 캐시되어 드롭 핸들러 없는 화면이 뜨는 일을 막는다(강력새로고침 불필요). -->
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+<meta http-equiv="Pragma" content="no-cache" />
+<meta http-equiv="Expires" content="0" />
 <title>STIZ grader · 작업</title>
 <link rel="icon" href="../assets/logos/stiz-favicon-32.png" />
 <link rel="stylesheet" href="../styles.css" />
@@ -246,28 +250,67 @@ function pickFile(accept, onPick) {
   setTimeout(() => inp.remove(), 0);
 }
 
-// 드래그앤드롭 배선 헬퍼 — 드롭존 한 곳에 드래그/드롭 이벤트를 달아 준다.
-//   왜: 기존엔 click(파일 선택)만 돼서 '파일을 끌어다 놓으면' 브라우저가
-//   파일을 새 탭에서 열어버렸다(첨부 안 됨). dragover/drop 에서 기본동작을
-//   막고, 드롭한 첫 파일을 클릭 때와 '똑같은' 업로드 경로(onFile)로 보낸다.
-//   비유: 우편함(드롭존)에 편지를 손으로 넣든(드롭) 버튼을 눌러 넣든(클릭)
-//        결국 같은 우체통(uploadDesign/uploadOrder)으로 들어가게 한다.
+// 드래그앤드롭 배선 — 실제 OS 파일 드롭이 확실히 동작하게 만든다.
+//   왜(근본 원인): 예전엔 드롭존 <button> 요소에만 dragover/drop 을 달았다.
+//     그런데 실제 마우스 드롭은 드롭존 '안의 글씨(span)·여백·패딩' 같이
+//     핸들러가 정확히 안 걸린 자리에 떨어지기 쉽다. 그러면 그 이벤트는
+//     문서(document)로 흘러가는데, 문서엔 차단이 없어 '브라우저 기본동작'
+//     (= 파일을 새 탭에서 열기)으로 빠져 첨부가 안 됐다.
+//     (playwright 의 합성 drop 은 핸들러가 달린 요소에 '직접' 쏴서 이 함정을
+//      못 잡았다 — 그래서 합성 PASS 만으로는 안심하면 안 된다.)
+//   해결(비유): 우편물 분류실 전체(document)에 "바닥에 떨어진 파일을 함부로
+//     열지 마"라는 규칙을 깔고, 떨어진 '위치'를 보고 디자인/주문 우편함 중
+//     가까운 쪽으로 넣어 준다. 드롭존 글씨 위든 여백이든 박스 안이면 첨부된다.
+//
+// 현재 화면에 떠 있는 드롭존들을 등록해 두는 표(렌더마다 새로 그려지므로
+// id 기준으로 최신 onFile 콜백을 보관한다).
+const DROPZONES = {};   // { designDrop: fn, orderDrop: fn }
 function wireDropzone(el, onFile) {
-  if (!el) return;
-  // 드래그가 위에 올라오면 기본동작(파일 열기) 차단 + 시각 하이라이트.
-  const over = (e) => { e.preventDefault(); e.stopPropagation(); el.classList.add("is-drag"); };
-  // 드래그가 벗어나거나 드롭되면 하이라이트 해제. (기존 .dropzone.is-drag 토큰 재사용)
-  const leave = (e) => { e.preventDefault(); e.stopPropagation(); el.classList.remove("is-drag"); };
-  el.addEventListener("dragenter", over);
-  el.addEventListener("dragover", over);
-  el.addEventListener("dragleave", leave);
-  el.addEventListener("drop", (e) => {
-    leave(e);   // 기본동작 차단 + 하이라이트 해제
-    // 드롭한 파일 중 첫 번째 1개만 클릭 업로드와 동일하게 처리한다.
-    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-    if (f) onFile(f);
-  });
+  if (!el || !el.id) return;
+  // 이 드롭존의 '업로드 경로'를 등록(가장 최근 렌더의 콜백으로 갱신).
+  DROPZONES[el.id] = onFile;
 }
+// 좌표(x,y)가 어느 드롭존 박스 안인지 찾아 { el, onFile } 반환(없으면 null).
+function dropzoneAt(x, y) {
+  for (const id in DROPZONES) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    const r = el.getBoundingClientRect();
+    if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+      return { el, onFile: DROPZONES[id] };
+    }
+  }
+  return null;
+}
+// 모든 드롭존 하이라이트 해제.
+function clearDropHighlight() {
+  for (const id in DROPZONES) {
+    const el = document.getElementById(id);
+    if (el) el.classList.remove("is-drag");
+  }
+}
+// ── document 레벨 안전 가드(페이지 어디에 드롭해도 새 탭 열기 차단) ──
+//   dragover 에서 preventDefault 를 해야 'drop' 이벤트가 발생한다(브라우저 규칙).
+document.addEventListener("dragover", (e) => {
+  // 파일을 끄는 중일 때만 개입(텍스트 드래그 등은 건드리지 않음).
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "copy";
+  const hit = dropzoneAt(e.clientX, e.clientY);
+  clearDropHighlight();
+  if (hit) hit.el.classList.add("is-drag");   // 박스 안이면 하이라이트
+});
+document.addEventListener("dragleave", (e) => {
+  // 창 밖으로 완전히 나갔을 때만 하이라이트 정리.
+  if (e.clientX === 0 && e.clientY === 0) clearDropHighlight();
+});
+document.addEventListener("drop", (e) => {
+  e.preventDefault();   // 어디에 떨어뜨려도 새 탭 열기 차단
+  clearDropHighlight();
+  const hit = dropzoneAt(e.clientX, e.clientY);
+  if (!hit) return;     // 드롭존 밖이면 조용히 무시(파일 안 열림)
+  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f && hit.onFile) hit.onFile(f);   // 클릭 업로드와 '똑같은' 경로로 처리
+});
 
 // 디자인 파일을 서버에 보내 5케이스 점검 결과를 받는다.
 async function uploadDesign(file) {

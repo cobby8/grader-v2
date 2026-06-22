@@ -32,6 +32,14 @@
 - **해결(2026-06-20 developer)**: sizes 내부 `"disabled": true` 표식은 build_layouts가 인지 못해 실패했다. **결함 사이즈를 sizes에서 아예 빼고 preset 최상위 `disabled_sizes` 섹션으로 이동**하는 방식으로 일원화해 해결. build_layouts/grade는 `preset["sizes"]`만 순회하므로 3XL이 sizes에 없으면 3XL.svg를 읽지 않아 크래시가 사라진다(grade.py 무수정). job은 `preset.disabled_sizes`(=`{이름→사유}`)에서 disabled_map을 읽어 결함 사이즈 주문을 명확 사유로 skip(5XL 대체 0). 검증: V넥 grade 배치 36회(12사이즈×3조각) PASS·FileNotFoundError 없음, job 3XL 2건 skip·5XL 오출고 0·verify 5/5, U넥(disabled_sizes 키 없음) 회귀 0, 단조성 가드 정상 12개 통과/결함 검출. **남는 교훈**: 사이즈/조각을 "비활성"하는 표식을 도입할 때, **표식을 모르는 경로가 있으면 표식이 아니라 데이터 자체를 그 경로의 순회 대상에서 빼는 것**(섹션 분리)이 더 견고하다. 한 경로만 검증하고 "안전"이라 결론내지 말 것 — disabled/skip 로직은 경로별로 독립이다.
 - **참조횟수**: 1
 
+### [2026-06-22] 실제 OS 파일 드롭 실패 — 드롭존 요소에만 리스너를 달면 자식 span/패딩 드롭이 브라우저 기본동작(새 탭)으로 샌다. playwright 합성 drop 은 이 함정을 못 잡는다 [해결됨]
+- **분류**: error
+- **발견자**: debugger
+- **내용**: work.html 드롭존이 `<button class="dropzone">` + 자식 `<span>`(아이콘/제목/힌트) 구조인데, `wireDropzone`이 그 **button 요소에만** dragenter/dragover/dragleave/drop 리스너를 달았다. 실제 마우스로 파일을 끌어 놓으면 커서가 박스 정중앙이 아니라 **자식 span(글씨) 위·패딩·여백**에 떨어지기 쉽다. span 위 drop 이벤트는 button 핸들러로 안 잡히고 **document 까지 버블링**되는데, document/window 레벨에 dragover/drop `preventDefault` 가드가 없으면 브라우저 **기본동작(파일을 새 탭에서 열기/무시)** 으로 빠져 "끌어다 놔도 아무 반응 없음(첨부 안 됨)"이 된다. 클릭 업로드는 별개 경로라 정상. **결정적 함정**: playwright `dispatchEvent`/합성 drop 은 핸들러가 달린 요소에 이벤트를 **직접** 쏘므로(좌표 빗나감·버블링 함정이 없음) 항상 PASS 한다 → **합성이벤트 PASS 만으로 실제 OS 드롭이 된다고 결론내면 안 된다.** 부차로 StaticFiles 는 etag/last-modified 캐시를 줘서 수정한 work.html 이 옛 버전(드롭 핸들러 없는)으로 떠 있을 수 있다.
+- **해결(2026-06-22)**: (1) 요소별 리스너를 버리고 **document 레벨 단일 dragover/dragleave/drop 가드**로 전환. dragover 에서 `preventDefault`(이게 있어야 drop 이벤트가 발생) + `dropEffect="copy"`. drop 에서도 `preventDefault` 로 어디에 떨어뜨려도 새 탭 열기를 원천 차단. (2) 드롭 좌표(clientX/clientY)를 각 드롭존의 `getBoundingClientRect()` 박스와 비교해 **영역 판정**으로 라우팅 → 자식 span·패딩 어디에 떨어져도 디자인→uploadDesign(/api/design/check)·주문→uploadOrder(/api/order/parse)로 클릭과 동일 경로로 흐른다. `wireDropzone`은 시그니처 유지하되 id→onFile 등록만 담당(렌더 재생성마다 최신 콜백 갱신). (3) work.html `<head>`에 `Cache-Control: no-cache, no-store, must-revalidate` + Pragma + Expires meta 추가(옛 버전 캐시 방지, 강력새로고침 불필요). **검증**: CDP/좌표 기반 drop 으로 **자식 span 좌표(SPAN.dropzone__title)에 직접** 드롭 → 디자인 /api/design/check 호출+filecard, 주문 /api/order/parse 호출+12행. 드롭존 밖(5,5) 드롭 → URL 변경 0·탭 1개(새 탭 안 열림). 클릭 업로드 회귀 0.
+- **예방규칙**: 브라우저 파일 드롭은 (1) **반드시 document/window 레벨에 dragover+drop preventDefault 가드**를 깔고(요소 리스너만으론 자식/패딩 드롭이 샌다), (2) 드롭존 판정은 요소 타겟이 아니라 **좌표 vs getBoundingClientRect**로 하며, (3) 검증은 합성 dispatchEvent 가 아니라 **드롭존 자식 요소 좌표·드롭존 밖 좌표**에 실제 드롭을 흘려 새 탭 미발생·API 호출을 함께 확인한다. 정적 화면 수정이 안 먹는 것 같으면 캐시(etag/304)부터 의심하고 no-cache 헤더/meta 를 확인한다.
+- **참조횟수**: 0
+
 ### [2026-06-19] 패턴 SVG 변환은 "조각수=2 + verify PASS"만으로 정상이 아니다 — viewBox/좌표계가 사이즈별로 섞이면 그레이딩이 깨진다
 - **분류**: error
 - **발견자**: tester

@@ -53,6 +53,16 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 (완료 — 상세 git 히스토리 + knowledge. 출력형식 tester13/13·rev통과, 웹앱 각단계 dev E2E·rev종합 통과 치명0)
 
 ## 구현 기록 (developer)
+🐞 실제 OS 파일 드롭 버그 수정 (2026-06-22, debugger · webapp/static/screens/work.html만 · engine/api.py/main.py/_handoff 무수정)
+
+| 회차 | 수정 내용 | 수정 파일 | 비고 |
+|------|----------|----------|------|
+| 1차 | wireDropzone 재설계: 요소별 리스너 → **document 레벨 dragover/dragleave/drop 가드 + 좌표(getBoundingClientRect) 영역판정 라우팅**. dragover preventDefault(drop 발생 조건)+dropEffect copy, drop preventDefault(새 탭 차단). wireDropzone은 id→onFile 등록만(렌더마다 최신 갱신). `<head>` no-cache meta 3종 추가 | screens/work.html | 원래 요청(실 OS 드롭 무동작) |
+
+- **근본 원인**: 옛 코드는 `<button class="dropzone">`(자식 span 다수) **요소에만** 드롭 리스너 부착. 실제 마우스 드롭은 자식 span/패딩에 떨어져 → button 미처리 → document 버블링 → **document 가드 부재**로 브라우저 기본동작(새 탭/무시)으로 샘. playwright 합성 drop 은 타겟에 직접 쏴서 이 함정을 못 잡음(합성 PASS=실동작 보장 아님). 부차: StaticFiles etag/304 캐시로 옛 버전 가능성.
+- **검증(실 OS 드롭 근사·CDP 좌표기반)**: data/jobs/_qa_realdrop/. **자식 span(SPAN.dropzone__title) 좌표에 직접 drop** → 디자인 /api/design/check 호출+filecard, 주문 /api/order/parse 호출+12행. 드롭존 밖(5,5) drop → URL 불변·탭 1개(새 탭 미발생). 클릭 업로드 회귀 0(filechooser /api/design/check+filecard). 01_design_drop·02_order_drop·03_click_regression.png + results.json/results_click.json.
+- **불변제약 준수**: engine·api.py·main.py·_handoff 무수정. webapp/static/screens/work.html만 수정. 신규 토큰 없음(.dropzone.is-drag 기존 재사용). 빌드0. 서버 포트8000 그대로(PID만, taskkill //im 미사용).
+
 📝 화면버그 5건 수정 (2026-06-22, webapp/static만 · engine/api.py/_handoff 무수정)
 
 | 파일 | 변경 내용 | 신규/수정 |
@@ -129,6 +139,7 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 | tester | webapp/static/screens/work.html (V넥 패턴카드) | 3XL "disabled 표기"가 시각적으로 없음(칩 목록서 제외만). 직원이 3XL 비활성을 카드에서 인지 못함 — disabled 칩(취소선) 표기 검토 | ✅ 완료(취소선 '3XL·비활성' 칩+title툴팁) |
 | tester | webapp/static/screens/settings.html | 페이지 하단 '서버' 카드 일부를 고정 '저장' 푸터가 가림(하단 패딩 부족). 경미 | ✅ 완료(content padding-bottom:80px) |
 | user | webapp/static/screens/work.html (드롭존) | 드래그앤드롭 미구현 — 파일 끌어다놔도 첨부 안 됨(클릭만 동작) | ✅ 완료(wireDropzone: 디자인·주문서 drop→기존 업로드경로) |
+| user | webapp/static/screens/work.html (드롭존) | **실제 OS 파일 드롭 무동작**(합성이벤트만 PASS, 실 브라우저 실패). 자식 span/패딩 드롭이 document 가드 부재로 새 탭/무시로 샘 | ✅ 완료(debugger: document 레벨 가드+좌표 영역판정+no-cache meta. CDP 좌표드롭 검증·클릭회귀0) |
 
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 | 결과 |
@@ -143,3 +154,4 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 | 2026-06-20 | pm | 출력형식·웹앱1~5 커밋(8개) | 미푸시8(푸시대기) |
 | 2026-06-22 | tester | 브라우저 시각검증 E2E(①~⑧ 스샷) | 8/11통과. 🔴 출력형식both/eps 무효(work.html L979 자동생성), 패턴헤더4개오표기, 설정푸터겹침 — 수정요청4건 |
 | 2026-06-22 | dev | 화면버그 5건 수정(work·patterns·settings·app.css) | ✅ 전건완료. #1 EPS 실생성(eps305KB·ZIP both pdf2/eps2)·UI out_format=both(playwright). #5 드롭 디자인·주문 동작+클릭회귀. #2 헤더2개 #3 비활성칩 #4 푸터해소. engine/api.py/_handoff 무수정 |
+| 2026-06-22 | debugger | 실제 OS 파일 드롭 버그 수정(work.html) | ✅ 근본원인=요소리스너만+document가드부재→자식span/패딩드롭 새탭으로샘(합성PASS속임). document레벨 가드+좌표 영역판정+no-cache meta로 수정. CDP 좌표드롭 검증(디자인/주문 API호출·밖드롭 새탭0·클릭회귀0). engine/api.py/main.py/_handoff 무수정 |
