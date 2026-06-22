@@ -374,3 +374,380 @@ def build_area_preset(design_path: str, page_index: int = 0,
         "name_detail": name_detail,
         "warnings": warnings,
     }
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Phase C — 합성 작업1: 조각 자동 매핑(디자인 재단선 ↔ 패턴 SVG 조각)
+#
+#   목적: preset.json 의 pieces(어느 디자인 영역이 어느 SVG 조각에 얹히는가)를
+#         사람이 손으로 좌표를 넣지 않고 자동 산출한다.
+#
+#   원리(계획서 "차이가 곧 위치"):
+#     ① 디자인 .ai 안의 "패턴선/재단선" 레이어(OCG)에 그려진 닫힌 윤곽 = 각 조각의
+#        실제 재단 경계. 이 윤곽의 bbox 가 곧 'design_region_pt'(앞/뒤/밴드 영역).
+#     ② 패턴 SVG 조각들의 bbox·넥깊이를 측정한다.
+#     ③ 둘을 규칙(높이 최소=밴드, 좌/우 + 넥 형태)으로 짝지어 svg_index 를 정한다.
+#
+#   왜 OCG(레이어)로 거르나:
+#     본체(파란 색면)·요소까지 다 모으면 영역이 뭉개진다. 재단선 레이어만 추리면
+#     '조각 1개 = 닫힌 윤곽 1개'로 깨끗하게 떨어진다(앞/뒤/밴드 = 3개).
+# ════════════════════════════════════════════════════════════════════════════
+
+# 재단 경계로 인정할 OCG 레이어명(디자이너 명명 차이를 흡수).
+_CUTLINE_LAYER_NAMES = ("패턴선", "재단선")
+
+
+def _ocg_property_names(page) -> dict:
+    """페이지의 마킹 프로퍼티명(/MCx) → 레이어 사람이름(한글) 매핑을 만든다.
+
+    Adobe Illustrator 는 레이어를 OCG(Optional Content Group)로 내보내며,
+    콘텐츠 스트림의 `/OC /MCx BDC … EMC` 가 그 레이어 구간을 표시한다.
+    레이어 이름은 Resources.Properties[/MCx].Name 또는 OCProperties.OCGs[].Name 에
+    UTF-16(BOM 포함) 바이트로 들어있다 → 디코딩해 한글로 되돌린다.
+    """
+    names: dict = {}
+
+    def _decode(name_obj) -> Optional[str]:
+        # pikepdf.String → UTF-16(BOM) 바이트. BOM 없으면 latin-1 폴백.
+        try:
+            b = bytes(name_obj)
+        except Exception:
+            return None
+        if b[:2] in (b"\xfe\xff", b"\xff\xfe"):
+            try:
+                return b.decode("utf-16")
+            except Exception:
+                return None
+        try:
+            return b.decode("latin-1")
+        except Exception:
+            return None
+
+    # ── 1순위: 페이지 Resources.Properties(/MCx → OCG dict) ──
+    try:
+        props = page.Resources.get("/Properties")
+    except Exception:
+        props = None
+    if props is not None:
+        for mc_key, ocg in props.items():
+            try:
+                nm = ocg.get("/Name")
+            except Exception:
+                nm = None
+            if nm is not None:
+                dec = _decode(nm)
+                if dec is not None:
+                    names[str(mc_key)] = dec
+    return names
+
+
+def _mc_matches_cutline(operands, mcmap: dict) -> bool:
+    """BDC 오퍼랜드(`/OC /MCx`)가 재단선 레이어를 가리키면 True.
+
+    operands 는 보통 [Name('/OC'), Name('/MCx')] 형태. 두 번째가 레이어 프로퍼티명.
+    """
+    if len(operands) < 2:
+        return False
+    mc = str(operands[1])
+    layer = mcmap.get(mc)
+    return layer in _CUTLINE_LAYER_NAMES
+
+
+def _collect_cutline_subpaths(stream, mcmap: dict, base_ctm: tuple,
+                              in_target: bool, out: list,
+                              page_resources) -> None:
+    """콘텐츠 스트림을 훑어 '재단선 레이어 구간'의 닫힌 서브패스 bbox 를 page 좌표로 모은다.
+
+    핵심 동작:
+      · q/Q 로 CTM(좌표변환) 스택을 추적하고, cm 으로 누적한다.
+      · BDC/EMC 의 '마킹 깊이'를 스택으로 추적해, 재단선 레이어 안쪽인지(in_target) 안다.
+        (중첩 마킹도 안전 — 들어올 때 현재 상태를 push, 나갈 때 pop)
+      · m/l/c/v/y/re 로 현재 서브패스 점을 CTM 적용해 모으고, 칠/획/끝(f/S/n…) 시점에
+        target 안이고 점이 3개 이상이면 그 bbox 를 수집한다.
+      · Do(Form XObject, 예: Fm0) 를 만나면 그 Form 안으로 재귀(Matrix·in_target 전파).
+        → 재단선이 Form 안에 들어있는 경우도 놓치지 않는다.
+    """
+    ctm = base_ctm
+    stack: List[tuple] = []
+    cur: List[Tuple[float, float]] = []   # 현재 서브패스 점들(page 좌표)
+    start: Optional[Tuple[float, float]] = None
+    mc_stack: List[bool] = []             # BDC/EMC 마킹 깊이별 in_target 보관
+
+    # Form 안에서는 그 Form 의 Resources 가 우선(없으면 페이지 것).
+    res = getattr(stream, "Resources", None) or page_resources
+
+    for operands, op in parse_content_stream(stream):
+        o = str(op)
+        n = _nums(operands)
+        if o == "q":
+            stack.append(ctm)
+        elif o == "Q":
+            ctm = stack.pop() if stack else ctm
+        elif o == "cm" and n and len(n) >= 6:
+            ctm = _mm(tuple(n[:6]), ctm)
+        elif o == "BDC":
+            # 마킹 진입: 현재 in_target 을 보관하고, 재단선 레이어면 켠다.
+            mc_stack.append(in_target)
+            if _mc_matches_cutline(operands, mcmap):
+                in_target = True
+        elif o == "BMC":
+            # 이름만 있는 마킹(레이어 아님) — 깊이만 추적.
+            mc_stack.append(in_target)
+        elif o == "EMC":
+            in_target = mc_stack.pop() if mc_stack else in_target
+        elif o == "m" and n and len(n) >= 2:
+            cur = [_ap(ctm, n[0], n[1])]
+            start = cur[0]
+        elif o == "l" and n and len(n) >= 2:
+            cur.append(_ap(ctm, n[0], n[1]))
+        elif o == "c" and n and len(n) >= 6:
+            cur.append(_ap(ctm, n[4], n[5]))
+        elif o in ("v", "y") and n and len(n) >= 4:
+            cur.append(_ap(ctm, n[2], n[3]))
+        elif o == "re" and n and len(n) >= 4:
+            x, y, w, h = n[:4]
+            cur = [_ap(ctm, x, y), _ap(ctm, x + w, y),
+                   _ap(ctm, x + w, y + h), _ap(ctm, x, y + h)]
+            start = cur[0]
+        elif o == "h":
+            if start is not None:
+                cur.append(start)
+        elif o in ("S", "s", "f", "F", "f*", "B", "B*", "b", "b*", "n"):
+            # 경로 페인팅/종료: 재단선 레이어 안이고 닫힌 모양이면 bbox 수집.
+            if in_target and len(cur) >= 3:
+                xs = [p[0] for p in cur]; ys = [p[1] for p in cur]
+                out.append((min(xs), min(ys), max(xs), max(ys)))
+            cur = []
+            start = None
+        elif o == "Do":
+            # Form XObject 재귀(/MC2 요소 안의 Fm0 등도 추적).
+            if operands:
+                xname = str(operands[0])
+                try:
+                    xo = res.get("/XObject", {}).get(xname)
+                except Exception:
+                    xo = None
+                if xo is not None and str(xo.get("/Subtype")) == "/Form":
+                    fm_ctm = ctm
+                    if "/Matrix" in xo:
+                        try:
+                            fm_ctm = _mm(tuple(float(v) for v in xo.Matrix), ctm)
+                        except Exception:
+                            fm_ctm = ctm
+                    _collect_cutline_subpaths(xo, mcmap, fm_ctm, in_target,
+                                              out, page_resources)
+
+
+def _body_fallback_bboxes(page) -> list:
+    """재단선 레이어가 없을 때의 폴백: 페이지 안 큰 채움(몸판) bbox 들을 면적순으로.
+
+    완벽하진 않지만(본체 색면 기준) 자동매핑이 아예 비는 것보다 낫다 → 경고와 함께 반환.
+    """
+    fills, _texts = _collect_fills(page)
+    boxes = []
+    for fl in fills:
+        b = fl["bbox"]
+        w = b[2] - b[0]; h = b[3] - b[1]
+        if w > 100 and h > 100:        # 너무 작은 잡채움 제외
+            boxes.append(b)
+    boxes.sort(key=lambda b: (b[2] - b[0]) * (b[3] - b[1]), reverse=True)
+    return boxes
+
+
+def extract_design_pieces(design_pdf: str, n_pieces: Optional[int] = None,
+                          page_index: int = 0) -> List[dict]:
+    """디자인 .ai/.pdf 의 재단선 레이어에서 조각 영역(bbox)을 자동 추출한다.
+
+    반환: [{"design_region_pt": (x0,y0,x1,y1), "area": 면적, "source": "cutline"|"body"}]
+          면적 내림차순. n_pieces 를 주면 상위 N 개만.
+
+    동작:
+      ① OCG 프로퍼티명(/MCx)→레이어명 매핑(UTF-16 디코딩).
+      ② "패턴선/재단선" 레이어 구간의 닫힌 서브패스 bbox 를 CTM 적용해 수집(Form 내부 포함).
+      ③ 면적 상위 N. 없으면 몸판 채움 폴백(+경고는 호출부에서 처리).
+    """
+    pdf = pikepdf.open(design_pdf)
+    try:
+        page = pdf.pages[page_index]
+        mcmap = _ocg_property_names(page)
+
+        raw: list = []
+        _collect_cutline_subpaths(page, mcmap, (1.0, 0.0, 0.0, 1.0, 0.0, 0.0),
+                                  False, raw, page.Resources)
+
+        source = "cutline"
+        if not raw:
+            # ── 폴백: 재단선 레이어를 못 찾음 → 몸판 채움으로 근사(경고 대상). ──
+            raw = _body_fallback_bboxes(page)
+            source = "body"
+
+        pieces = []
+        for b in raw:
+            x0, y0, x1, y1 = b
+            pieces.append({
+                "design_region_pt": (round(x0, 1), round(y0, 1),
+                                     round(x1, 1), round(y1, 1)),
+                "area": round((x1 - x0) * (y1 - y0), 1),
+                "source": source,
+            })
+        # 면적 내림차순(큰 조각=몸판 먼저). 동일 bbox 중복 제거.
+        seen = set()
+        uniq = []
+        for p in sorted(pieces, key=lambda d: d["area"], reverse=True):
+            key = tuple(round(v) for v in p["design_region_pt"])
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append(p)
+        if n_pieces is not None:
+            uniq = uniq[:n_pieces]
+        return uniq
+    finally:
+        pdf.close()
+
+
+def measure_svg_pieces(polylines) -> List[dict]:
+    """패턴 SVG 조각(Polyline 목록)의 bbox·넥깊이를 측정한다.
+
+    넥깊이: 조각 '상단 35%' 높이 안에서 '가로 중앙 ±15%' 컬럼의 최저 y 를 찾아,
+            윗변(y1)에서 얼마나 파여 들어왔는지(=목둘레 파임). V넥은 크고 라운드는 작다.
+
+    반환(입력 순서 보존 — 인덱스가 곧 svg_index):
+      [{"index": i, "bbox": (x0,y0,x1,y1), "width": w, "height": h,
+        "cx": 가로중심, "neck_depth": 넥깊이}]
+    """
+    out = []
+    for i, pl in enumerate(polylines):
+        x0, y0, x1, y1 = pl.bbox
+        w = x1 - x0; h = y1 - y0
+        cx = (x0 + x1) / 2.0
+        # 상단 35% 영역(y 위로 증가하므로 윗변에서 0.35*h 만큼 내려온 선 위쪽).
+        top_thresh = y1 - 0.35 * h
+        x_lo = cx - 0.15 * w; x_hi = cx + 0.15 * w
+        col_ys = [py for (px, py) in pl.points
+                  if x_lo <= px <= x_hi and py >= top_thresh]
+        neck_depth = (y1 - min(col_ys)) if col_ys else 0.0
+        out.append({
+            "index": i,
+            "bbox": (round(x0, 1), round(y0, 1), round(x1, 1), round(y1, 1)),
+            "width": round(w, 1),
+            "height": round(h, 1),
+            "cx": round(cx, 1),
+            "neck_depth": round(neck_depth, 1),
+        })
+    return out
+
+
+def match_pieces(design_bboxes: List[dict], svg_measures: List[dict]) -> List[dict]:
+    """디자인 재단영역(design_bboxes)과 SVG 조각(svg_measures)을 짝지어 svg_index 를 정한다.
+
+    규칙(계획서):
+      · 밴드(band): 양쪽 모두에서 '높이가 가장 작은' 것끼리 매칭.
+      · 앞/뒤: 남은 둘을 좌/우 위치 + 넥깊이로 가른다.
+          - 좌측(작은 cx) ↔ 넥깊이 큰(=V넥) = 앞판(front)
+          - 우측(큰 cx)   ↔ 넥깊이 작은(=라운드) = 뒤판(back)
+      · 불일치(예: 좌측인데 넥이 더 얕음) 시 경고를 담는다.
+
+    반환: [{"id","name","design_region_pt","svg_index"} ...] + 마지막 항목에
+          별도로 경고를 붙이지 않고, 함수는 (pieces, warnings) 가 아닌 pieces 만 반환.
+          (경고는 build_pieces_preset 가 따로 모은다 — 여기선 _warn 키로 첨부)
+    """
+    # 디자인 bbox 도 면적순(이미 그렇지만 안전하게) → 큰 둘 = 몸판, 작은 = 밴드.
+    dz = sorted(design_bboxes, key=lambda d: d["area"], reverse=True)
+    sv = sorted(svg_measures, key=lambda d: d["height"], reverse=True)
+
+    warns: List[str] = []
+    result: List[dict] = []
+
+    if len(dz) < 3 or len(sv) < 3:
+        # 3조각(앞/뒤/밴드)이 아니면 가능한 만큼만 면적·높이순으로 1:1 매칭(경고).
+        warns.append("🟡 조각 수가 3개(앞/뒤/밴드)가 아닙니다 — 면적·높이순 단순 매칭으로 진행합니다.")
+        for i, (d, s) in enumerate(zip(dz, sv)):
+            result.append({"id": f"piece{i}", "name": f"조각{i}",
+                           "design_region_pt": d["design_region_pt"],
+                           "svg_index": s["index"]})
+        return {"pieces": result, "warnings": warns}
+
+    # ── 밴드: 양쪽에서 가장 작은(면적/높이 최소) 것. ──
+    band_design = min(dz, key=lambda d: d["area"])
+    band_svg = min(sv, key=lambda d: d["height"])
+
+    # ── 남은 둘(앞/뒤 후보) ──
+    body_design = [d for d in dz if d is not band_design]
+    body_svg = [s for s in sv if s is not band_svg]
+
+    # 디자인: x0 작은 쪽=좌측(앞), 큰 쪽=우측(뒤).
+    body_design.sort(key=lambda d: d["design_region_pt"][0])
+    d_front, d_back = body_design[0], body_design[1]
+
+    # SVG: 넥깊이 큰 쪽=앞(V넥), 작은 쪽=뒤(라운드).
+    body_svg.sort(key=lambda s: s["neck_depth"], reverse=True)
+    s_front, s_back = body_svg[0], body_svg[1]
+
+    # ── 교차 검증: 좌/우 위치와 넥깊이 정렬이 서로 모순되지 않는지. ──
+    #    앞(좌측 디자인)에 매칭된 SVG 의 cx 가 뒤 SVG 의 cx 보다 커야 자연스럽지 않다 —
+    #    SVG 좌표는 별개 viewBox 라 위치보다 넥깊이를 우선하되, 둘이 어긋나면 경고만.
+    if s_front["neck_depth"] <= s_back["neck_depth"]:
+        warns.append("🟡 앞/뒤 넥깊이 구분이 모호합니다(앞 넥깊이 ≤ 뒤). 결과를 육안 확인하세요.")
+    if s_front["cx"] > s_back["cx"]:
+        # SVG 상에서도 앞(좌)·뒤(우)가 위치로 자연스러운지 참고(절대조건 아님).
+        warns.append("🟡 SVG 좌우 위치가 넥깊이 기반 앞/뒤 판정과 다릅니다 — 넥깊이 우선 적용했습니다.")
+
+    result = [
+        {"id": "front", "name": "앞판",
+         "design_region_pt": d_front["design_region_pt"],
+         "svg_index": s_front["index"]},
+        {"id": "back", "name": "뒤판",
+         "design_region_pt": d_back["design_region_pt"],
+         "svg_index": s_back["index"]},
+        {"id": "band", "name": "넥밴드",
+         "design_region_pt": band_design["design_region_pt"],
+         "svg_index": band_svg["index"]},
+    ]
+    return {"pieces": result, "warnings": warns}
+
+
+def build_pieces_preset(design_pdf: str, svgdir: str, base: str = "XL") -> dict:
+    """디자인 .ai + 패턴 SVG 폴더로 preset 의 pieces(svg_index·design_region_pt)를 자동 산출.
+
+    동작:
+      ① extract_design_pieces 로 재단선 영역(앞/뒤/밴드) 추출.
+      ② base 사이즈 SVG(예: XL.svg)를 parse_svg → measure_svg_pieces.
+      ③ match_pieces 로 둘을 짝지어 svg_index 결정.
+
+    반환: {"pieces": [...], "warnings": [...], "base_svg": 경로, "source": "cutline"|"body"}
+    """
+    import os
+
+    from .pattern import parse_svg
+
+    warnings: List[str] = []
+
+    # ── 1) 디자인 재단영역 추출(상위 3개 = 앞/뒤/밴드). ──
+    design_pieces = extract_design_pieces(design_pdf, n_pieces=3)
+    if not design_pieces:
+        warnings.append("🔴 디자인에서 조각 영역을 하나도 찾지 못했습니다 — preset 을 직접 점검하세요.")
+        return {"pieces": [], "warnings": warnings, "base_svg": None, "source": None}
+    source = design_pieces[0]["source"]
+    if source == "body":
+        warnings.append("🟡 재단선 레이어(패턴선/재단선)를 못 찾아 '몸판 채움'으로 근사했습니다 — "
+                        "영역이 부정확할 수 있으니 육안 확인하세요.")
+
+    # ── 2) base 사이즈 SVG 측정. ──
+    base_svg = os.path.join(svgdir, f"{base}.svg")
+    if not os.path.exists(base_svg):
+        warnings.append(f"🔴 base SVG 가 없습니다: {base_svg}")
+        return {"pieces": [], "warnings": warnings, "base_svg": base_svg, "source": source}
+    polys = parse_svg(base_svg)
+    svg_measures = measure_svg_pieces(polys)
+
+    # ── 3) 매칭 → svg_index 결정. ──
+    matched = match_pieces(design_pieces, svg_measures)
+    warnings.extend(matched["warnings"])
+
+    return {
+        "pieces": matched["pieces"],
+        "warnings": warnings,
+        "base_svg": base_svg,
+        "source": source,
+    }

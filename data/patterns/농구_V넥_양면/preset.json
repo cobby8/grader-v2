@@ -4,22 +4,78 @@
   "design": {
     "base_size": "XL",
     "design_file": "../../../design_source/연세대_V넥_빈템플릿_본체포함_XL.ai",
-    "page_size_pt": [4478.74, 5669.29],
-    "content_box": [468.0, 2877.0, 3997.0, 5562.0]
+    "page_size_pt": [
+      4478.74,
+      5669.29
+    ],
+    "content_box": [
+      468.0,
+      2877.0,
+      3997.0,
+      5562.0
+    ]
   },
   "sizes": [
-    { "name": "5XS", "pattern_file": "5XS.svg", "scale": 1.0 },
-    { "name": "4XS", "pattern_file": "4XS.svg", "scale": 1.0 },
-    { "name": "3XS", "pattern_file": "3XS.svg", "scale": 1.0 },
-    { "name": "2XS", "pattern_file": "2XS.svg", "scale": 1.0 },
-    { "name": "XS", "pattern_file": "XS.svg", "scale": 1.0 },
-    { "name": "S", "pattern_file": "S.svg", "scale": 1.0 },
-    { "name": "M", "pattern_file": "M.svg", "scale": 1.0 },
-    { "name": "L", "pattern_file": "L.svg", "scale": 1.0 },
-    { "name": "XL", "pattern_file": "XL.svg", "scale": 1.0 },
-    { "name": "2XL", "pattern_file": "2XL.svg", "scale": 1.0 },
-    { "name": "4XL", "pattern_file": "4XL.svg", "scale": 1.0 },
-    { "name": "5XL", "pattern_file": "5XL.svg", "scale": 1.0 }
+    {
+      "name": "5XS",
+      "pattern_file": "5XS.svg",
+      "scale": 1.0
+    },
+    {
+      "name": "4XS",
+      "pattern_file": "4XS.svg",
+      "scale": 1.0
+    },
+    {
+      "name": "3XS",
+      "pattern_file": "3XS.svg",
+      "scale": 1.0
+    },
+    {
+      "name": "2XS",
+      "pattern_file": "2XS.svg",
+      "scale": 1.0
+    },
+    {
+      "name": "XS",
+      "pattern_file": "XS.svg",
+      "scale": 1.0
+    },
+    {
+      "name": "S",
+      "pattern_file": "S.svg",
+      "scale": 1.0
+    },
+    {
+      "name": "M",
+      "pattern_file": "M.svg",
+      "scale": 1.0
+    },
+    {
+      "name": "L",
+      "pattern_file": "L.svg",
+      "scale": 1.0
+    },
+    {
+      "name": "XL",
+      "pattern_file": "XL.svg",
+      "scale": 1.0
+    },
+    {
+      "name": "2XL",
+      "pattern_file": "2XL.svg",
+      "scale": 1.0
+    },
+    {
+      "name": "4XL",
+      "pattern_file": "4XL.svg",
+      "scale": 1.0
+    },
+    {
+      "name": "5XL",
+      "pattern_file": "5XL.svg",
+      "scale": 1.0
+    }
   ],
   "disabled_sizes": [
     {
@@ -31,20 +87,35 @@
     {
       "id": "front",
       "name": "앞판",
-      "svg_index": 0,
-      "design_region_pt": [468.0, 2877.0, 2098.0, 5287.0]
+      "svg_index": 1,
+      "design_region_pt": [
+        492.3,
+        2938.4,
+        2260.8,
+        5249.2
+      ]
     },
     {
       "id": "back",
       "name": "뒤판",
-      "svg_index": 1,
-      "design_region_pt": [2310.0, 2877.0, 3997.0, 5287.0]
+      "svg_index": 0,
+      "design_region_pt": [
+        2332.7,
+        2938.4,
+        4101.3,
+        5357.0
+      ]
     },
     {
       "id": "band",
       "name": "넥밴드",
       "svg_index": 2,
-      "design_region_pt": [468.0, 5287.0, 3997.0, 5562.0]
+      "design_region_pt": [
+        452.6,
+        5338.1,
+        2240.7,
+        5513.8
+      ]
     }
   ],
   "design_mapping": {
@@ -55,17 +126,33 @@
   },
   "front_number_area": {
     "piece_id": "front",
-    "center": [1389, 4184],
+    "center": [
+      1389,
+      4184
+    ],
     "cap_height": 310,
-    "color_cmyk": [0, 0, 0, 0],
+    "color_cmyk": [
+      0,
+      0,
+      0,
+      0
+    ],
     "font": "data/fonts/HY헤드라인M.ttf",
     "glyph_source": "number_glyphs.json"
   },
   "back_number_area": {
     "piece_id": "back",
-    "center": [3217, 4342],
+    "center": [
+      3217,
+      4342
+    ],
     "cap_height": 539,
-    "color_cmyk": [0, 0, 0, 0],
+    "color_cmyk": [
+      0,
+      0,
+      0,
+      0
+    ],
     "font": "data/fonts/HY헤드라인M.ttf",
     "glyph_source": "number_glyphs.json"
   },
@@ -73,16 +160,31 @@
     "piece_id": "back",
     "center_x": 3219.8,
     "baseline": 4765.7,
-    "em_pt": 136.40,
+    "em_pt": 136.4,
     "pitch": 195.4,
-    "color_cmyk": [0, 0, 0, 0],
+    "color_cmyk": [
+      0,
+      0,
+      0,
+      0
+    ],
     "font": "data/fonts/HY헤드라인M.ttf"
   },
   "cutline": {
-    "color_cmyk": [0, 0.96, 0.95, 0],
+    "color_cmyk": [
+      0,
+      0.96,
+      0.95,
+      0
+    ],
     "match_tol": 0.05,
     "expected_strokes": 3,
-    "device_k": [0, 0.96, 0.95, 0]
+    "device_k": [
+      0,
+      0.96,
+      0.95,
+      0
+    ]
   },
   "shrink": {
     "x": 1.0,

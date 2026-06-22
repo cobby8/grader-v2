@@ -53,6 +53,33 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 (완료 — 상세 git 히스토리 + knowledge. 출력형식 tester13/13·rev통과, 웹앱 각단계 dev E2E·rev종합 통과 치명0)
 
 ## 구현 기록 (developer)
+📝 합성1 자동매핑 — 조각 자동 인식·preset pieces 자동교정 (2026-06-22, dev · engine/reference.py 함수4 신규 + cli.py build-preset 서브커맨드 + preset.json pieces 교정. 공개API/parse_svg/compose/Piece/SizeLayout/verify_output 무수정)
+
+| 파일 | 변경 내용 | 신규/수정 |
+|------|----------|----------|
+| engine/reference.py | Phase C 섹션 신규: `extract_design_pieces`(OCG /MCx→레이어명 UTF-16디코딩, "패턴선/재단선" 레이어 BDC/EMC 마킹깊이 추적 + CTM적용 닫힌서브패스 bbox 수집, Do Fm0 Form 내부 재귀, 면적상위N, 없으면 몸판폴백)·`measure_svg_pieces`(bbox+넥깊이=상단35%·중앙±15% 최저점)·`match_pieces`(밴드=높이최소, 앞=좌측+V넥큰, 뒤=우측+라운드, 불일치 경고)·`build_pieces_preset`(묶음) | 신규(추가) |
+| engine/cli.py | `build-preset` 서브커맨드(--design --svgdir --base XL [--preset --apply --expect --tol]): 자동pieces 출력 + 정답값 대조 + --apply 시 preset.json pieces만 교정(preset 얕은복제, number/name 등 보존) | 수정(추가) |
+| data/patterns/농구_V넥_양면/preset.json | pieces 교정: front svg_index 0→1·y하한 2606→2938.4, back svg_index 1→0·y하한 2606→2938.4·region [2333,2938,4101,5357], band svg2 region [453,5338,2241,5514]. 다른 키 전부 보존 | 수정 |
+
+🎯 자동산출 결과 vs 정답값 (build-preset --expect, tol=±2.0 → 전부 ✅, 실측 0pt 오차):
+| 조각 | 자동 svg_index | 자동 design_region_pt | 정답값 | 일치 |
+|------|---------------|----------------------|--------|------|
+| front 앞판 | 1 | [492,2938,2261,5249] | [492,2938,2261,5249] svg1 | ✅ |
+| back 뒤판 | 0 | [2333,2938,4101,5357] | [2333,2938,4101,5357] svg0 | ✅ |
+| band 밴드 | 2 | [453,5338,2241,5514] | [453,5338,2241,5514] svg2 | ✅ |
+
+🔑 OCG 레이어 매핑(이 디자인): /MC0=교체용요소 /MC1=몸판 /MC2=요소 /MC3=패턴선. 재단선 레이어=MC3(패턴선). 닫힌 윤곽 3개=앞/뒤/밴드. parse_svg가 높이순 정렬하므로 그 정렬결과 인덱스가 곧 svg_index(job.py L513·grade.py L216이 parse_svg 결과를 polys[svg_index]로 인덱싱 — 의미 일치 확인).
+
+💡 tester 참고:
+- 테스트(검증): `python -m engine build-preset --design design_source/연세대_V넥_빈템플릿_본체포함_XL.ai --svgdir data/patterns/농구_V넥_양면 --base XL --expect "front=492,2938,2261,5249,1" --expect "back=2333,2938,4101,5357,0" --expect "band=453,5338,2241,5514,2"`
+- 정상: 대조 종합 PASS(3개 ✅), source=cutline. preset.json pieces가 front svg1·back svg0·band svg2, y하한 2938.x.
+- 회귀: `python -m engine selftest` PASS(이미 확인 — 합성 24배치·inkcov 편차0). parse_svg 무수정이라 기존 job/grade 영향 없음(매핑값만 변경). 모든 svg_index 0~2 범위 내(인덱싱 안전).
+- 주의: ⚠️ 합성결과(실제 본체 위 배치 정합) 자체는 작업2·3 후 검증 대상 — 이번엔 preset 값·CLI·회귀만. ⚠️ preset.json이 json.dump(indent=2)로 멀티라인 재포맷됨(값 동일, 엔진은 값만 읽음 → 기능무관, diff만 큼).
+
+⚠️ reviewer 참고:
+- 봐줬으면: ① build_pieces_preset가 parse_svg 정렬결과 인덱스를 svg_index로 쓰는 전제(job/grade와 동일 정렬 — 확인했으나 검토 권장). ② --apply 의 preset 얕은복제+old_by_id 머지(보존키 안전성). ③ _collect_cutline_subpaths 의 BDC/BMC/EMC 마킹깊이 스택 + Form 재귀 in_target 전파.
+- 불변제약 준수: compose/Piece/SizeLayout/parse_svg/verify_output 시그니처 무수정. CMYK 무손실(selftest inkcov 편차0). preset 얕은복제. ast.parse+py_compile(reference.py·cli.py) 통과.
+
 🐞 실제 OS 파일 드롭 버그 수정 (2026-06-22, debugger · webapp/static/screens/work.html만 · engine/api.py/main.py/_handoff 무수정)
 
 | 회차 | 수정 내용 | 수정 파일 | 비고 |
@@ -155,3 +182,4 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 | 2026-06-22 | tester | 브라우저 시각검증 E2E(①~⑧ 스샷) | 8/11통과. 🔴 출력형식both/eps 무효(work.html L979 자동생성), 패턴헤더4개오표기, 설정푸터겹침 — 수정요청4건 |
 | 2026-06-22 | dev | 화면버그 5건 수정(work·patterns·settings·app.css) | ✅ 전건완료. #1 EPS 실생성(eps305KB·ZIP both pdf2/eps2)·UI out_format=both(playwright). #5 드롭 디자인·주문 동작+클릭회귀. #2 헤더2개 #3 비활성칩 #4 푸터해소. engine/api.py/_handoff 무수정 |
 | 2026-06-22 | debugger | 실제 OS 파일 드롭 버그 수정(work.html) | ✅ 근본원인=요소리스너만+document가드부재→자식span/패딩드롭 새탭으로샘(합성PASS속임). document레벨 가드+좌표 영역판정+no-cache meta로 수정. CDP 좌표드롭 검증(디자인/주문 API호출·밖드롭 새탭0·클릭회귀0). engine/api.py/main.py/_handoff 무수정 |
+| 2026-06-22 | dev | 합성1 자동매핑(reference.py 함수4+cli build-preset+preset pieces교정) | ✅ 자동산출=정답값 0pt오차(front svg1·back svg0·band svg2, y하한 2606→2938). OCG/MC3=패턴선 마킹추적+Form재귀. selftest PASS·parse_svg무수정. ast.parse/py_compile 통과. 공개API 무수정 |

@@ -269,6 +269,121 @@ def cmd_job(args) -> int:
     return 0
 
 
+def cmd_build_preset(args) -> int:
+    """디자인 .ai + 패턴 SVG 폴더로 preset 의 pieces(svg_index·design_region_pt)를 자동 산출.
+
+      python -m engine build-preset --design D.ai --svgdir DIR [--base XL]
+                  [--preset PRESET.json] [--apply] [--expect json...]
+
+    --preset 만 주면 자동 결과를 화면 출력(미적용). --apply 까지 주면 그 preset.json 의
+    pieces 만 교정해 다시 저장한다(number/name/area 등 다른 키는 보존 — preset 얕은 복제).
+    """
+    from .reference import build_pieces_preset
+
+    # ── 입력 선검증(친절한 한글 안내). ──
+    if not os.path.exists(args.design):
+        print(f"디자인 파일을 찾지 못했습니다: {args.design}", file=sys.stderr)
+        return 2
+    if not os.path.isdir(args.svgdir):
+        print(f"SVG 폴더를 찾지 못했습니다: {args.svgdir}", file=sys.stderr)
+        return 2
+
+    # ── 핵심: 자동 매핑 산출(재단선 추출 + SVG 측정 + 매칭). ──
+    try:
+        result = build_pieces_preset(args.design, args.svgdir, base=args.base)
+    except Exception as e:
+        print(f"자동 매핑 중 문제가 발생했습니다: {e}", file=sys.stderr)
+        return 1
+
+    # ── 경고 먼저 안내. ──
+    for w in result["warnings"]:
+        print(w)
+
+    pieces = result["pieces"]
+    if not pieces:
+        print("조각을 산출하지 못했습니다(위 경고 참고).", file=sys.stderr)
+        return 1
+
+    print(f"\n자동 산출 pieces (base={args.base}, source={result['source']}):")
+    for p in pieces:
+        region = [round(v) for v in p["design_region_pt"]]
+        print(f"  {p['id']}({p['name']}): svg_index={p['svg_index']} "
+              f"design_region_pt={region}")
+
+    # ── (선택) 정답값 대조: --expect 'id=x0,y0,x1,y1,svg_index' 형식 다중. ──
+    if args.expect:
+        print("\n── 정답값 대조 ──")
+        ok_all = True
+        # 자동결과를 id 로 인덱싱.
+        by_id = {p["id"]: p for p in pieces}
+        tol = args.tol
+        for spec in args.expect:
+            try:
+                pid, rest = spec.split("=", 1)
+                vals = [float(x) for x in rest.split(",")]
+                exp_region = vals[:4]
+                exp_idx = int(vals[4]) if len(vals) >= 5 else None
+            except Exception:
+                print(f"  ⚠️ --expect 형식 오류(무시): {spec}")
+                ok_all = False
+                continue
+            got = by_id.get(pid)
+            if got is None:
+                print(f"  ❌ '{pid}' 자동 결과에 없음")
+                ok_all = False
+                continue
+            gr = list(got["design_region_pt"])
+            region_ok = all(abs(a - b) <= tol for a, b in zip(gr, exp_region))
+            idx_ok = (exp_idx is None) or (got["svg_index"] == exp_idx)
+            mark = "✅" if (region_ok and idx_ok) else "❌"
+            print(f"  {mark} {pid}: svg_index {got['svg_index']}"
+                  f"{'' if idx_ok else f'(기대 {exp_idx})'} / "
+                  f"region {[round(v) for v in gr]}"
+                  f"{'' if region_ok else f' (기대 {[round(v) for v in exp_region]})'}")
+            if not (region_ok and idx_ok):
+                ok_all = False
+        print(f"\n대조 종합: {'PASS' if ok_all else 'FAIL'} (tol=±{tol})")
+        if not ok_all:
+            return 1
+
+    # ── (선택) --apply: preset.json 의 pieces 만 교정 저장. ──
+    if args.apply:
+        if not args.preset:
+            print("--apply 에는 --preset PRESET.json 이 필요합니다.", file=sys.stderr)
+            return 2
+        if not os.path.exists(args.preset):
+            print(f"preset 파일을 찾지 못했습니다: {args.preset}", file=sys.stderr)
+            return 2
+        import json
+
+        with open(args.preset, "r", encoding="utf-8") as f:
+            preset = json.load(f)
+
+        # 기존 pieces 의 보존 키(number/name 등)를 id 로 보관 → 자동값 위에 덮어 합친다.
+        old_by_id = {p.get("id"): p for p in preset.get("pieces", [])}
+        new_pieces = []
+        for p in pieces:
+            # 얕은 복제: 기존 항목을 복사한 뒤 자동값(svg_index/design_region_pt)만 갱신.
+            #   → number/name/기타 사용자 키는 그대로 보존.
+            base_item = dict(old_by_id.get(p["id"], {}))
+            base_item["id"] = p["id"]
+            base_item.setdefault("name", p["name"])
+            base_item["svg_index"] = p["svg_index"]
+            base_item["design_region_pt"] = [round(v, 1) for v in p["design_region_pt"]]
+            new_pieces.append(base_item)
+
+        # preset 얕은 복제 후 pieces 만 교체(다른 최상위 키는 원본 그대로 재기록).
+        updated = dict(preset)
+        updated["pieces"] = new_pieces
+
+        with open(args.preset, "w", encoding="utf-8") as f:
+            json.dump(updated, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        print(f"\npreset.json pieces 교정 저장: {args.preset}")
+
+    return 0
+
+
 def cmd_normalize_svg(args) -> int:
     """path SVG(직선 d 명령) → polyline SVG 변환(단일/배치) + 변환 후 조각수 자동 확인.
 
@@ -573,6 +688,20 @@ def main(argv=None) -> int:
     rp.add_argument("--font", default="data/fonts/HY헤드라인M.ttf",
                     help="번호·이름 공통 폰트 경로(기본 HY헤드라인M.ttf)")
     rp.set_defaults(func=cmd_reference)
+
+    bpp = sub.add_parser("build-preset",
+                         help="디자인+SVG폴더로 preset pieces(svg_index·영역) 자동 산출/교정")
+    bpp.add_argument("--design", required=True, help="기준 디자인 파일(.ai/.pdf)")
+    bpp.add_argument("--svgdir", required=True, help="사이즈별 패턴 SVG 폴더")
+    bpp.add_argument("--base", default="XL", help="기준 사이즈명(기본 XL → XL.svg)")
+    bpp.add_argument("--preset", default=None, help="(--apply 시 필요) 교정할 preset.json")
+    bpp.add_argument("--apply", action="store_true",
+                     help="자동 결과로 preset.json 의 pieces 만 교정 저장(다른 키 보존)")
+    bpp.add_argument("--expect", action="append", default=None,
+                     help="정답값 대조 'id=x0,y0,x1,y1[,svg_index]' (여러 번 지정 가능)")
+    bpp.add_argument("--tol", type=float, default=2.0,
+                     help="정답값 대조 허용오차 pt(기본 2.0)")
+    bpp.set_defaults(func=cmd_build_preset)
 
     np_ = sub.add_parser("normalize-svg",
                          help="path SVG → polyline SVG 변환(단일/배치) + 조각수 확인")
