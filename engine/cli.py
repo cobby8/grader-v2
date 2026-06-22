@@ -509,9 +509,16 @@ def cmd_number_glyphs(args) -> int:
             print("--artbox 는 'x0,y0,x1,y1' 4개 숫자여야 합니다.", file=sys.stderr)
             return 2
 
+    # ── 폰트 선검증(주어졌을 때만 — 자간 복원용 advance 계산에 사용). ──
+    font = getattr(args, "font", None)
+    if font and not os.path.exists(font):
+        print(f"--font 파일을 찾지 못했습니다: {font}", file=sys.stderr)
+        return 2
+
     # ── 핵심: 추출 → 저장. ──
     try:
-        glyphset = extract_number_glyphs(args.src, artbox=artbox, order=args.order)
+        glyphset = extract_number_glyphs(args.src, artbox=artbox, order=args.order,
+                                         font=font)
     except Exception as e:
         print(f"글리프 추출 중 문제가 발생했습니다: {e}", file=sys.stderr)
         return 1
@@ -521,11 +528,16 @@ def cmd_number_glyphs(args) -> int:
     glyphs = glyphset["glyphs"]
     print(f"추출 글리프 {len(glyphs)}개 / 대표 cap_height ≈ {glyphset['cap_height']}pt")
     print(f"순서(order): {glyphset['order']}  artbox={glyphset['artbox']}")
+    if glyphset.get("advance_ratio"):
+        print(f"자간 복원: 폰트 {glyphset.get('advance_font')} · "
+              f"advance 비율 ≈ {glyphset['advance_ratio']}")
     for ch in glyphset["order"]:
         g = glyphs.get(ch)
         if not g:
             continue
-        print(f"  '{ch}': 폭 {g['width']}pt · cap_height {g['cap_height']}pt · "
+        adv = g.get("advance")
+        adv_s = f" · advance {adv}pt" if adv else ""
+        print(f"  '{ch}': 폭 {g['width']}pt · cap_height {g['cap_height']}pt{adv_s} · "
               f"subpath {len(g['subpaths'])}개")
     print(f"JSON 저장: {args.out}")
     return 0 if len(glyphs) == len(args.order) else 1
@@ -723,6 +735,9 @@ def main(argv=None) -> int:
                      help="(선택) 추출 영역 'x0,y0,x1,y1'. 미지정 시 기본 585,4673,3923,5211")
     ngp.add_argument("--order", default="1234567890",
                      help="(선택) x순 정렬 시 대응 문자열(기본 1234567890)")
+    ngp.add_argument("--font", default=None,
+                     help="(선택) 폰트(.ttf). 주면 글리프별 advance(자간) 를 "
+                          "'cap_height × 폰트비율(≈0.6611)' 로 계산해 저장(자간 복원)")
     ngp.set_defaults(func=cmd_number_glyphs)
 
     fp = sub.add_parser("flatten", help="디자인 투명도 벡터 평탄화(EPS 벡터 유지)")

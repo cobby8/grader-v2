@@ -39,3 +39,6 @@ env/
 Thumbs.db
 .DS_Store
 *.swp
+
+# 글리프셋/합성 임시 검증 산출물 (job 재실행으로 재생성)
+_glyphtest/

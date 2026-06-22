@@ -85,11 +85,58 @@ def _normalize_cmyk(color_cmyk) -> Tuple[float, float, float, float]:
 # ════════════════════════════════════════════════════════════════════════════
 
 
+def _font_advance_ratio(font_path: str):
+    """폰트(예: HY헤드라인M)에서 '글리프 advance ÷ 대표 잉크높이' 비율을 구한다.
+
+    왜 필요한가(자간 문제 원인):
+      · 디자이너 글리프셋은 '잉크 폭(width)'만 있고, 폰트가 본래 두던 '글자 사이 여백'
+        (advance, =글자칸 폭)이 없다. 그래서 width 만큼만 전진하면 글자가 다닥다닥 붙는다.
+      · 폰트는 글자칸(advance)에 좌우 여백을 포함해 둔다. HY헤드라인M 은 모든 숫자의
+        advance 가 597 로 균일(monospace)하고, 대표 숫자(0/8/9) 잉크높이가 903 이다.
+      · 그래서 비율 = advance(597) ÷ 잉크높이(903) ≈ 0.6611 을 구해 두고,
+        각 글리프의 cap_height 에 곱하면 → 그 글리프가 가져야 할 advance(pt) 가 나온다.
+        (예: cap_height 538.583 × 0.6611 ≈ 356pt 균일 advance → 폰트와 같은 자간 복원.)
+
+    반환: (ratio, rep_advance, rep_ink_h) — 못 구하면 None.
+    """
+    try:
+        from fontTools.ttLib import TTFont
+    except Exception:
+        return None
+    if not font_path or not os.path.exists(font_path):
+        return None
+    try:
+        f = TTFont(font_path)
+        cmap = f.getBestCmap()
+        hmtx = f["hmtx"]
+        glyf = f["glyf"]
+        # 대표 숫자: 잉크높이가 큰 '0' 을 기준(없으면 8→9 순으로 폴백).
+        best = None
+        for ch in ("0", "8", "9", "3", "6"):
+            gname = cmap.get(ord(ch))
+            if gname is None:
+                continue
+            aw = hmtx[gname][0]                  # advance width(폰트 단위)
+            g = glyf[gname]
+            if getattr(g, "numberOfContours", 0) <= 0:
+                continue
+            ys = [p[1] for p in g.getCoordinates(glyf)[0]]
+            ink_h = max(ys) - min(ys)            # 글리프 잉크 높이(폰트 단위)
+            if ink_h <= 0 or aw <= 0:
+                continue
+            best = (aw / float(ink_h), float(aw), float(ink_h))
+            break
+        return best
+    except Exception:
+        return None
+
+
 def extract_number_glyphs(
     src: str,
     artbox: List[float] = [585, 4673, 3923, 5211],
     order: str = "1234567890",
     page_index: int = 0,
+    font: Optional[str] = None,
 ) -> dict:
     """소스 .ai/.pdf 의 ArtBox 안 fill 경로들을 추출해 '번호 글리프셋' dict 로 만든다.
 
@@ -106,6 +153,10 @@ def extract_number_glyphs(
       artbox   : [x0,y0,x1,y1] 추출 영역(디자인 절대좌표). 그 안 fill 만 캡처.
       order    : 캡처를 x순으로 정렬했을 때 대응하는 문자열(왼→오). 기본 "1234567890".
       page_index: 페이지 인덱스(기본 0).
+      font     : (선택) 폰트 경로(.ttf). 주면 글리프마다 advance(글자칸 폭) 를
+                 'cap_height × (폰트 advance÷잉크높이 비율)' 로 계산해 저장한다.
+                 → 렌더 시 advance 만큼 전진해 폰트와 같은 자간을 복원(자간 문제 해결).
+                 못 찾거나 비율 계산 실패 시 advance 를 넣지 않음(렌더가 width 폴백).
 
     반환(dict):
       {
@@ -229,6 +280,11 @@ def extract_number_glyphs(
     # ── x 오름차순 정렬 → order 문자와 1:1 매핑 ──
     captured.sort(key=lambda c: c["bbox"][0])
 
+    # ── (자간 복원) 폰트 advance 비율 구하기 — 주어졌을 때만. ──
+    #    ratio = 폰트 advance ÷ 대표 잉크높이 ≈ 0.6611(HY헤드라인M).
+    ratio_info = _font_advance_ratio(font) if font else None
+    adv_ratio = ratio_info[0] if ratio_info else None
+
     glyphs: Dict[str, dict] = {}
     cap_heights: List[float] = []
     for ch, cap in zip(order, captured):
@@ -240,16 +296,22 @@ def extract_number_glyphs(
         # 베이스라인 원점 정규화: 잉크 좌하단(x0,y0)을 (0,0)으로 평행이동.
         #   → 렌더 시 글리프를 자유 위치에 놓을 수 있다(원점이 항상 잉크 좌하단).
         norm_subs = _normalize_segs(cap["segs"], x0, y0)
-        glyphs[ch] = {
+        entry = {
             "width": round(width, 4),
             "cap_height": round(cap_h, 4),
             "subpaths": norm_subs,
         }
+        # advance(글자칸 폭) = 이 글리프의 cap_height × 비율.
+        #   width 보다 넉넉해 좌우 여백이 생김 → 폰트와 같은 자간(붙음 해결).
+        #   비율이 없으면(폰트 미지정/실패) 키를 넣지 않음 → 렌더가 width 로 폴백.
+        if adv_ratio is not None and cap_h > 0:
+            entry["advance"] = round(cap_h * adv_ratio, 4)
+        glyphs[ch] = entry
 
     cap_heights.sort()
     rep_cap = cap_heights[len(cap_heights) // 2] if cap_heights else 0.0  # 중앙값
 
-    return {
+    result = {
         "units": "pt",
         "source": os.path.basename(src),
         "artbox": [ax0, ay0, ax1, ay1],
@@ -257,6 +319,11 @@ def extract_number_glyphs(
         "cap_height": round(rep_cap, 4),
         "glyphs": glyphs,
     }
+    # (자간 복원) 폰트 advance 비율을 메타로 남김 — 재현/검수용.
+    if ratio_info is not None:
+        result["advance_font"] = os.path.basename(font)
+        result["advance_ratio"] = round(ratio_info[0], 6)
+    return result
 
 
 def _normalize_segs(segs, ox: float, oy: float) -> List[list]:
@@ -410,7 +477,12 @@ def render_glyph_number_ops(
     pen_x = 0.0
     for g in entries:
         placed.append((g, pen_x))
-        pen_x += g.get("width", 0) * s          # 다음 글자 위치로 advance(=width) 전진
+        # 다음 글자 위치로 전진: advance(글자칸 폭, 좌우 여백 포함)가 있으면 그걸 쓴다.
+        #   → 폰트와 같은 자간(글자 안 붙음). 구버전 JSON(advance 없음)은 width 로 폴백.
+        adv = g.get("advance")
+        if adv is None or adv <= 0:
+            adv = g.get("width", 0)
+        pen_x += adv * s
 
     # ── 배치된 전체 글리프의 '실제 잉크 bbox'(배치 좌표계) 측정 ──
     #    글리프는 베이스라인 원점이라 y 는 baseline=0 가정으로 잰다(아래서 shift_y 로 올림).
