@@ -52,16 +52,87 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 ## 기획설계/구현/테스트/리뷰
 (완료 — 상세 git 히스토리 + knowledge. 출력형식 tester13/13·rev통과, 웹앱 각단계 dev E2E·rev종합 통과 치명0)
 
+## 구현 기록 (developer)
+📝 화면버그 5건 수정 (2026-06-22, webapp/static만 · engine/api.py/_handoff 무수정)
+
+| 파일 | 변경 내용 | 신규/수정 |
+|------|----------|----------|
+| screens/work.html | #1 goTo 자동 startGenerate 제거→prepGenerate(형식만 노출·진행바 숨김)+명시 '생성 시작' 버튼(genStarted). renderFmtSeg vector시 서버기본값 활성+'기본'표식. #3 패턴카드 disabled_sizes 취소선'비활성'칩+title. #5 wireDropzone(dragover→is-drag, drop→uploadDesign/uploadOrder) 디자인·주문 드롭존 배선 | 수정 |
+| screens/patterns.html | #2 헤더 "4개"하드코딩→#patternCount, renderPatternGrid서 PATTERNS.length 동적 | 수정 |
+| screens/settings.html | #4 main.content padding-bottom:80px(저장푸터 겹침 해소) | 수정 |
+| screens/app.css | 전역 .seg(형식칩 강조 is-active 검정칩·is-default '기본'표식) 추가. (.dropzone.is-drag 기존 토큰 재사용) | 수정 |
+
+💡 tester 참고:
+- **★#1 EPS 실생성 검증(API 직접)**: V넥 both 작업 → output/eps/L_10·M_07.eps **305KB·304KB 실파일 생성**(헤더 %!PS-Adobe-3.0 EPSF-3.0 벡터). pdf도 819·818KB. ZIP both=pdf/2+eps/2. eps만→eps1·pdf0, pdf만→pdf1·eps0 정확.
+- **★#1 UI 검증(playwright)**: 생성단계 진입 즉시 자동생성 안함(job_post=None) → '둘 다' 클릭(is-active) → '이 형식으로 생성 시작' 클릭 → **전송 out_format="both" 확인**. vector시 PDF(서버기본)칩 활성표시 스샷 확인.
+- **#5 드롭 검증(playwright)**: 디자인/주문서 dragover→is-drag 하이라이트 True. 실파일 drop→ /api/design/check·/api/order/parse 요청 발생 + filecard·dtable 렌더 True. **클릭 업로드 회귀**: filechooser로 .ai 선택→점검완료 OK(드롭·클릭 둘다 동작).
+- #2 patterns 헤더 "2개 패턴 프리셋". #3 V넥카드 '3XL·비활성' 취소선칩(스샷). #4 설정 하단 서버카드 안 가림(스샷).
+- 회귀: 패턴→디자인→주문→생성(both)→검수 풀플로우 정상. 서버 포트8000 기동·종료(PID) 완료.
+
+⚠️ reviewer 참고:
+- #1 버튼 상태머신: step3에서 genStarted=false면 '생성시작'(클릭→startGenerate), true면 '검수로 이동'(canAdvance). 생성취소→goTo(2)→prepGenerate가 genStarted 리셋. 이 흐름 봐주면 좋음.
+- .seg 전역 승격: 기존 patterns.html 인라인 .seg와 중복 정의 가능성(인라인이 우선). work/settings엔 인라인 없어 전역만 적용 — 충돌 없음 확인했으나 검토 권장.
+
+## 테스트 결과 (tester · 2026-06-22 화면버그 5건 재검증 · 실브라우저 playwright)
+스크린샷: data/jobs/_qa_재검증_화면/ (01~07, results.json·results_drop.json)
+서버: 포트8000 기동·헬스ok → 검증 후 **PID 111388 종료 확인(LISTENING 없음)**. taskkill //im 미사용.
+
+| 화면버그 | 결과 | 비고(증거) |
+|---------|------|-----------|
+| ★#1 출력형식 both/EPS — UI | ✅ PASS | 생성단계 진입 시 자동생성 안함(progress hidden). 형식 세그(PDF/EPS/둘다) 노출+"이 형식으로 생성 시작" 버튼. '둘 다' is-active. 06a·06b.png |
+| ★#1 EPS 실생성(전송·디스크) | ✅ PASS | UI 전송 out_format="both". 디스크 output/eps/*.eps **33개·305KB·`%!PS-Adobe-3.0 EPSF-3.0` 벡터**. pdf 33개. job.json outputs[].eps + checks_eps(벡터/CMYK/BBox) 통과 |
+| ★#1 ZIP EPS 포함 | ✅ PASS | UI는 ?format=both 호출(zipBtn=downloadZip(apiFmt())). both ZIP=66(pdf/33+eps/33 하위폴더). eps ZIP=eps33/pdf0. pdf ZIP=pdf33/eps0. ※format 파라미터 없이 호출하면 서버 기본 pdf만(정상 동작) |
+| #2 패턴관리 헤더 "2개" | ✅ PASS | #patternCount="2개 패턴 프리셋". "4개" 없음. 02.png |
+| #3 V넥 "3XL·비활성" 취소선칩+툴팁 | ✅ PASS | line-through "3XL · 비활성" 칩(5XL 뒤). title="원본 암홀X_3XL.ai가 5XL과 동일한 자산 결함..." 03.png |
+| #4 설정 하단 '서버' 카드 푸터 안가림 | ✅ PASS | overlap=false(serverCardBottom732<footerTop851), content padding-bottom 80px. 04.png |
+| ★#5 드래그 하이라이트 | ✅ PASS | 디자인·주문 드롭존 dragover→is-drag=true. 05a·05c.png |
+| ★#5 실제 드롭 첨부 | ✅ PASS | File 담은 drop 디스패치 → 디자인 /api/design/check 1건+결과카드+파일명, 주문 /api/order/parse 1건+38행 테이블. 07a·07b.png |
+| #5 클릭 업로드 회귀 | ✅ PASS | filechooser로 디자인·주문 업로드 정상(req fired·테이블 렌더) |
+
+📊 종합: 5건 전부 ✅ PASS (세부 9항목 9/9). 6/22 dev 수정사항 전부 재현 확인.
+- pageerror 0건. console error는 CDN 폰트(Pretendard woff2) 404 **1종뿐 → 검증 무관**(명세 예외).
+- ⚠️ ZIP은 ?format 미지정 시 서버 기본값 pdf로 응답하나, **웹UI는 항상 apiFmt()(=선택형식 both/eps/pdf)로 호출**하므로 직원 플로우에선 EPS 정상 포함. 결함 아님.
+
+## 테스트 결과 (tester · 2026-06-22 브라우저 시각검증 E2E)
+스크린샷: data/jobs/_qa_화면검증/ (01_work_main ~ 14_settings_tall, _downloaded.zip)
+
+| 테스트 항목 | 결과 | 비고 |
+|-----------|------|------|
+| ①메인 work(사이드바·서버연결초록불·5스테퍼·STIZ) | ✅ 통과 | 01_work_main.png |
+| ②패턴카드 실데이터(U넥·V넥) | ✅ 통과 | 02_patterns_cards.png |
+| ②V넥 12사이즈·3XL disabled 표기 | ⚠️ 부분 | 칩에 3XL 자체가 없음(목록서 제외). disabled(취소선) 칩 표기는 없음 — 명세기대와 다름 |
+| ③디자인 빈템플릿 5케이스 pass | ✅ 통과 | 03_design_empty_pass.png (88,141B·평탄화·흰글리프12<14) |
+| ③완성본 "빈 본체 올려주세요" warn | ✅ 통과 | 03b_design_full_warn.png (Tj1·글리프16>14) |
+| ④주문서 38행 표 렌더·모두입력됨 | ✅ 통과 | 04_order_table.png |
+| ⑤생성 형식선택·진행바·완료 | ✅ 통과 | 05~05c, 11. 완료38/38 |
+| ⑥검수 타일·PASS배지·건너뜀5건(3XL) | ✅ 통과 | 12_review_full.png. verdict "33/33 verified" |
+| ⑦ZIP 다운로드 동작 | ✅ 통과(동작)/❌(내용) | _downloaded.zip 27MB·33파일 — **pdf/ 33개만, eps/ 0개** |
+| ⑧패턴관리·작업기록·설정 렌더 | ✅ 통과 | 08~10,14 |
+| **출력형식 "둘 다(both)/EPS" 실효** | ❌ **실패** | 아래 수정요청 #2. EPS 절대 안 만들어짐 |
+| 패턴관리 헤더 "4개 패턴 프리셋" | ❌ 실패 | 수정요청 #3. 실제 2개(API/카드)인데 헤더 4 하드코딩/오계산 |
+| 설정 하단 카드 vs 저장푸터 겹침 | ⚠️ 경미 | 14_settings_tall.png. 마지막 '서버' 카드 일부를 고정푸터가 가림(하단패딩 부족) |
+
+📊 종합: 11개 중 8개 통과 / 2개 실패 / 1부분·1경미. **E2E 플로우(①~⑧) 자체는 완주 가능**(PDF 기준). 단 EPS 출력은 현재 웹UI로 절대 불가.
+
+### 🔴 핵심버그 근본원인(격리검증 완료) — 출력형식 both/eps 무효
+- 엔진 run_job(both): EPS 정상생성 ✅ (CLI 직접호출 output/eps/*.eps 생성 확인)
+- 서버 API: payload.out_format 그대로 run_job 전달·응답 echo 정확 ✅ (pdf 보내면 pdf만)
+- **UI 버그**: work.html L979 `if(step===3) startGenerate();` — **생성단계 진입 즉시 자동 생성 시작**. 형식버튼(PDF/EPS/둘다)은 그 *뒤*에 노출 → 직원이 "둘 다" 눌러도 이미 시작/종료된 PDF-only 작업엔 미반영. 재생성 트리거 없음. 결과: GS 설치·apiFmt()=both·버튼활성이어도 전송 out_format=pdf → EPS 0개. (job.json out_format='' , output/eps 폴더 없음으로 확인)
+- 부가: outFmtKey() 기본 'vector'→serverFmtDefault 'pdf'. 첫 진입 시 형식 미선택이라 무조건 pdf로 시작됨.
+
 ## 수정 요청
 | 요청자 | 대상 | 문제 | 상태 |
 |--------|------|------|------|
 | reviewer/tester | 3XL.ai | 원본이 5XL과 동일(자산결함) | 비활성(disabled_sizes)·재확보 대기 |
+| tester | webapp/static/screens/work.html (goTo L979) | 출력형식 both/eps 무효: 생성단계 진입 즉시 자동 startGenerate→형식선택 전에 PDF-only로 시작됨. EPS 절대 생성 안 됨. 형식 선택 후 생성 시작하도록(또는 형식 변경 시 재생성) 수정 필요 | ✅ 완료(자동생성제거+명시버튼, UI out_format=both 확인) |
+| tester | webapp/static/screens/patterns.html | 헤더 "4개 패턴 프리셋"인데 실제 패턴 2개(API/카드 일치). 카운트 하드코딩/오계산 → 실제 개수로 | ✅ 완료(PATTERNS.length 동적, "2개" 확인) |
+| tester | webapp/static/screens/work.html (V넥 패턴카드) | 3XL "disabled 표기"가 시각적으로 없음(칩 목록서 제외만). 직원이 3XL 비활성을 카드에서 인지 못함 — disabled 칩(취소선) 표기 검토 | ✅ 완료(취소선 '3XL·비활성' 칩+title툴팁) |
+| tester | webapp/static/screens/settings.html | 페이지 하단 '서버' 카드 일부를 고정 '저장' 푸터가 가림(하단 패딩 부족). 경미 | ✅ 완료(content padding-bottom:80px) |
+| user | webapp/static/screens/work.html (드롭존) | 드래그앤드롭 미구현 — 파일 끌어다놔도 첨부 안 됨(클릭만 동작) | ✅ 완료(wireDropzone: 디자인·주문서 drop→기존 업로드경로) |
 
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 | 결과 |
 |------|---------|------|------|
-| 2026-06-19~20 | 팀 | 정합보정 4이슈(번호정렬·재단선·암홀X3조각·글리프셋) | 완료·푸시 |
-| 2026-06-20 | dev | 빈본체 design_file 88KB 정식설정 | 33건 verify PASS·겹침0 |
 | 2026-06-20 | dev/test/rev | 출력형식 PDF/EPS/both | tester13/13·rev통과, EPS305KB벡터 |
 | 2026-06-20 | dev | 웹앱1 FastAPI 골격+API3 | curl/브라우저 PASS |
 | 2026-06-20 | dev | 웹앱2 order/parse+design 5케이스 | 38행/11명·5케이스 정확 |
@@ -70,3 +141,5 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 | 2026-06-20 | dev | 웹앱5 run.bat+직원 E2E | 전체플로우 PASS(완료기준 달성) |
 | 2026-06-20 | rev | 웹앱 종합 리뷰(1~5) | 통과 치명0(주의3 백로그) |
 | 2026-06-20 | pm | 출력형식·웹앱1~5 커밋(8개) | 미푸시8(푸시대기) |
+| 2026-06-22 | tester | 브라우저 시각검증 E2E(①~⑧ 스샷) | 8/11통과. 🔴 출력형식both/eps 무효(work.html L979 자동생성), 패턴헤더4개오표기, 설정푸터겹침 — 수정요청4건 |
+| 2026-06-22 | dev | 화면버그 5건 수정(work·patterns·settings·app.css) | ✅ 전건완료. #1 EPS 실생성(eps305KB·ZIP both pdf2/eps2)·UI out_format=both(playwright). #5 드롭 디자인·주문 동작+클릭회귀. #2 헤더2개 #3 비활성칩 #4 푸터해소. engine/api.py/_handoff 무수정 |

@@ -772,3 +772,29 @@
 .setrow__control { flex: none; display: flex; align-items: center; gap: 8px; }
 .path-input { display: flex; align-items: center; gap: 8px; }
 .path-input .input { min-width: 280px; font-family: var(--font-mono); font-size: 13px; }
+
+/* ============================================================
+   Segmented control (.seg) — 출력 형식 선택(PDF/EPS/둘 다) 등에 공용
+   (예전엔 patterns.html 안에만 정의돼 work/settings 의 형식칩이 밋밋했다.
+    전역으로 올려 선택 형식이 또렷이 강조되게 한다 — 의뢰 1 시각 활성표시.)
+   ============================================================ */
+.seg { display: inline-flex; border: 1px solid var(--border-default); border-radius: var(--radius-md); overflow: hidden; }
+.seg button {
+  height: 32px; padding: 0 14px; border: none; border-right: 1px solid var(--border-default);
+  background: var(--surface-card); color: var(--text-muted);
+  font: var(--text-sm); cursor: pointer;
+  transition: background var(--dur-base) var(--ease-out), color var(--dur-base) var(--ease-out);
+}
+.seg button:last-child { border-right: none; }
+.seg button:hover { background: var(--surface-sunken); }
+/* 선택된 형식: 검정 배경+흰 글씨로 또렷하게(직원이 무엇이 출력될지 한눈에). */
+.seg button.is-active { background: var(--stiz-black, #111); color: #fff; font: var(--text-sm-strong); }
+/* 미선택(설정 기본값 적용) 표식: 활성칩 위쪽에 '기본' 점을 살짝. */
+.seg button.is-default { position: relative; }
+.seg button.is-default::after {
+  content: "기본"; position: absolute; top: -7px; right: 4px;
+  font: 8px/1 var(--font-mono); color: var(--text-subtle);
+  background: var(--surface-card); padding: 1px 3px; border-radius: var(--radius-xs);
+}
+
+/* 드래그앤드롭 하이라이트(.dropzone.is-drag 는 위에서 정의됨 — 첨부 끌어놓기 시각피드백) */

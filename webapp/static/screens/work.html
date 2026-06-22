@@ -246,6 +246,29 @@ function pickFile(accept, onPick) {
   setTimeout(() => inp.remove(), 0);
 }
 
+// 드래그앤드롭 배선 헬퍼 — 드롭존 한 곳에 드래그/드롭 이벤트를 달아 준다.
+//   왜: 기존엔 click(파일 선택)만 돼서 '파일을 끌어다 놓으면' 브라우저가
+//   파일을 새 탭에서 열어버렸다(첨부 안 됨). dragover/drop 에서 기본동작을
+//   막고, 드롭한 첫 파일을 클릭 때와 '똑같은' 업로드 경로(onFile)로 보낸다.
+//   비유: 우편함(드롭존)에 편지를 손으로 넣든(드롭) 버튼을 눌러 넣든(클릭)
+//        결국 같은 우체통(uploadDesign/uploadOrder)으로 들어가게 한다.
+function wireDropzone(el, onFile) {
+  if (!el) return;
+  // 드래그가 위에 올라오면 기본동작(파일 열기) 차단 + 시각 하이라이트.
+  const over = (e) => { e.preventDefault(); e.stopPropagation(); el.classList.add("is-drag"); };
+  // 드래그가 벗어나거나 드롭되면 하이라이트 해제. (기존 .dropzone.is-drag 토큰 재사용)
+  const leave = (e) => { e.preventDefault(); e.stopPropagation(); el.classList.remove("is-drag"); };
+  el.addEventListener("dragenter", over);
+  el.addEventListener("dragover", over);
+  el.addEventListener("dragleave", leave);
+  el.addEventListener("drop", (e) => {
+    leave(e);   // 기본동작 차단 + 하이라이트 해제
+    // 드롭한 파일 중 첫 번째 1개만 클릭 업로드와 동일하게 처리한다.
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) onFile(f);
+  });
+}
+
 // 디자인 파일을 서버에 보내 5케이스 점검 결과를 받는다.
 async function uploadDesign(file) {
   designLoading = true; renderDesign();
@@ -311,6 +334,11 @@ function renderPatterns() {
     const sizeChips = p.sizes.map((s) =>
       `<span style="font:9px/1.4 var(--font-mono); color:var(--text-subtle); background:var(--surface-sunken); border-radius:var(--radius-xs); padding:2px 5px;">${s}</span>`
     ).join("");
+    // 비활성 사이즈(자산 결함 등으로 제외) — 취소선+회색 '비활성' 칩으로 노출.
+    //   사유는 title 툴팁으로 보여, 직원이 'why 3XL 이 빠졌는지' 카드에서 바로 안다.
+    const disChips = (p.disabled_sizes || []).map((d) =>
+      `<span title="${esc(d.reason || "비활성")}" style="font:9px/1.4 var(--font-mono); color:var(--text-disabled,#9aa0a6); background:var(--surface-sunken); border:1px dashed var(--border-subtle); border-radius:var(--radius-xs); padding:2px 5px; text-decoration:line-through; opacity:.7;">${esc(d.name)} · 비활성</span>`
+    ).join("");
     return `
       <div class="card card--interactive ${active ? "is-selected" : ""}" data-pattern="${p.id}" style="padding:0;">
         <div style="display:flex; gap:14px; padding:16px; align-items:center;">
@@ -320,7 +348,7 @@ function renderPatterns() {
           <div style="flex:1; min-width:0;">
             <div style="font:var(--text-body-strong); color:var(--text-strong);">${p.name}</div>
             <div class="tnum" style="font:var(--text-caption); color:var(--text-muted); margin-top:3px;">${p.sizes.length}개 사이즈 · ${p.pieces}조각</div>
-            <div class="wrap-2" style="gap:4px; margin-top:8px;">${sizeChips}</div>
+            <div class="wrap-2" style="gap:4px; margin-top:8px;">${sizeChips}${disChips}</div>
           </div>
           ${active ? '<span class="material-symbols-outlined msf" style="font-size:22px; color:var(--accent); flex:none;">check_circle</span>' : ""}
         </div>
@@ -374,6 +402,8 @@ function renderDesign() {
       <div class="note" style="margin-top:10px;"><span class="material-symbols-outlined">info</span>완성본(번호·이름 샘플)은 패턴 등록의 ‘기준’으로만 쓰입니다. 작업에는 빈 본체를 올려주세요.</div>`;
     $("#designDrop").addEventListener("click", () =>
       pickFile(".ai,.pdf,application/pdf", (f) => uploadDesign(f)));
+    // 끌어다 놓기로도 첨부되게(클릭과 동일 경로). 의뢰 5.
+    wireDropzone($("#designDrop"), (f) => uploadDesign(f));
     return;
   }
   // ── 서버 점검 결과 표시 ──
@@ -460,6 +490,8 @@ function renderOrder() {
       </button>`;
     $("#orderDrop").addEventListener("click", () =>
       pickFile(".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", (f) => uploadOrder(f)));
+    // 끌어다 놓기로도 첨부되게(클릭과 동일 경로). 의뢰 5.
+    wireDropzone($("#orderDrop"), (f) => uploadOrder(f));
     return;
   }
   const failTotal = ORDER.filter((r) => !r.name).length;
@@ -584,15 +616,26 @@ function renderPager(container, total, page, pageSize, onGo) {
 
 // ====== Panel 3 · generate ======
 function renderFmtSeg() {
-  const k = outFmtKey();
-  $("#fmtSeg").querySelectorAll("button").forEach((b) => b.classList.toggle("is-active", b.dataset.fmt === k));
+  // 실제로 서버에 보낼 형식(apiFmt: vector 면 서버 기본값)을 활성칩으로 표시한다.
+  //   예전엔 localStorage 키(vector 일 수 있음)로만 칠해, 미선택 시 아무 칩도
+  //   활성이 안 돼 직원이 무엇이 적용될지 몰랐다. 이제 vector 면 서버 기본값
+  //   세그먼트를 '기본' 표식과 함께 활성화해 보여 준다.
+  const eff = apiFmt();              // pdf | eps | both (vector → serverFmtDefault)
+  const isDefault = outFmtKey() === "vector";  // 직원이 아직 직접 안 고른 상태
+  $("#fmtSeg").querySelectorAll("button").forEach((b) => {
+    const on = b.dataset.fmt === eff;
+    b.classList.toggle("is-active", on);
+    // 미선택(서버 기본값 적용) 칩엔 '기본' 보조표식을 살짝 달아 둔다.
+    b.classList.toggle("is-default", on && isDefault);
+    b.title = on && isDefault ? "설정의 기본 출력 형식입니다. 다른 형식을 누르면 바꿀 수 있어요." : "";
+  });
 }
 $("#fmtSeg").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
   setOutFmt(b.dataset.fmt);
   renderFmtSeg();
-  // 형식을 바꾸면(아직 생성 전이면) 라벨만 갱신. 이미 생성된 결과가 있으면
-  // 검수 화면(ZIP 형식 안내)도 다시 그려 준다.
-  if (!jobResult) $("#genLabel").textContent = outFmt() + " 생성 중…";
+  // 형식을 바꾸면(아직 생성 전이면) 시작 버튼/라벨을 갱신. 이미 생성된 결과가
+  // 있으면 검수 화면(ZIP 형식 안내)도 다시 그려 준다.
+  if (!jobResult) { $("#genLabel").textContent = outFmt() + " 생성 중…"; update(); }
   else if (step === 4) renderReview();
 }));
 // ── 출력 형식 → API 값(pdf|eps|both) ──
@@ -610,8 +653,26 @@ let jobTotal = 0;        // 진행바 분모(주문 행 수)
 let jobResult = null;    // GET /api/jobs/{id} 결과(검수 그리드 원천)
 let jobError = null;     // 생성 실패 사유(한국어)
 
+// 생성 단계 진입 시 초기화: 형식만 고르도록 진행바·칩을 숨기고 대기 상태로 둔다.
+//   (자동 생성을 없앤 대신, 이 함수가 '아직 시작 전' 화면을 준비한다.)
+let genStarted = false;   // '생성 시작'을 눌렀는지 — 하단 버튼 라벨 분기에 쓴다.
+function prepGenerate() {
+  clearInterval(genTimer);
+  genStarted = false;
+  jobId = null; jobResult = null; jobError = null; genDone = 0;
+  renderFmtSeg();                              // 형식 세그먼트(기본값 활성표시)
+  $("#genProgress").classList.add("hidden");   // 시작 전엔 진행바를 숨긴다
+  $("#genProgress").classList.remove("progress--pass", "progress--fail");
+  $("#genFill").style.width = "0%";
+  $("#genPills").innerHTML = "";
+  $("#genCancel").classList.add("hidden");     // 시작 전엔 '생성 취소'도 숨김
+}
+
 // "생성 시작": 화면 표(ORDER)+패턴+디자인 토큰을 서버로 보내 비동기 작업을 띄운다.
 async function startGenerate() {
+  genStarted = true;
+  $("#genProgress").classList.remove("hidden");  // 시작하면 진행바 노출
+  $("#genCancel").classList.remove("hidden");
   clearInterval(genTimer);
   jobId = null; jobResult = null; jobError = null; genDone = 0;
   renderFmtSeg();
@@ -969,14 +1030,27 @@ function update() {
     next.innerHTML = '<span class="material-symbols-outlined">download</span>ZIP 다운로드';
     next.disabled = false;
   } else if (step === 3) {
-    next.innerHTML = '검수로 이동<span class="material-symbols-outlined">arrow_forward</span>';
+    // 생성 단계: 아직 시작 전이면 '생성 시작'(명시적), 완료되면 '검수로 이동'.
+    if (!genStarted) {
+      next.innerHTML = '<span class="material-symbols-outlined">play_arrow</span>이 형식으로 생성 시작';
+      next.disabled = !patternId || !ORDER.length;   // 패턴·주문 갖춰지면 시작 가능
+    } else {
+      next.innerHTML = '검수로 이동<span class="material-symbols-outlined">arrow_forward</span>';
+      next.disabled = !canAdvance();                 // 작업 done + 결과 도착 시 활성
+    }
   } else {
     next.innerHTML = '다음 단계<span class="material-symbols-outlined">arrow_forward</span>';
   }
 }
 function goTo(n) {
   step = Math.max(0, Math.min(4, n));
-  if (step === 3) startGenerate(); else clearInterval(genTimer);
+  // ⚠️ 핵심 수정: 생성 단계(3) 진입 시 '자동 생성'을 하지 않는다.
+  //   예전엔 여기서 곧장 startGenerate() 를 불러, 직원이 형식(PDF/EPS/둘다)을
+  //   고르기도 전에 PDF 로 생성이 끝나버렸다(EPS 절대 안 만들어짐).
+  //   이제는 형식 세그먼트만 먼저 보여주고, 직원이 '이 형식으로 생성 시작'을
+  //   눌러야 비로소 선택한 형식으로 startGenerate() 가 돈다.
+  if (step !== 3) clearInterval(genTimer);
+  if (step === 3) prepGenerate();   // 생성 화면 초기화(형식 선택 대기)
   if (step === 4) renderReview();
   if (step !== 3) { $("#genProgress").classList.remove("progress--pass", "progress--fail"); $("#genCancel").classList.remove("hidden"); $("#genLabel").textContent = outFmt() + " 생성 중…"; }
   update();
@@ -984,6 +1058,12 @@ function goTo(n) {
 
 $("#btnPrev").addEventListener("click", () => goTo(step - 1));
 $("#btnNext").addEventListener("click", () => {
+  // 생성 단계(3): 아직 시작 전이면 '생성 시작'(선택 형식으로), 시작·완료 후엔 검수로.
+  if (step === 3 && !genStarted) {
+    startGenerate();   // 직원이 고른 형식(apiFmt)으로 비로소 생성을 띄운다
+    update();          // 버튼이 '검수로 이동'(비활성→완료 시 활성)으로 바뀜
+    return;
+  }
   if (step < 4) goTo(step + 1);
   else downloadZip(apiFmt());   // 검수 단계에서 '다음' = ZIP 다운로드
 });

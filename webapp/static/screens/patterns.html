@@ -110,7 +110,7 @@
       <!-- ===== LIST MODE ===== -->
       <section id="listMode" class="stack-5">
         <div class="row-between">
-          <span class="muted" style="font:var(--text-sm);">4개 패턴 프리셋</span>
+          <span class="muted" style="font:var(--text-sm);" id="patternCount">패턴 프리셋</span>
           <button class="btn btn--primary" id="btnRegister"><span class="material-symbols-outlined">add</span>패턴 등록</button>
         </div>
         <div class="grid-3" id="patternGrid"></div>
@@ -288,6 +288,9 @@ function pickFile(accept, onPick) {
 function renderPatternGrid() {
   const grid = $("#patternGrid");
   if (!grid) return;
+  // 헤더 개수: 하드코딩('4개') 대신 실제 API 패턴 수로 갱신(의뢰 2).
+  const cnt = $("#patternCount");
+  if (cnt) cnt.textContent = `${PATTERNS.length}개 패턴 프리셋`;
   if (!PATTERNS.length) {
     grid.innerHTML = `<div class="note"><span class="material-symbols-outlined">info</span>등록된 패턴이 없습니다.</div>`;
     return;
