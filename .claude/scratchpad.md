@@ -53,6 +53,38 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 (완료 — 상세 git 히스토리 + knowledge. 출력형식 tester13/13·rev통과, 웹앱 각단계 dev E2E·rev종합 통과 치명0)
 
 ## 구현 기록 (developer)
+📝 합성2+3 — cover/블리드(흰틈 제거) + 재단선 1줄(폴리곤) + 디자인 패턴선 OCG 제거 (2026-06-22, dev · engine/job.py + preset.json. 공개 API compose/Piece/SizeLayout/parse_svg/verify_output 시그니처 무수정)
+
+| 파일 | 변경 내용 | 신규/수정 |
+|------|----------|----------|
+| engine/job.py | (작업2) `_job_piece_transform` 에 `bleed=None` 인자 추가: None/0=기존 contain(min배율), >0=cover(max배율)+블리드, 중앙정렬 오프셋(ox=px0+(pw-s·dw)/2-s·dx0). 기본 None→grade/U넥 회귀0 | 수정 |
+| engine/job.py | (작업3①) `_polygon_cutline_ops` 신규: 조각 poly.points(너치 포함 시트좌표)를 device K(0,0.96,0.95,0)·stroke_width·m/l…h/S로 빨강 1줄. `_build_precise_layout`에 cover_bleed 인자+draw_from="svg_polygon"이면 추출 대신 윤곽 직접 그리기 | 수정 |
+| engine/job.py | (작업3②) `hide_design_cutline_layer`+`_ocg_name` 신규: 디자인 페이지 Resources/Properties에서 "패턴선/재단선" OCG의 /MCx 찾아 콘텐츠의 /OC /MCx BDC…(짝)EMC 구간 토큰 삭제 후 재작성(unparse_content_stream). 깊이카운트로 중첩 안전 | 수정 |
+| engine/job.py | run_job: 평탄화 직후 hide_design_cutline_layer 호출(hide_design_cutline_layer=true시 base 교체). cover_bleed=preset.cover_bleed 또는 cutline.bleed(있을때만). svg_polygon이면 _extract_red_strokes 미호출(보존기대=조각수). _build_precise_layout에 cover_bleed 전달 | 수정 |
+| data/patterns/농구_V넥_양면/preset.json | cutline에 stroke_width 2.0·draw_from "svg_polygon"·hide_design_cutline_layer true 추가. cover_bleed 1.03 추가 | 수정 |
+
+🔑 OCG OFF 실효 — **실증 결과 OFF 무효, 콘텐츠 삭제 폴백 채택**:
+- compose가 디자인을 as_form_xobject로 Form 임베드하며 **Root.OCProperties를 copy_foreign 하지 않음** → base에서 패턴선 OCG를 D.OFF 해도 출력 PDF에 OCProperties 정의 자체가 없어 뷰어/PyMuPDF가 패턴선을 그냥 표시(OFF 무효, 코드+실측 확인).
+- → 폴백: 평탄화본 페이지 콘텐츠의 패턴선 OCG(/MC3="패턴선") BDC…EMC 구간 자체를 삭제. flatten 후 BDC 톱레벨·비중첩이라 안전. 제거 후 사라진 색 = 빨강 (0,0.961,0.947,0) **단 1개만**(나머지 5색 무손실 보존 확인).
+- OCG 매핑(이 디자인 flatten 후): /MC0=교체용요소 /MC1=몸판 /MC2=요소 /MC3=패턴선.
+
+🎯 시각결과(preview 육안+확대 크롭):
+- 앞=YONSEI/V넥, 뒤=엠블럼/이름/배번/라운드넥 — **앞뒤 안 뒤집힘**. 디자인 윤곽까지 **꽉 참(흰틈 없음, 밴드 양끝도 채워짐)**. 재단선+너치 **정확히 1줄**(두 줄 겹침 없음=디자인 패턴선 제거 확인). 너치(목중앙·옆선 짧은 빨강 표식) 보존.
+- stroke_width 2.0pt: 시트 4000pt+/preview 6787px에서 또렷·과하지 않음 → 2.0 유지.
+
+✅ 검증 전부 통과: ①selftest PASS(inkcov 편차0·CMYK무손실) ②V넥 per_player 시각 OK ③verify_output PASS·글자 k fill(0,0,0,0)·금지연산자(rg/g/RG/G) 0·재단선 device CMYK (0,0.96,0.95,0) ④U넥 회귀0(cover_bleed/cutline 없음→contain·재단선 미동작, _job_piece_transform 단위검증 contain s=2.0) ⑤OCG OFF 무효 실증→폴백 적용·패턴선 1색만 제거 ⑥both(PDF+EPS) verify_pass·EPS 벡터/CMYK/BBox OK. ast.parse/py_compile/json 통과.
+
+📁 cowork PNG: data/jobs/_cowork_합성23/교정검증_합성23_L.png, _XL.png (data/jobs gitignore라 재생성형 — run_job V넥 L·XL per_player로 즉시 재생성 가능).
+
+💡 tester 참고:
+- 재현: run_job('data/patterns/농구_V넥_양면/preset.json','design_source/연세대_V넥_빈템플릿_본체포함_XL.ai', [{name,number,size:'L'|'XL',qty}], out_dir, split='per_player', make_preview=True). preview/*.png 육안 → 흰틈0·재단선1줄·너치보존·앞뒤정합.
+- 정상: produced=N, verify_pass=N, summary.cutline.mapped=3, warnings에 "[패턴선] OCG 레이어 제거 ['패턴선'](1구간)"·"[블리드] cover+블리드(1.03)"·"[재단선] svg_polygon 3개". 재단선 보존 check OK(출력 빨강 stroke 3=기대 3).
+- 주의 입력: ⚠️U넥은 design_XL.ai 미확보(테스트 preset만)→실 job 불가, 회귀는 selftest+단위로 대체. ⚠️cover라 디자인이 조각보다 세로로 길면 위아래 살짝 잘림(정상=clip). ⚠️3XL은 disabled(주문오면 skip).
+
+⚠️ reviewer 참고:
+- 봐줬으면: ① hide_design_cutline_layer의 BDC/EMC 깊이카운트(중첩 시 짝맞춤)·unparse_content_stream 재작성 안전성. ② cover 중앙정렬 오프셋 수식. ③ _polygon_cutline_ops가 transform 없이 poly.points 그대로 쓰는 전제(parse_svg가 이미 시트 절대좌표·flip_y). ④ base_design 교체 후 verify가 패턴선 제거본 기준으로 무손실 PASS(원본 대비 아님 — 의도).
+- 불변제약: compose/Piece/SizeLayout/parse_svg/verify_output 시그니처 무수정. grade.py 무수정(자체 _piece_transform 독립). CMYK 무손실(제거 시 빨강1색만, selftest 편차0). preset 얕은복제(_sized_preset). ast.parse/py_compile 통과.
+
 📝 합성1 자동매핑 — 조각 자동 인식·preset pieces 자동교정 (2026-06-22, dev · engine/reference.py 함수4 신규 + cli.py build-preset 서브커맨드 + preset.json pieces 교정. 공개API/parse_svg/compose/Piece/SizeLayout/verify_output 무수정)
 
 | 파일 | 변경 내용 | 신규/수정 |
@@ -109,6 +141,56 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 ⚠️ reviewer 참고:
 - #1 버튼 상태머신: step3에서 genStarted=false면 '생성시작'(클릭→startGenerate), true면 '검수로 이동'(canAdvance). 생성취소→goTo(2)→prepGenerate가 genStarted 리셋. 이 흐름 봐주면 좋음.
 - .seg 전역 승격: 기존 patterns.html 인라인 .seg와 중복 정의 가능성(인라인이 우선). work/settings엔 인라인 없어 전역만 적용 — 충돌 없음 확인했으나 검토 권장.
+
+## 리뷰 결과 (reviewer)
+
+### 합성2+3 — cover/블리드 + 재단선1줄폴리곤 + 패턴선 OCG 콘텐츠삭제 (2026-06-22, reviewer · engine/job.py + preset.json)
+
+📊 종합 판정: **통과 (치명 0)** — 불변제약 준수·핵심 수식/좌표 근거 정확. 주의 3·후순위 4.
+
+✅ 잘된 점:
+- **불변제약 완벽 준수**: git diff stat 상 변경은 job.py + preset.json **단 2파일**. grade/compose/Piece/SizeLayout/parse_svg(pattern.py)/verify/svg_normalize **전부 무수정**(diff에 안 잡힘). verify_output 시그니처 그대로.
+- `_job_piece_transform(... bleed=None)` 신규 인자는 **기본값 None**이고, 유일 호출처(L693)만 명시 전달. contain 경로(bleed None/≤0)는 기존 grade 공식과 한 글자도 안 다르게 유지 → U넥/grade 회귀 0 보장 구조.
+- **cover 중앙정렬 수식 검산 정확**: s=max(pw/dw,ph/dh)·bleed, ox=px0+(pw−s·dw)/2−s·dx0. 디자인영역 중심이 조각 중심에 정확히 매핑됨(직접 검산 확인). 넘침은 compose의 q…W n…Do…Q clip이 차단.
+- **opt-in 폴백 설계 견고**: cover_bleed/cutline.draw_from/hide_design_cutline_layer 키가 **있을 때만** 신경로. 키 없는 디자인(U넥)은 전부 기존 경로. 회귀 보호의 정석.
+- **재단선 좌표 근거 정확**: poly.points가 outline(=clip 윤곽, compose L77)과 **동일 좌표**라 transform 없이 직접 stroke해도 클립선과 정확히 일치. extra_ops는 place_block의 q…Q '밖'(별도 append)이라 clip 안 받음 → 너치 보존 근거 맞음. q…h S Q 자체 격리도 정확.
+- OCG 콘텐츠삭제: BDC/EMC 깊이카운트(marker_depth)로 중첩 짝맞춤 안전. 대상은 layer_names("패턴선/재단선")에 매칭된 /MCx만 → OCG 아닌 Properties 엔트리는 _ocg_name try/except로 ""반환되어 자연 배제.
+
+🔴 필수 수정: **없음**
+
+🟡 주의 (후속 권장, 차단 아님):
+- [job.py hide_design_cutline_layer L256~324] **다중 디자인 일반화 리스크**: layer_names 하드("패턴선","재단선")·page_index=0 고정·"flatten 후 BDC 톱레벨 비중첩" 전제는 **이 V넥 템플릿 구조 한정**. 레이어명이 다르거나(영문 "Cutline" 등) OCG 없는 디자인은 found=False로 안전하게 건너뛰나(그땐 디자인 패턴선 잔존→두 줄 가능), 레이어명이 우연히 "패턴선"인데 그 안에 몸판 콘텐츠가 섞여 들어간 비정상 구조면 과삭제 위험. 현재는 이 디자인만 hide=true라 실질 안전. 다른 디자인 적용 시 BDC 구조 재확인 필요. → backlog 신규 디자인 온보딩 체크리스트에 기록 권장.
+- [job.py L920~928] `_design_no_cutline.pdf`(및 `_flattened_design.pdf`) out_dir에 잔존 — 정리 루틴 없음. found=False여도 out_pdf는 저장됨(base 교체만 안 함). 기존 백로그 "data/uploads·_JOBS TTL 정리"와 동류. 기능 무해, 디스크 누적만.
+- [job.py L1130/1191 재단선 보존 체크] `n_out >= expected`(≥ 비교)라 디자인 잔존 패턴선이 제거 안 돼 빨강이 더 많아도 PASS로 통과됨(두 줄을 못 잡음). hide_info.found 경고로 보완되나, 체크 자체는 '과다'를 못 거름. 시각검증(dev preview)으로 메움 — 자동검증 한계로만 인지.
+
+🔵 후순위:
+- preset cover_bleed=1.03 / stroke_width 2.0 / color_cmyk는 preset화 완료(하드코딩 아님) — 양호. 단 `_polygon_cutline_ops` 기본값 [0,0.96,0.95,0]·2.0은 폴백 상수로 코드에 존재(preset 우선이라 무해).
+- hide_design_cutline_layer가 page_index 인자는 받으나 run_job 호출은 page0 고정 — 멀티페이지 디자인 미대응(현 단일페이지 디자인이라 무관).
+- OCG 삭제+재작성이 unparse_content_stream로 콘텐츠 스트림을 한 번 재인코딩함. 보존 토큰은 그대로라 색 바이트 무손실(selftest 편차0 확인)이나, 엄밀히는 "원본 바이트 동일"이 아닌 "토큰 동치 재작성"임 — conventions#2(색 안 만짐) 정신엔 부합(색공간/색값 미변경). 패턴선 색 1개만 사라짐 확인됨.
+
+검토 관점 1~6 전부 확인: ①불변제약 git diff 2파일·bleed 기본값·verify시그니처 OK ②cover수식·contain폴백·clip차단·preset bleed OK ③poly.points=outline 동일좌표 근거 정확·q…Q격리·너치 OK ④OCG삭제 깊이카운트 안전·대상한정·무손실(빨강1색)·타디자인 found=False안전(주의로 기록) ⑤draw_from 분기로 svg_polygon시 _extract_red_strokes 미호출·elif로 기존경로 보존 OK ⑥품질 양호.
+
+## 테스트 결과 (tester · 2026-06-22 합성2+3 독립검증 · 미리보기 PNG 시각검증)
+검증대상: engine/job.py(_job_piece_transform cover+bleed·_build_precise_layout svg_polygon 재단선·hide_design_cutline_layer OCG콘텐츠삭제) + preset.json(cover_bleed 1.03·cutline svg_polygon/stroke 2.0/hide true)
+산출물: data/jobs/_qa_합성23/preview/{L_07_KIM,XL_23_LEE}.png + 확대크롭 _crop_L_back_neck·_crop_L_band·_crop_L_front_neck.png. (data/jobs gitignore = 재생성형)
+
+| 검증 항목(완료기준 §5) | 결과 | 증거 |
+|----------|------|------|
+| 1) selftest 회귀 | ✅ PASS | 6사이즈/24배치 종합 PASS, inkcov 최대편차 0.000000, CMYK무손실·투명도0·래스터미추가 |
+| **2a) ★앞뒤 정합★(svg_index 교정)** | ✅ PASS | L·XL 둘 다 좌=YONSEI(V넥·가슴로고·작은번호)=앞판, 우=엠블럼/1885/이름/큰번호/라운드넥=뒤판. 안 뒤집힘 |
+| **2b) ★흰틈/흰여백 없음★** | ✅ PASS | 확대크롭 육안: 파랑이 빨강 재단선까지 꽉 참(어깨·라운드넥곡선·옆선·밴드양끝·V넥). 안쪽 흰틈 없음. cover+블리드 1.03 효과 |
+| **2c) ★재단선 1줄+너치★** | ✅ PASS | 3조각 빨강 윤곽 정확히 1줄(두줄겹침 없음=디자인패턴선 제거확인). 목중앙/어깨/옆선/밴드 너치 표식 보존 |
+| 3) verify_output PASS | ✅ PASS | L·XL 모두 8항목 전부 OK(expected_placements=3). 디자인무손실·CMYK계열만·투명도0·W n·cm·Do3·래스터0 |
+| 3) 글자 k fill | ✅ PASS | 글자 fill `0 0 0 0 k` ×3(앞번호·뒤번호·이름), 모두 CMYK k(흰글자) |
+| 3) 금지연산자(rg/g/RG/G/scn/sc) | ✅ PASS | 출력 페이지콘텐츠 전부 0개 (L·XL) |
+| 3) 재단선 device CMYK | ✅ PASS | `0 0.96 0.95 0 K` ×3 + stroke `2.0 w` ×3 (조각3) |
+| **4) 패턴선 제거 무손실(1색만)** | ✅ PASS | 빨강픽셀 141,377→0(100%제거), 파랑픽셀 27.66M→27.75M(보존+0.32%). inkcov M·Y만 감소·C·K보존. 빨강1색만 제거 |
+| **5) U넥 회귀 0** | ✅ PASS | U넥 preset cover_bleed=None·cutline=None→contain·재단선 미동작. _job_piece_transform 단위: None=contain(0.25)·1.0=cover(0.5)·1.03=0.515. 기본인자생략=contain |
+| 6) cover/블리드 정확성·clip유지 | ✅ PASS | cm sx=1.0303(블리드 흔적), W n ×3=Do ×3(조각마다 clip). 조각간 간격(x3217~4820)·좌상단코너 파랑 0개=조각밖 안 샘 |
+| 7) 불변제약(git diff) | ✅ PASS | 변경=job.py+preset.json+scratchpad만. compose/Piece/SizeLayout/parse_svg/verify_output/grade/build_layouts 시그니처 무수정, 해당파일 diff없음 |
+
+📊 종합: **12개 항목 전부 ✅ PASS / 0 FAIL**. 합성2(cover+블리드 흰틈제거) + 합성3(재단선 1줄 폴리곤·디자인패턴선 OCG콘텐츠삭제) 독립검증 통과. dev 구현기록과 일치 확인.
+⚠️ 참고(결함 아님): 전체 미리보기에서 넥 파임(목)·암홀 안쪽 흰색은 조각 밖(천이 없는 영역)이라 정상. 확대크롭으로 조각 내부엔 흰틈 0 확인.
 
 ## 테스트 결과 (tester · 2026-06-22 화면버그 5건 재검증 · 실브라우저 playwright)
 스크린샷: data/jobs/_qa_재검증_화면/ (01~07, results.json·results_drop.json)
@@ -183,3 +265,4 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 | 2026-06-22 | dev | 화면버그 5건 수정(work·patterns·settings·app.css) | ✅ 전건완료. #1 EPS 실생성(eps305KB·ZIP both pdf2/eps2)·UI out_format=both(playwright). #5 드롭 디자인·주문 동작+클릭회귀. #2 헤더2개 #3 비활성칩 #4 푸터해소. engine/api.py/_handoff 무수정 |
 | 2026-06-22 | debugger | 실제 OS 파일 드롭 버그 수정(work.html) | ✅ 근본원인=요소리스너만+document가드부재→자식span/패딩드롭 새탭으로샘(합성PASS속임). document레벨 가드+좌표 영역판정+no-cache meta로 수정. CDP 좌표드롭 검증(디자인/주문 API호출·밖드롭 새탭0·클릭회귀0). engine/api.py/main.py/_handoff 무수정 |
 | 2026-06-22 | dev | 합성1 자동매핑(reference.py 함수4+cli build-preset+preset pieces교정) | ✅ 자동산출=정답값 0pt오차(front svg1·back svg0·band svg2, y하한 2606→2938). OCG/MC3=패턴선 마킹추적+Form재귀. selftest PASS·parse_svg무수정. ast.parse/py_compile 통과. 공개API 무수정 |
+| 2026-06-22 | dev | 합성2+3(job.py cover/블리드+재단선1줄폴리곤+패턴선OCG제거 / preset.json) | ✅ 흰틈제거(cover 1.03)·재단선1줄(svg_polygon 2.0pt device CMYK)·디자인패턴선 OCG콘텐츠삭제(OFF무효 실증→폴백, 빨강1색만제거 무손실). 시각:앞뒤정합·재단선+너치1줄·꽉참. selftest/verify_output PASS·금지연산자0·U넥회귀0·both EPS OK. 공개API 무수정 |

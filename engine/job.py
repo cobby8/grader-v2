@@ -119,8 +119,8 @@ def _checks_to_dicts(checks) -> list:
 # ════════════════════════════════════════════════════════════════════════════
 
 
-def _job_piece_transform(design_region, poly, shrink_x, shrink_y):
-    """grade.py `_piece_transform` 과 '동일한' 방식 A 변환을 계산한다(복제).
+def _job_piece_transform(design_region, poly, shrink_x, shrink_y, bleed=None):
+    """grade.py `_piece_transform` 과 '동일한' 방식 A 변환을 계산한다(+선택적 cover/블리드).
 
     ⚠️ grade.py 의 _piece_transform 은 '_' 접두 내부 함수라 공개 API 가 아니다.
        불변 제약(grade.py 무수정)을 지키기 위해 그 로직을 여기에 그대로 복제한다.
@@ -129,6 +129,18 @@ def _job_piece_transform(design_region, poly, shrink_x, shrink_y):
     design_region : (dx0, dy0, dx1, dy1)  디자인에서 이 부위가 차지하는 영역.
     poly          : 이 조각의 패턴 윤곽(parse_svg 결과). poly.bbox 가 시트 위 위치.
     shrink_x/y    : 수축 보정 계수(보통 1.0).
+    bleed         : 블리드 배수. **기본 None|0 = contain(기존 동작·회귀 보호)**,
+                    bleed>0 이면 cover+블리드(작업2). bleed=1.0 은 'cover 만'(추가 확대 없음),
+                    1.03 은 cover 후 3% 더 키움(가장자리 흰 줄 방지).
+                    호출자(_build_precise_layout)는 preset.cover_bleed 가 있을 때만 그 값을 넘긴다
+                    → 키 없으면 None 이 와서 contain(U넥/grade 회귀 0).
+
+    왜 cover/블리드가 필요한가(흰 틈 제거):
+      contain(둘 중 작은 배율)은 디자인이 조각 안에 '다 들어오게' 맞춰 어깨/옆선/밴드 양끝에
+      디자인이 안 닿는 흰 틈이 생긴다. cover(둘 중 큰 배율)는 조각을 디자인으로 '꽉 채운다'
+      (밖으로 삐져나온 부분은 compose 의 clip(조각 윤곽)이 잘라낸다). bleed(>1)는 재단 여유
+      만큼 살짝 더 키워 가장자리 흰 줄까지 확실히 덮는다.
+
     반환: scale_translate(s, ox, oy)  — (s, 0, 0, s, ox, oy) 행렬 튜플.
     """
     dx0, dy0, dx1, dy1 = design_region
@@ -137,12 +149,21 @@ def _job_piece_transform(design_region, poly, shrink_x, shrink_y):
     dw, dh = (dx1 - dx0), (dy1 - dy0)   # 디자인 영역 크기
     pw, ph = (px1 - px0), (py1 - py0)   # 조각 크기
 
-    # 등방 contain 배율(둘 중 작은 쪽) × shrink 보정 — grade.py 와 완전 동일.
-    s = min(pw / dw, ph / dh) * min(shrink_x, shrink_y)
-
-    # 디자인 영역 좌하단 → 조각 좌하단으로 옮기는 오프셋.
-    ox = px0 - s * dx0
-    oy = py0 - s * dy0
+    if bleed is None or bleed <= 0:
+        # ── 기존 contain 경로(U넥/grade 회귀 보호): 둘 중 '작은' 배율. ──
+        #    grade.py _piece_transform 과 한 글자도 다르지 않게 유지.
+        s = min(pw / dw, ph / dh) * min(shrink_x, shrink_y)
+        ox = px0 - s * dx0
+        oy = py0 - s * dy0
+    else:
+        # ── cover + 블리드(작업2): 둘 중 '큰' 배율 × 블리드. 조각을 디자인으로 꽉 채움. ──
+        #    s = max(조각폭/영역폭, 조각높이/영역높이) × max(shrink) × bleed
+        #    오프셋은 '중앙 정렬': 조각 중심에 디자인 영역 중심이 오도록 평행이동.
+        #      ox = px0 + (pw - s*dw)/2 - s*dx0   (pw-s*dw 는 음수 → 양쪽으로 균등 오버플로)
+        #      oy = py0 + (ph - s*dh)/2 - s*dy0
+        s = max(pw / dw, ph / dh) * max(shrink_x, shrink_y) * float(bleed)
+        ox = px0 + (pw - s * dw) / 2.0 - s * dx0
+        oy = py0 + (ph - s * dh) / 2.0 - s * dy0
     return scale_translate(s, ox, oy)
 
 
@@ -178,6 +199,119 @@ def _wrap_design_ops(transform, ops: str) -> str:
 #        0개일 수 있다. 이때는 경고만 남기고(0개 보존=정상), 재단선이 살아있는 소스가
 #        들어오면 동일 코드가 자동으로 보존한다(색·좌표·허용오차는 전부 preset/소스에서).
 # ════════════════════════════════════════════════════════════════════════════
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 작업3② — 디자인 '패턴선' OCG 콘텐츠 제거 (두 줄 방지의 핵심)
+#
+#   왜 OCG OFF 가 아니라 '콘텐츠 삭제'인가(실증):
+#     compose 는 디자인 페이지를 Form XObject(as_form_xobject)로 임베드하면서 Root 의
+#     OCProperties 를 복사하지 않는다. 그래서 base 디자인에서 패턴선 OCG 를 D.OFF 로 꺼도
+#     출력 PDF 에는 OCProperties 정의 자체가 없어 뷰어/PyMuPDF 가 패턴선을 '그냥 표시'한다
+#     (OCG OFF 무효 — 실측 확인). 결과: 디자인 패턴선 + 우리가 그린 재단선 = 두 줄.
+#     → 근본 해결: base 디자인의 페이지 콘텐츠에서 '/OC /MCx BDC … EMC'(패턴선 레이어) 구간
+#       자체를 잘라낸다. 그러면 Form 안에 패턴선 ops 가 아예 없어 어떤 뷰어에서도 안 보인다.
+#
+#   안전성(이 템플릿 구조 기준):
+#     flatten 후 페이지 콘텐츠의 BDC/EMC 는 톱레벨·비중첩(각 레이어가 BDC…EMC 1구간).
+#     그래서 '대상 OCG 를 가리키는 /OC /MCx BDC' 부터 짝 맞는 EMC 까지'만 토큰 단위로 제거하면
+#     다른 레이어(몸판/요소/엠블럼)는 그대로 보존된다. 중첩이 있어도 깊이 카운트로 짝을 맞춘다.
+# ════════════════════════════════════════════════════════════════════════════
+
+
+def _ocg_name(ocg) -> str:
+    """OCG 의 /Name 을 사람이 읽을 문자열로 디코딩한다(UTF-16-BE BOM/일반 모두 허용)."""
+    try:
+        raw = bytes(ocg.Name)
+    except Exception:
+        return ""
+    if raw[:2] == b"\xfe\xff":          # UTF-16-BE BOM
+        s = raw.decode("utf-16-be", errors="ignore")
+    elif raw[:2] == b"\xff\xfe":        # UTF-16-LE BOM
+        s = raw.decode("utf-16-le", errors="ignore")
+    else:
+        s = raw.decode("utf-8", errors="ignore")
+    return s.lstrip("﻿")
+
+
+def hide_design_cutline_layer(design_pdf: str, out_pdf: str,
+                              layer_names=("패턴선", "재단선"),
+                              page_index: int = 0) -> dict:
+    """디자인 PDF 의 페이지 콘텐츠에서 '패턴선/재단선' OCG 마킹 구간을 통째로 제거한다.
+
+    절차:
+      1) 페이지 Resources/Properties 에서 layer_names 에 해당하는 OCG 의 마킹이름(/MCx) 수집.
+      2) 페이지 콘텐츠 토큰을 훑어 '/OC /MCx BDC' 부터 짝 EMC 까지 구간을 건너뛰고 나머지만 보존.
+      3) 보존 토큰으로 콘텐츠 스트림을 재작성해 out_pdf 로 저장(다른 색·레이어 무손실).
+
+    반환: {"removed_layers": [...], "removed_spans": n, "found": bool}
+    실패/대상없음이면 found=False(호출자가 원본을 그대로 쓰게).
+    """
+    info = {"removed_layers": [], "removed_spans": 0, "found": False}
+    pdf = pikepdf.open(design_pdf)
+    try:
+        page = pdf.pages[page_index]
+        res = page.get("/Resources")
+        props = res.get("/Properties") if res is not None else None
+        if not props:
+            pdf.save(out_pdf)
+            return info
+        # 1) 대상 OCG 의 마킹이름(/MCx) 집합 구성.
+        target_mc = set()
+        for mc_name in list(props.keys()):
+            ocg = props[mc_name]
+            nm = _ocg_name(ocg)
+            if nm in layer_names:
+                target_mc.add(str(mc_name))   # 예: "/MC3"
+                if nm not in info["removed_layers"]:
+                    info["removed_layers"].append(nm)
+        if not target_mc:
+            pdf.save(out_pdf)
+            return info
+
+        # 2) 콘텐츠 토큰을 훑어 대상 BDC…EMC 구간을 제거.
+        from pikepdf import ContentStreamInstruction, unparse_content_stream
+        instrs = list(parse_content_stream(page))
+        kept = []
+        skip_depth = 0           # >0 이면 현재 대상 OCG 구간 안(제거 중)
+        marker_depth = 0         # 대상 구간 안에서의 중첩 BDC/EMC 카운트
+        spans = 0
+        for operands, op in instrs:
+            o = str(op)
+            if skip_depth == 0:
+                # 대상 BDC(/OC /MCx) 진입 판정.
+                if o == "BDC" and len(operands) >= 2 and str(operands[0]) == "/OC" \
+                        and str(operands[1]) in target_mc:
+                    skip_depth = 1
+                    marker_depth = 1
+                    spans += 1
+                    continue   # 이 BDC 토큰 자체도 버린다.
+                kept.append((operands, op))
+            else:
+                # 제거 구간 내부: 중첩 BDC/BMC 는 깊이+1, EMC 는 -1. 0 되면 구간 종료.
+                if o in ("BDC", "BMC"):
+                    marker_depth += 1
+                elif o == "EMC":
+                    marker_depth -= 1
+                    if marker_depth == 0:
+                        skip_depth = 0   # 짝 EMC 까지 모두 버리고 구간 종료.
+                # 구간 안 토큰은 전부 버린다(보존 안 함).
+
+        if spans == 0:
+            pdf.save(out_pdf)
+            return info
+
+        # 3) 보존 토큰으로 콘텐츠 재작성.
+        new_instrs = [ContentStreamInstruction(ops, pikepdf.Operator(str(op)))
+                      for ops, op in kept]
+        new_data = unparse_content_stream(new_instrs)
+        page.Contents = pdf.make_stream(new_data)
+        info["removed_spans"] = spans
+        info["found"] = True
+        pdf.save(out_pdf)
+        return info
+    finally:
+        pdf.close()
 
 
 def _mat_mul(m1, m2):
@@ -483,9 +617,42 @@ def _load_glyph_source(preset: dict, glyph_source, warnings) -> Optional[dict]:
     return None
 
 
+def _polygon_cutline_ops(points, color_cmyk, stroke_width) -> str:
+    """조각 윤곽 points(시트 절대좌표, 너치 포함)를 빨강 1줄 stroke ops 로 그린다(작업3①).
+
+    왜 이 방식인가(두 줄 방지):
+      디자인 PDF 안의 빨간 패턴선을 '추출'해 다시 그리면, 디자인 자체의 패턴선(OCG)과
+      추출본이 겹쳐 '두 줄'이 될 수 있다. 그래서 디자인 패턴선은 OCG 콘텐츠 삭제로 없애고,
+      재단선은 우리가 가진 '조각 윤곽(parse_svg 결과 = 너치 포함 폴리곤)'을 직접 1회만 그린다.
+      poly.points 는 이미 시트 절대좌표(parse_svg 가 flip_y 로 PDF 좌표화)라 transform 으로
+      감쌀 필요 없이 페이지 콘텐츠에 그대로 그리면 된다(클립 밖 = extra_ops → 너치 안 잘림).
+
+    color_cmyk   : device K 4채널(예: [0,0.96,0.95,0]). 무손실로 그대로 K 지정.
+    stroke_width : 선폭(pt). preset.cutline.stroke_width(기본 2.0).
+    반환         : "q … K … w … m,l … h S Q" 형태의 1줄 stroke 블록(상태 격리).
+    """
+    if not points or len(points) < 3:
+        return ""
+    kr, kg, kb, kk = [float(v) for v in color_cmyk]
+    parts = [f"{points[0][0]:.4f} {points[0][1]:.4f} m"]
+    for (x, y) in points[1:]:
+        parts.append(f"{x:.4f} {y:.4f} l")
+    # h = 윤곽을 닫는다(시작점으로 복귀) → 닫힌 재단선 1줄.
+    body = (
+        "q\n"
+        f"{kr:.4f} {kg:.4f} {kb:.4f} {kk:.4f} K\n"
+        f"{float(stroke_width):.4f} w\n"
+        + "\n".join(parts) + "\n"
+        "h\n"
+        "S\n"
+        "Q"
+    )
+    return body
+
+
 def _build_precise_layout(preset: dict, size_def: dict, *,
                           number=None, name=None, warnings=None,
-                          cutline_strokes=None) -> SizeLayout:
+                          cutline_strokes=None, cover_bleed=None) -> SizeLayout:
     """새 area(front/back_number_area·back_name_area)로 정밀배치한 SizeLayout 1개 생성.
 
     동작은 build_layouts(방식 A)와 같지만, 글자 주입만 place_number/place_name 으로
@@ -522,7 +689,9 @@ def _build_precise_layout(preset: dict, size_def: dict, *,
                 f"조각 '{pdef.get('id','?')}' svg_index={idx} 가 SVG 조각 수({len(polys)})를 벗어남"
                 f" (사이즈 {size_def['name']}, 파일 {size_def['pattern_file']})")
         poly = polys[idx]
-        transform = _job_piece_transform(pdef["design_region_pt"], poly, shrink_x, shrink_y)
+        # cover_bleed 가 지정되면(작업2) cover+블리드, 아니면 기존 contain(bleed=None→contain).
+        transform = _job_piece_transform(pdef["design_region_pt"], poly,
+                                         shrink_x, shrink_y, bleed=cover_bleed)
         piece_transforms.append(transform)
         layout_pieces.append(
             Piece(outline=poly.points, transform=transform,
@@ -582,10 +751,27 @@ def _build_precise_layout(preset: dict, size_def: dict, *,
     _inject("back_number_area", "number", number)
     _inject("back_name_area", "name", name)
 
-    # ── 4) (이슈4) 빨간 재단선 주입: 디자인좌표 stroke ops 를 매핑 조각 transform 으로
-    #       감싸 extra_ops 에 누적한다. 글자와 '같은 경로'라 디자인 위 정위치에 박힌다.
-    #       extra_ops 는 q…Do…Q 의 '밖'(클립 외부)이라 너치가 조각 경계를 넘어도 안 잘린다.
-    if cutline_strokes:
+    # ── 4) 빨간 재단선 주입(작업3) ──
+    #    방식 선택: cutline.draw_from == "svg_polygon" 이면 '조각 윤곽(poly.points)'을 직접
+    #    빨강 1줄로 그린다(두 줄 방지·너치 포함). 그렇지 않으면(=기존 동작) 디자인에서 추출한
+    #    빨간 stroke(cutline_strokes)를 조각 transform 으로 감싸 그린다.
+    cutline_cfg = preset.get("cutline") or {}
+    draw_from = cutline_cfg.get("draw_from")
+    if draw_from == "svg_polygon":
+        # ── 작업3①: 조각 윤곽 = 재단선. poly.points 는 이미 시트 절대좌표라 transform 불필요.
+        #    각 조각의 윤곽을 빨강 1줄로 그린다(너치 포함, 클립 밖이라 너치 안 잘림).
+        color = cutline_cfg.get("color_cmyk", [0, 0.96, 0.95, 0])
+        sw = float(cutline_cfg.get("stroke_width", 2.0))
+        for li, pdef in enumerate(pieces_def):
+            poly = polys[pdef["svg_index"]]
+            ops = _polygon_cutline_ops(poly.points, color, sw)
+            if not ops:
+                continue
+            tp = layout_pieces[li]
+            tp.extra_ops = (tp.extra_ops + "\n" + ops) if tp.extra_ops else ops
+    elif cutline_strokes:
+        # ── 기존(추출) 방식: 디자인좌표 stroke ops 를 매핑 조각 transform 으로 감싸 누적. ──
+        #    extra_ops 는 q…Do…Q 의 '밖'(클립 외부)이라 너치가 조각 경계를 넘어도 안 잘린다.
         cut_map = _map_strokes_to_pieces(cutline_strokes, pieces_def, warnings)
         for pidx, sts in cut_map.items():
             tp = layout_pieces[pidx]
@@ -729,16 +915,55 @@ def run_job(preset: str,
         # 평탄화 자체 실패는 치명적이지 않게 흘린다(원본으로 진행 — verify 가 막아준다).
         warnings.append(f"[평탄화] 실패(원본 디자인으로 진행): {e}")
 
+    # ── (작업3②) 디자인 '패턴선' OCG 콘텐츠 제거 → base 디자인에서 패턴선이 사라진다.
+    #    왜 여기서(평탄화본에): 모든 선수가 같은 base 를 공유하므로 1회만 처리하면 된다.
+    #    cutline.hide_design_cutline_layer 가 true 일 때만(없으면 U넥 등 기존 동작 보존).
+    #    OCG OFF 는 compose 가 OCProperties 를 버려 무효 → 콘텐츠 삭제로 확실히 없앤다.
+    _cutline_cfg0 = preset_dict.get("cutline") or {}
+    hide_info = None
+    if _cutline_cfg0.get("hide_design_cutline_layer"):
+        try:
+            hidden_path = os.path.join(out_dir, "_design_no_cutline.pdf")
+            hide_info = hide_design_cutline_layer(base_design, hidden_path)
+            if hide_info.get("found"):
+                base_design = hidden_path  # 패턴선 없는 base 로 교체
+                warnings.append(
+                    f"[패턴선] 디자인 OCG 레이어 제거: {hide_info['removed_layers']} "
+                    f"({hide_info['removed_spans']}구간) — 디자인 패턴선 비표시(두 줄 방지).")
+            else:
+                warnings.append(
+                    "🟡 [패턴선] 디자인에서 '패턴선/재단선' OCG 마킹을 찾지 못해 제거를 건너뜁니다"
+                    "(레이어명/구조 확인 필요). 우리 재단선만 1줄로 그려집니다.")
+        except Exception as e:
+            warnings.append(f"🟡 [패턴선] OCG 레이어 제거 실패(디자인 패턴선 잔존 가능): {e}")
+
     # 정밀배치 경로 사용 여부(새 area 가 하나라도 있으면 place_*/감싸기 경로). 없으면 폴백.
     use_precise = _has_precise_areas(preset_dict)
+
+    # ── (작업2) cover/블리드 배수 결정: preset.cutline.bleed 또는 cover_bleed 키가 있을 때만. ──
+    #    왜 키가 있을 때만: 없으면(U넥 등) bleed=None → _job_piece_transform 이 기존 contain
+    #    경로를 타 회귀가 0 이 된다(U넥 보호). cover/블리드는 '명시적 opt-in'.
+    cover_bleed = preset_dict.get("cover_bleed")
+    if cover_bleed is None:
+        cover_bleed = _cutline_cfg0.get("bleed")  # cutline.bleed 도 허용(방침 a)
+    cover_bleed = float(cover_bleed) if cover_bleed else None
+    if cover_bleed:
+        warnings.append(f"[블리드] cover+블리드 적용(배수 {cover_bleed}) — 디자인으로 조각 꽉 채움.")
 
     # ── (이슈4) 빨간 재단선 1회 추출 (preset 에 cutline 키가 있을 때만). ──
     #    왜 한 번만: 디자인은 모든 선수가 공유하므로 stroke 추출은 1회로 충분(성능).
     #    cutline 키가 없으면(U넥 등) 추출 자체를 건너뛰어 '기존 동작' 그대로 유지한다.
-    cutline_strokes = []          # 매핑 가능한 디자인좌표 stroke 목록
+    cutline_strokes = []          # 매핑 가능한 디자인좌표 stroke 목록(추출 방식에서만 채움)
     cutline_cfg = preset_dict.get("cutline")
-    cutline_mapped_expected = 0   # '재단선 보존' 체크용 기대 수(조각에 매핑된 stroke 수)
-    if cutline_cfg:
+    cutline_mapped_expected = 0   # '재단선 보존' 체크용 기대 수
+    if cutline_cfg and cutline_cfg.get("draw_from") == "svg_polygon":
+        # ── (작업3①) 폴리곤 방식: 디자인에서 추출하지 않고 조각 윤곽을 직접 그린다.
+        #    재단선 보존 기대 수 = 조각 개수(조각당 빨강 1줄). 추출(_extract_red_strokes) 미호출.
+        cutline_mapped_expected = len(preset_dict.get("pieces", []))
+        warnings.append(
+            f"[재단선] svg_polygon 방식 — 조각 윤곽 {cutline_mapped_expected}개를 빨강 1줄로 그립니다"
+            f"(stroke {cutline_cfg.get('stroke_width', 2.0)}pt, 디자인 추출 생략).")
+    elif cutline_cfg:
         red = cutline_cfg.get("color_cmyk", [0, 0.96, 0.95, 0])
         tol = float(cutline_cfg.get("match_tol", 0.05))
         try:
@@ -841,7 +1066,7 @@ def run_job(preset: str,
                 layout = _build_precise_layout(
                     preset_dict, size_map[size],
                     number=number, name=name, warnings=row_warns,
-                    cutline_strokes=cutline_strokes)
+                    cutline_strokes=cutline_strokes, cover_bleed=cover_bleed)
             else:
                 # 폴백: 기존 rel_bbox(number_area/name_area) 기반 build_layouts(방식 A).
                 layouts = build_layouts(sized, base_design,

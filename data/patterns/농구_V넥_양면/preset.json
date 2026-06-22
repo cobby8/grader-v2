@@ -184,8 +184,12 @@
       0.96,
       0.95,
       0
-    ]
+    ],
+    "stroke_width": 2.0,
+    "draw_from": "svg_polygon",
+    "hide_design_cutline_layer": true
   },
+  "cover_bleed": 1.03,
   "shrink": {
     "x": 1.0,
     "y": 1.0
