@@ -537,7 +537,9 @@ def cmd_number_glyphs(args) -> int:
             continue
         adv = g.get("advance")
         adv_s = f" · advance {adv}pt" if adv else ""
-        print(f"  '{ch}': 폭 {g['width']}pt · cap_height {g['cap_height']}pt{adv_s} · "
+        lsb = g.get("lsb")
+        lsb_s = f" · lsb {lsb}pt" if lsb is not None else ""
+        print(f"  '{ch}': 폭 {g['width']}pt · cap_height {g['cap_height']}pt{adv_s}{lsb_s} · "
               f"subpath {len(g['subpaths'])}개")
     print(f"JSON 저장: {args.out}")
     return 0 if len(glyphs) == len(args.order) else 1

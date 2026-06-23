@@ -131,6 +131,42 @@ def _font_advance_ratio(font_path: str):
         return None
 
 
+def _font_glyph_lsbs(font_path: str):
+    """폰트에서 '글자별 lsb(left side bearing, 폰트 단위)'를 dict 로 읽어 온다.
+
+    왜 필요한가(배번 "1" 치우침 원인):
+      · advance(글자칸 폭)는 HY헤드라인M 숫자가 모두 597 로 균일하지만, lsb(글자칸 왼쪽
+        끝에서 잉크 시작까지의 여백)는 글자마다 다르다. 예: '1'=108, '0'=56(폰트단위).
+      · 우리 글리프셋은 잉크 좌하단을 (0,0)으로 정규화해 lsb 정보를 잃었다. 그래서 모든
+        글자가 칸 왼쪽 끝(lsb=0)에 붙어 그려진다. 특히 '1'(원래 lsb 큼)은 본래 칸 안쪽
+        오른쪽에 좁게 그려져야 하는데 왼쪽에 치우쳐 보이고 다음 글자와 너무 붙는다.
+      · 그래서 글자별 lsb(폰트단위)를 읽어, 렌더 시 advance 와 같은 글리프 pt 단위로
+        환산해(lsb_pt = lsb_units × advance_pt / 597) 잉크를 칸 안 제 위치로 밀어 준다.
+
+    반환: {"1": 108.0, "2": 51.0, ...} (폰트단위). 못 구하면 None.
+    """
+    try:
+        from fontTools.ttLib import TTFont
+    except Exception:
+        return None
+    if not font_path or not os.path.exists(font_path):
+        return None
+    try:
+        f = TTFont(font_path)
+        cmap = f.getBestCmap()
+        hmtx = f["hmtx"]
+        out: Dict[str, float] = {}
+        for ch in "1234567890":
+            gname = cmap.get(ord(ch))
+            if gname is None:
+                continue
+            aw, lsb = hmtx[gname]          # (advance width, left side bearing) 폰트 단위
+            out[ch] = float(lsb)
+        return out if out else None
+    except Exception:
+        return None
+
+
 def extract_number_glyphs(
     src: str,
     artbox: List[float] = [585, 4673, 3923, 5211],
@@ -284,6 +320,12 @@ def extract_number_glyphs(
     #    ratio = 폰트 advance ÷ 대표 잉크높이 ≈ 0.6611(HY헤드라인M).
     ratio_info = _font_advance_ratio(font) if font else None
     adv_ratio = ratio_info[0] if ratio_info else None
+    rep_advance = ratio_info[1] if ratio_info else None   # 폰트 대표 advance(597)
+
+    # ── (배번 "1" 보정) 글자별 lsb(폰트단위) — 폰트 주어졌을 때만. ──
+    #    lsb_pt = lsb_units × (그 글자의 advance_pt / rep_advance)
+    #           로 advance 와 같은 글리프 pt 단위로 환산한다.
+    glyph_lsbs = _font_glyph_lsbs(font) if font else None
 
     glyphs: Dict[str, dict] = {}
     cap_heights: List[float] = []
@@ -306,6 +348,13 @@ def extract_number_glyphs(
         #   비율이 없으면(폰트 미지정/실패) 키를 넣지 않음 → 렌더가 width 로 폴백.
         if adv_ratio is not None and cap_h > 0:
             entry["advance"] = round(cap_h * adv_ratio, 4)
+        # lsb(글자칸 왼쪽 여백) = lsb_units × (이 글자 advance_pt / rep_advance).
+        #   → 렌더 시 잉크를 +lsb*s 만큼 우측으로 밀어 칸 안 제 위치에 둔다(배번 "1" 보정).
+        #   비율/lsb 없으면(폰트 미지정·실패) 키를 넣지 않음 → 렌더가 0 폴백.
+        if (glyph_lsbs is not None and adv_ratio is not None and rep_advance
+                and cap_h > 0 and ch in glyph_lsbs):
+            adv_pt = cap_h * adv_ratio
+            entry["lsb"] = round(glyph_lsbs[ch] * (adv_pt / rep_advance), 4)
         glyphs[ch] = entry
 
     cap_heights.sort()
@@ -492,8 +541,12 @@ def render_glyph_number_ops(
         b = _glyph_ink_bounds(g)
         if b is None:
             continue
-        ink_min_x = min(ink_min_x, b[0] * s + dx0)
-        ink_max_x = max(ink_max_x, b[2] * s + dx0)
+        # lsb(글자칸 왼쪽 여백)만큼 잉크를 우측으로 민다(배번 "1" 보정).
+        #   실제 렌더(gx)와 동일한 식이라 중앙정렬 계산이 어긋나지 않는다.
+        #   구버전 글리프셋(lsb 없음)은 0 폴백 → 기존 동작 그대로.
+        lsb = g.get("lsb", 0.0) * s
+        ink_min_x = min(ink_min_x, b[0] * s + dx0 + lsb)
+        ink_max_x = max(ink_max_x, b[2] * s + dx0 + lsb)
         ink_min_y = min(ink_min_y, b[1] * s)
         ink_max_y = max(ink_max_y, b[3] * s)
 
@@ -508,7 +561,9 @@ def render_glyph_number_ops(
     # ── 자릿별 경로 누적(상대 dx0 + shift_x = 최종 시트 x, baseline_y = 최종 시트 y). ──
     blocks: List[str] = []
     for g, dx0 in placed:
-        gx = dx0 + shift_x
+        # gx = 임시배치 시작점 + lsb(칸 왼쪽 여백) + 전체 중앙정렬 보정.
+        #   lsb 가 잉크 bbox 측정에도 동일 반영돼 중앙정렬은 그대로 유지된다.
+        gx = dx0 + g.get("lsb", 0.0) * s + shift_x
         lines: List[str] = []
         for sub in g["subpaths"]:
             for seg in sub:

@@ -53,6 +53,33 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 
 ## 구현 기록 (developer)
 
+### 배번 "1" lsb 보정 (2026-06-22)
+📝 구현한 기능: 번호 글리프셋에 글자별 **lsb(left side bearing, 칸 왼쪽 여백)** 추가 — 특히 "1"이 칸 왼쪽 끝에 붙어 치우치던 문제 해소. 자간(advance)은 균일(597)이지만 lsb는 글자마다 다른데('1'=108, '0'=56 폰트단위) 잉크 좌하단 정규화로 그 정보가 사라졌던 게 원인.
+
+- **원인**: extract 가 잉크 좌하단(x0)을 (0,0)으로 정규화 → 모든 글자가 칸 왼쪽 끝(lsb=0)에 붙음. '1'(원래 lsb 큼)은 본래 칸 안쪽에 좁게 그려져야 하나 왼쪽 치우침 + 다음 글자와 너무 붙음.
+- **해결(lsb식)**: 폰트 hmtx에서 글자별 lsb(폰트단위) 읽어 `lsb_pt = lsb_units × (그 글자 advance_pt / 597)` 로 advance 와 같은 글리프 pt 단위 환산. 렌더는 `gx = dx0 + lsb*s + shift_x`(잉크 bbox 측정도 동일 +lsb*s → 중앙정렬 보존). lsb 없으면 0 폴백.
+- **검증값(폰트 일치)**: '1'→64.4152, '0'→33.4005, '2'→30.4183 (계획 기대값 정확 일치).
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| engine/number_glyphs.py | `_font_glyph_lsbs()` 헬퍼 추가(hmtx 글자별 lsb) / extract 에 glyph별 lsb 저장(rep_advance 597 분모) / render gx·잉크bbox 둘 다 +lsb*s | 수정 |
+| engine/cli.py | number-glyphs 출력에 lsb 표시 | 수정 |
+| data/patterns/농구_V넥_양면/number_glyphs.json | --font 재추출(subpath/width/advance 동일, lsb만 추가) | 재생성 |
+
+💡 tester 참고:
+- 테스트 방법: `python -m engine job --preset data/patterns/농구_V넥_양면/preset.json --design design_source/연세대_V넥_빈템플릿_본체포함_XL.ai --order _glyphtest/order_lsb.xlsx --out _glyphtest/out_lsb --split per_player --format pdf` → preview PNG.
+- 정상 동작: "1" 잉크가 lsb만큼 우측 이동(치우침 해소), 다음 글자 간격 정상. 한자리/세자리 중앙정렬 유지.
+- **폰트 대비 자간 수치(cap200, pitch=글자중심간격, 우리/폰트 비율)**: "11" pitch 132.23=132.23 차이 **0.0**(비율 1.0). "10" 148.3 vs 141.8 차이 6.6(비율 1.047). "123" [146.5,130.3] vs [142.3,131.8] 차이 [4.2,-1.5](비율 0.99~1.03). "20" 134.1 vs 131.7 차이 2.4(비율 1.018). 모두 ±소오차 일치(advance 균일356 vs 폰트597 차이서 미세편차, 정상).
+- "1" 잉크 시작 xmin = lsb*s(=23.92pt @cap200) 정확히 우측 이동.
+- 회귀: selftest 종합 PASS(합성24회 무손실·inkcov편차0). job verify_pass 4/4. 구버전(lsb없음) 폴백 크래시0(0 폴백, "10"/"123" lsb효과 반영, "11"은 양쪽 동일lsb라 shift_x 상쇄=구버전과 동일).
+- 번호 글자: 페이지레벨 device CMYK `k` fill 3회·`f` 3회, **금지연산자 0**. (PDF 전체 16개 금지연산자는 디자인 본체 Form XObject 내부 색=원본 무손실 보존분, 주입글자 아님.)
+- PNG 경로(11·123 포함): `_glyphtest/out_lsb/preview/XL_11_KIM.png`, `XL_123_LEE.png`, `XL_20_PARK.png`, `XL_07_CHOI.png`. cowork 모음: `_glyphtest/cowork_lsb/`.
+- 주의 입력: 폰트 미지정 추출 시 lsb 키 없음(0 폴백). 단자리("7")는 lsb가 shift_x로 상쇄돼 중앙정렬 그대로.
+
+⚠️ reviewer 참고:
+- 불변 제약 준수: place_number/place_name/compose/Piece/parse_svg/verify_output 시그니처 무수정(extract/cli만 기존 인자 재사용, 신규 인자 추가 없음). CMYK 무손실. shift_x 중앙정렬 유지(잉크bbox에도 동일 lsb 반영). preset 얕은복제 무영향. ast.parse/py_compile 통과.
+- 봐줬으면: render 의 `g.get("lsb",0.0)*s` 폴백 분기(잉크bbox·gx 두 곳 동일 적용 일치성), extract 의 lsb 저장 가드(glyph_lsbs/adv_ratio/rep_advance 전부 있을 때만).
+
 ### 배번 자간 수정 (2026-06-22)
 📝 구현한 기능: 번호 글리프셋의 글자 자간(advance) 복원 — 기존엔 잉크폭(width)만큼만 전진해 "20"의 2와 0이 다닥다닥 붙었음. 폰트(HY헤드라인M)는 글자칸(advance)에 좌우 여백을 포함하는데 글리프셋엔 그 정보가 없던 게 원인.
 
@@ -123,3 +150,4 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 | 2026-06-22 | dev/test/rev | 합성2+3 cover/블리드+재단선1줄+OCG제거 | tester12/12·rev통과. 앞뒤정합·꽉참·재단선1줄·빨강1색만제거 |
 | 2026-06-22 | pm | 합성1·2·3 커밋 | 푸시 예정 |
 | 2026-06-22 | dev | 배번 자간 수정(advance 복원, 폰트비율 0.6611) | "20" pitch/잉크폭 1.17~1.19·2-0분리·selftest PASS·verify 2/2 |
+| 2026-06-22 | dev | 배번 "1" lsb 보정(글자별 lsb=units×advpt/597) | '1'→64.4·'0'→33.4·'2'→30.4 폰트일치, "11"자간차0.0·"20/7"회귀0, selftest PASS·verify 4/4 |
