@@ -1,0 +1,45 @@
+# Docker 이미지에 넣지 않을 것들(이미지 경량화 + 비밀/대용량 차단)
+#
+# 왜 중요한가(비유): 상자(이미지)에 안 쓸 짐을 빼면 가볍고 빨리 뜨고,
+#   실수로 비밀(.env)·대용량(.ai·작업산출물)이 이미지에 섞이는 사고를 막는다.
+
+# 작업 산출물·업로드 임시(런타임에 새로 생성됨 — 이미지에 불필요)
+data/jobs/
+data/uploads/
+data/settings.json
+
+# 가상환경(컨테이너는 새로 pip install 함)
+.venv/
+venv/
+env/
+
+# 테스트/실험 산출물(대용량, 배포 불필요)
+_abtest/
+_selftest_out/
+_build_out/
+_grade_out*/
+_glyphtest/
+grading_compare/
+
+# 디자인 원본(.ai 바이너리, 대용량 — 배포 런타임에 불필요)
+design_source/
+
+# 비밀 환경변수(절대 이미지에 포함 금지 — Render env 로만 주입)
+.env
+.env.local
+.env.*.local
+
+# 버전관리/캐시/에디터 부산물
+.git/
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+.claude/
+*.swp
+Thumbs.db
+.DS_Store
+
+# 문서·핸드오프 원본(서빙은 webapp/static 복사본을 쓰므로 원본은 이미지에 불필요)
+_handoff/
+*.md

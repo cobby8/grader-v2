@@ -19,3 +19,9 @@
 - **발견자**: developer/reviewer
 - **내용**: preset.json·디자인·패턴 등 입력은 사용 전에 파일존재/JSON파싱/필수키/값 길이를 먼저 검사하고, 실패 시 비개발자가 이해할 한글 메시지로 즉시 중단한다. 바이브 코더가 잘못된 입력을 바로 알아채게 하기 위함.
 - **참조횟수**: 0
+
+### [2026-06-25] _handoff↔webapp/static 비대칭 — 재복사 시 API/인증 코드 소실 주의
+- **분류**: convention
+- **발견자**: reviewer
+- **내용**: 규칙상 webapp/static은 _handoff/grader-v2-static 복사본(원본 무수정, 갱신시 재복사). 그러나 **fetch(/api) 호출·apiFetch 인증 래퍼는 webapp/static 화면(work/patterns/settings/history)에만 있고 _handoff 원본엔 없다**(이전 단계에서 static에 직접 API연동 추가, 원본 역반영 안 됨). → _handoff를 그대로 재복사하면 동작중인 API연동+인증이 통째로 사라지는 회귀 발생. **대응**: ①가급적 _handoff 원본에 동일 코드를 역반영해 비대칭을 해소하거나, ②재복사 전 반드시 webapp/static의 apiFetch·fetch 블록을 보존(diff 확인)한다. login.html(신규)만 원본=복사본 동일 유지 중.
+- **참조횟수**: 0

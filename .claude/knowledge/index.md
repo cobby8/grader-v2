@@ -6,10 +6,11 @@
 | architecture.md | 7 | 2026-06-22 |
 | errors.md | 8 | 2026-06-25 |
 | conventions.md | 3 | 2026-06-15 |
-| decisions.md | 11 | 2026-06-25 |
+| decisions.md | 12 | 2026-06-25 |
 | lessons.md | 1 | 2026-06-15 |
 
 ## 최근 추가된 지식 (최근 5건)
+- [2026-06-25] decisions: 배포 Phase1 설계 — Docker+Render+Supabase Auth. GS_BIN env를 eps.find_ghostscript 1순위(로컬 폴백 보존), 인증 Dependency는 /api/health만 제외, 공통 apiFetch 래퍼로 Authorization 부착+401 리다이렉트, _handoff 원본→webapp/static 복사. 엔진/run.bat 무수정·비밀키 레포금지·--workers 1 유지
 - [2026-06-25] decisions/errors: 합성 흰틈/극소형미달 해소 — A 본체색 채움(Piece.bg_cmyk, run_job이 preset.body_fill>detect_background_cmyk>None 1회 결정, place_block이 클립 W n직후·Do앞 fill) + B 사이즈별 자동블리드(cover_bleed dict면 앞판 dev로 clamp(1+1.3dev,1.0,1.12) 단일값 등방). 함정: PDF `W n`은 경로 소비→클립영역 fill하려면 폴리곤 재경로 필수
 - [2026-06-22] decisions/errors: 합성 품질 근본수정 — 조각 자동매핑(디자인 OCG "패턴선" bbox=design_region, SVG 넥깊이로 앞/뒤 식별) / cover+블리드(흰틈 제거, preset 키 있을때만) / 재단선=SVG 폴리곤 1줄 / 디자인 패턴선 두줄방지는 OCG OFF 무효→콘텐츠 BDC…EMC 삭제(빨강1색만, 무손실)
 - [2026-06-22] errors: 브라우저 파일 드롭은 document 레벨 가드+좌표(getBoundingClientRect) 판정 필수. <button>+자식 요소에만 리스너 달면 자식/패딩 드롭이 새 탭으로 샘. playwright 합성 dispatchEvent는 타겟 직접이라 PASS여도 실 OS 드롭 보장 못 함

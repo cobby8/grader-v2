@@ -59,12 +59,22 @@ class EpsCheck:
 def find_ghostscript(settings_path: Optional[str] = None) -> Optional[str]:
     """사용할 Ghostscript 실행 경로를 결정한다(없으면 None).
 
-    탐색 순서(의뢰서 §2):
+    탐색 순서:
+      0) 환경변수 GS_BIN (배포·도커용 최우선). 예: GS_BIN=gs.
       1) settings_path (preset/settings 의 ghostscript_path) — 존재할 때만.
       2) 알려진 Windows 절대경로 후보(C:/Program Files/gs/...).
       3) PATH 의 gswin64c / gswin32c / gs.
     None 이면 호출부가 'EPS 건너뜀(경고)' 으로 처리한다(크래시 없음).
     """
+    # 0) 환경변수 GS_BIN — 배포(도커)에서 GS 경로를 강제 지정하는 최우선 분기.
+    #    왜 맨 앞인가(비유): 도커 안에는 'gs' 가 PATH 에 있고 Windows 절대경로는 없다.
+    #    배포 환경이 GS_BIN=gs 만 켜면 곧장 그걸 쓰도록 가장 먼저 본다.
+    #    ⚠️ 로컬 회귀 0: GS_BIN 을 안 켜면(=로컬 기본) 아래 기존 체인 그대로 동작한다.
+    #    shutil.which 로 실제 실행 가능한 경우에만 채택(없으면 폴백 계속).
+    env_gs = os.environ.get("GS_BIN")
+    if env_gs and shutil.which(env_gs):
+        return shutil.which(env_gs)
+
     # 1) 명시 설정 경로(최우선). 실제 파일이 있을 때만 채택한다.
     if settings_path:
         if os.path.exists(settings_path):

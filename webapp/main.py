@@ -12,12 +12,13 @@ from __future__ import annotations
 
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import state
-from .api import router as api_router
+from .api import router as api_router, public_router
+from .auth import require_auth
 
 app = FastAPI(
     title="STIZ grader-v2",
@@ -26,13 +27,29 @@ app = FastAPI(
 
 # ── /api 라우터 연결 ──
 # 데이터 API 를 먼저 붙인다. (정적 마운트보다 먼저 등록해 경로가 가려지지 않게.)
-app.include_router(api_router)
+#
+# 인증 게이트(배포 전용, 로컬은 무인증 통과):
+#   · public_router : /api/health — 무인증(Render 헬스체크가 토큰 없이 부른다).
+#   · api_router    : 나머지 모든 /api/* — require_auth 를 '전역' 으로 건다.
+#     (require_auth 는 GRADER_REQUIRE_AUTH 가 꺼져 있으면 검증 없이 통과 = 로컬 회귀 0)
+app.include_router(public_router)
+app.include_router(api_router, dependencies=[Depends(require_auth)])
 
 # ── 정적 화면 마운트 ──
 # webapp/static 폴더(핸드오프 복사본)를 /static 아래로 통째 서빙한다.
 # html=True 면 디렉터리 접근 시 index.html 을 자동으로 찾아 준다.
 STATIC_DIR = state.get_static_dir()
 app.mount("/static", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+
+
+@app.get("/login")
+def login():
+    """로그인 화면(login.html)으로 보낸다(무인증 정적 서빙).
+
+    배포에서 토큰이 없거나 만료되면 프런트가 이 주소로 보낸다. login.html 은
+    상대경로 자산(../app.css)을 쓰므로 work.html 과 같은 이유로 리다이렉트한다.
+    """
+    return RedirectResponse(url="/static/screens/login.html")
 
 
 @app.get("/")

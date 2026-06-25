@@ -13,6 +13,10 @@ fastapi==0.138.0
 uvicorn==0.49.0
 # 디자인/주문서 파일 업로드(multipart 폼) — 후속 단계 엔드포인트용
 python-multipart==0.0.32
+# 배포 인증(Supabase Auth): JWT(HS256) 토큰 검증 — GRADER_REQUIRE_AUTH 켜질 때만 사용
+pyjwt==2.10.1
+# 인증/외부 HTTP 호출용(향후 Supabase REST 연동 대비). 현재 토큰 검증은 로컬에서 수행
+httpx==0.28.1
 
 # 선택: Ghostscript(gswin64c) 설치 시 inkcov 색 교차검증 가능 (없어도 동작)
 # (pip 패키지가 아니라 별도 설치 프로그램이라 위 목록에 넣지 않음)

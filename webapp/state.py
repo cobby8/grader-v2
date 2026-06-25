@@ -33,7 +33,9 @@ UPLOADS_DIR = os.path.join(PROJECT_ROOT, "data", "uploads")      # 업로드 임
 SETTINGS_PATH = os.path.join(PROJECT_ROOT, "data", "settings.json")  # 설정 JSON
 
 # 서버가 띄워질 기본 포트(헬스체크 응답·브라우저 자동오픈에서 공통 사용).
-DEFAULT_PORT = 8000
+# 배포(Render 등)는 PORT 환경변수로 포트를 지정한다 → 있으면 그 값, 없으면 8000.
+# (로컬은 PORT 를 안 켜므로 기존 8000 그대로 = 회귀 0)
+DEFAULT_PORT = int(os.environ.get("PORT", 8000))
 
 # ── 설정 기본값 ──────────────────────────────────────────────────────────
 # 설정 JSON 이 아직 없을 때 돌려줄 안전한 기본값.

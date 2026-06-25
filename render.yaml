@@ -1,0 +1,30 @@
+# Render 배포 설정(Blueprint) — grader-v2 웹 도구
+#
+# 무엇인가(비유): "이 앱을 Render 에 이렇게 띄워 주세요" 라고 적은 신청서.
+#   Render 가 이 파일을 읽어 Docker 이미지를 빌드하고 서버를 띄운다.
+#
+# ⚠️ 비밀키는 여기에 '값' 을 적지 않는다(sync: false → Render 대시보드에서 직접 입력).
+#    레포에 올라가는 이 파일에는 '키 이름' 만 둔다.
+services:
+  - type: web
+    name: grader-v2
+    runtime: docker
+    plan: starter
+    # 헬스체크: Render 가 토큰 없이 부르는 무인증 엔드포인트여야 한다(/api/health).
+    #   여기에 인증 걸린 경로를 두면 부팅이 'unhealthy' 로 막힌다.
+    healthCheckPath: /api/health
+    envVars:
+      # ── 비밀/환경별 값(레포에 값 없음 — Render 대시보드에서 입력) ──
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      # ── 값 포함(비밀 아님) ──
+      - key: GS_BIN
+        value: gs
+      - key: GRADER_REQUIRE_AUTH
+        value: "1"

@@ -2,6 +2,11 @@
 <!-- 담당: planner-architect | 최대 30항목 -->
 <!-- "왜 A 대신 B를 선택했는지" 기술 결정의 배경과 이유를 기록 -->
 
+### [2026-06-25] 배포 Phase 1: Docker+Render+Supabase Auth 게이트 설계(GS env 우선·인증 끼움점·_handoff 복사규칙)
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: 로컬 전용 웹앱→인터넷 사내도구. **GS 경로 env화 끼움점**=`engine/eps.py:find_ghostscript` **맨 앞에 `os.environ.get("GS_BIN")` 최우선 분기** 추가(있고 shutil.which로 실행가능하면 즉채택). 이유: GS 호출 체인이 job.py→find_ghostscript 단일경유라 여기 1곳이면 EPS 전부 커버, 기존 폴백(settings_path→Windows절대경로→PATH)은 **로컬용으로 그대로 보존**(env 미설정 로컬=무회귀). Docker는 ENV GS_BIN=gs라 리눅스 `gs` 채택. preset의 ghostscript_path보다 env 우선(컨테이너가 로컬 Windows 절대경로 무시). **인증 끼움점**=api.py router 전역 `Depends(require_auth)` 적용하되 **/api/health만 제외**(Render healthCheckPath라 인증 막으면 부팅 실패). 방법2택: ①health 핸들러를 별도 무인증 router로 분리 ②전역 적용+health 내부에서 검사스킵. ①권장(명확). JWT는 SUPABASE_JWT_SECRET(HS256) 검증, user id/role→request.state. **--workers 1 유지 이유**=_JOBS 인메모리 레지스트리 일관성(Phase3 DB이전시 완화). **프런트**=화면별 inline <script>에 공통 fetch 래퍼(`apiFetch`) 도입—기존 16곳 `fetch("/api/...")`를 래퍼로 교체, sessionStorage access_token을 Authorization 헤더로 부착, 401/토큰부재시 login.html 리다이렉트. FormData 업로드는 headers만 머지(Content-Type 자동설정 보존). **_handoff 복사규칙**: login.html·수정 화면은 `_handoff/grader-v2-static`(원본) 먼저 작업→`webapp/static`으로 복사(README 무수정 규칙). **불변 준수**: 엔진 공개API 무수정(eps 분기 1개·시그니처 불변), 비밀키(JWT_SECRET·SERVICE_ROLE) 레포·프런트 금지(render env sync:false), run.py/run.bat 127.0.0.1 무수정(로컬 회귀0), state.py는 DEFAULT_PORT=int(os.environ.get("PORT",8000)) 1줄만. **저장은 Phase1에선 Render 임시디스크 허용**(재배포시 소실, Storage/DB는 Phase2~3).
+
 ### [2026-06-25] 합성 흰틈/극소형 미달 해소: A 본체색 채움(Piece.bg_cmyk) + B 사이즈별 자동 블리드
 - **분류**: decision
 - **발견자**: planner-architect / developer

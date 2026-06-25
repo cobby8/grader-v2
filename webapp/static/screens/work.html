@@ -134,6 +134,27 @@
 <div class="lightbox hidden" id="lightbox"></div>
 
 <script>
+// ====== 공통 인증 fetch 래퍼 (배포 게이트) ======
+// 왜 필요한가(비유): 배포에서는 모든 /api 호출에 '출입증(토큰)' 을 붙여야 한다.
+// 로그인 때 sessionStorage 에 저장한 토큰을 Authorization 헤더로 자동 부착한다.
+//  · 로컬(무인증): 토큰이 없으면 헤더를 안 붙인다 → 서버가 그대로 통과(회귀 0).
+//  · 401(미인증/만료): 로그인 화면으로 보낸다.
+//  · FormData 업로드: Content-Type 을 절대 건드리지 않는다(브라우저 boundary 보존) — headers 만 머지.
+const TOKEN_KEY = "grader_access_token";
+async function apiFetch(url, opts) {
+  opts = opts || {};
+  const headers = new Headers(opts.headers || {});
+  const token = sessionStorage.getItem(TOKEN_KEY);
+  if (token) headers.set("Authorization", "Bearer " + token);
+  const res = await fetch(url, Object.assign({}, opts, { headers }));
+  if (res.status === 401) {
+    // 출입증 없음/만료 → 로그인 화면으로(현재 작업은 버려진다).
+    location.replace("/static/screens/login.html");
+    throw new Error("로그인이 필요합니다.");
+  }
+  return res;
+}
+
 // ====== 서버 데이터 (실 API 연결) ======
 // 패턴 목록은 서버 GET /api/patterns 로 채운다. 처음엔 빈 배열로 두고,
 // 화면 로드 직후 fetch 로 실제 등록 패턴(농구_V넥_양면 등)을 받아 렌더한다.
@@ -318,7 +339,7 @@ async function uploadDesign(file) {
   try {
     const fd = new FormData();
     fd.append("file", file);
-    const res = await fetch("/api/design/check", { method: "POST", body: fd });
+    const res = await apiFetch("/api/design/check", { method: "POST", body: fd });
     const data = await res.json();
     // 서버 응답에 원본 파일명을 얹어 화면에서 보여준다.
     designServer = Object.assign({ file: file.name, size: file.size }, data);
@@ -341,7 +362,7 @@ async function uploadOrder(file) {
   try {
     const fd = new FormData();
     fd.append("file", file);
-    const res = await fetch("/api/order/parse", { method: "POST", body: fd });
+    const res = await apiFetch("/api/order/parse", { method: "POST", body: fd });
     const data = await res.json();
     // 서버 행 [{name,number,size,qty}] 을 표 모델(ORDER) 로 옮긴다(수량은 숫자로).
     ORDER = (data.rows || []).map((r) => ({
@@ -733,7 +754,7 @@ async function startGenerate() {
       rows: ORDER.map((r) => ({ name: r.name, number: r.number, size: r.size, qty: r.qty })),
       out_format: apiFmt(),
     };
-    const res = await fetch("/api/jobs", {
+    const res = await apiFetch("/api/jobs", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
@@ -757,7 +778,7 @@ async function startGenerate() {
 async function pollProgress() {
   if (!jobId) return;
   try {
-    const res = await fetch("/api/jobs/" + jobId + "/progress");
+    const res = await apiFetch("/api/jobs/" + jobId + "/progress");
     const p = await res.json();
     if (!res.ok) throw new Error(p.error || ("HTTP " + res.status));
     genDone = p.done || 0;
@@ -789,18 +810,30 @@ async function pollProgress() {
 
 // 완료된 작업 결과를 받아 검수 그리드 원천(RESULTS·SKIPPED) 으로 변환한다.
 async function loadJobResult() {
-  const res = await fetch("/api/jobs/" + jobId);
+  const res = await apiFetch("/api/jobs/" + jobId);
   const data = await res.json();
   if (!res.ok) { jobError = data.error || "결과를 불러오지 못했습니다."; return; }
   jobResult = data;
   // outputs → RESULTS(검수 타일). preview 는 /api/jobs/{id}/preview/{file} 로 부른다.
   RESULTS = (data.outputs || []).map((o) => ({
     size: o.size, name: o.name || "(이름없음)", number: o.number || "",
-    url: o.preview ? ("/api/jobs/" + jobId + "/preview/" + encodeURIComponent(o.preview)) : null,
+    // preview 는 <img>/background-image 로 그려지는데 그건 브라우저 직접 요청이라
+    // Authorization 헤더가 안 붙는다(배포 인증 모드에서 401). 그래서 아래에서
+    // apiFetch 로 PNG 를 받아 blob URL 로 바꿔 채운다(우선 preview 파일명만 보관).
+    url: null,
+    _previewFile: o.preview || null,
     status: o.status || (o.verify_pass ? "pass" : "warn"),
     checks: (o.checks || []).map((c) => ({ name: c.name, ok: !!c.ok, detail: c.detail || "" })),
     checksEps: o.checks_eps || null,
     pdf: o.pdf, eps: o.eps,
+  }));
+  // preview PNG 를 토큰 붙은 apiFetch 로 받아 blob URL 로 채운다(로컬은 토큰 없이 그대로).
+  await Promise.all(RESULTS.map(async (r) => {
+    if (!r._previewFile) return;
+    try {
+      const pres = await apiFetch("/api/jobs/" + jobId + "/preview/" + encodeURIComponent(r._previewFile));
+      if (pres.ok) r.url = URL.createObjectURL(await pres.blob());
+    } catch (e) { /* 미리보기 실패는 치명 아님 — 기본 아이콘으로 표시 */ }
   }));
   // 건너뜀: 행 단위 skip(사유) + 비활성 사이즈(결함)를 사이즈별로 묶어 배너로.
   const skipMap = {};
@@ -819,13 +852,26 @@ async function loadJobResult() {
 }
 
 // 선택 형식으로 ZIP 을 받아 브라우저 다운로드를 띄운다(둘 다면 pdf/·eps/ 하위).
-function downloadZip(fmt) {
+// apiFetch 로 blob 을 받아 다운로드한다 — <a href> 직접 요청은 토큰이 안 붙어
+// 배포 인증 모드에서 401 이 나므로(로컬은 토큰 없이 그대로 동작 = 회귀 0).
+async function downloadZip(fmt) {
   if (!jobId) return;
   const url = "/api/jobs/" + jobId + "/zip?format=" + encodeURIComponent(fmt);
-  // 새 탭이 아니라 보이지 않는 링크 클릭으로 다운로드를 트리거(파일 저장 다이얼로그).
-  const a = document.createElement("a");
-  a.href = url; a.download = "";
-  document.body.appendChild(a); a.click(); a.remove();
+  try {
+    const res = await apiFetch(url);
+    if (!res.ok) { alert("다운로드에 실패했습니다. 잠시 후 다시 시도해 주세요."); return; }
+    const blob = await res.blob();
+    // 서버가 준 파일명(Content-Disposition)을 그대로 살리기 어려우니 보기 좋은 이름을 만든다.
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objUrl;
+    a.download = "grader_" + (jobId || "output") + "_" + fmt + ".zip";
+    document.body.appendChild(a); a.click(); a.remove();
+    // 메모리 누수 방지: 다운로드 트리거 후 objectURL 해제.
+    setTimeout(() => URL.revokeObjectURL(objUrl), 4000);
+  } catch (e) {
+    // apiFetch 가 401 에서 로그인으로 리다이렉트하면 여기로 안 온다(throw 됨).
+  }
 }
 
 // 단일 파일 다운로드(모달의 '이 파일 다운로드'): 형식에 맞는 출력 1개를 연다.
@@ -1118,7 +1164,7 @@ document.addEventListener("click", (e) => { if (e.target.closest("#genCancel")) 
 function refreshServerPill() {
   const pill = document.querySelector(".server-pill");
   if (!pill) return;
-  fetch("/api/health")
+  apiFetch("/api/health")
     .then((r) => r.ok ? r.json() : Promise.reject())
     .then((d) => {
       pill.classList.remove("is-down");
@@ -1132,7 +1178,7 @@ function refreshServerPill() {
 
 // ====== 패턴 목록 로드 (GET /api/patterns) ======
 function loadPatterns() {
-  return fetch("/api/patterns")
+  return apiFetch("/api/patterns")
     .then((r) => r.ok ? r.json() : Promise.reject())
     .then((list) => {
       PATTERNS = Array.isArray(list) ? list : [];
@@ -1152,7 +1198,7 @@ function loadPatterns() {
 // ====== 설정 기본값(출력 형식) 로드 ======
 // 세그먼트를 아직 안 눌렀을 때(localStorage=vector) API 로 보낼 기본 형식을 정한다.
 function loadSettings() {
-  return fetch("/api/settings")
+  return apiFetch("/api/settings")
     .then((r) => r.ok ? r.json() : Promise.reject())
     .then((s) => {
       const f = (s.output_format || "pdf").toLowerCase();

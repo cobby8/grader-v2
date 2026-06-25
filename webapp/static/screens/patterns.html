@@ -243,6 +243,24 @@
 <div class="toaster" id="toaster"></div>
 
 <script>
+// ====== 공통 인증 fetch 래퍼 (배포 게이트) ======
+// 로그인 때 sessionStorage 에 저장한 토큰을 모든 /api 호출에 자동 부착한다.
+//  · 로컬(무인증): 토큰 없으면 헤더 안 붙임 → 서버 그대로 통과(회귀 0).
+//  · 401: 로그인 화면으로. · FormData: Content-Type 안 건드리고 headers 만 머지.
+const TOKEN_KEY = "grader_access_token";
+async function apiFetch(url, opts) {
+  opts = opts || {};
+  const headers = new Headers(opts.headers || {});
+  const token = sessionStorage.getItem(TOKEN_KEY);
+  if (token) headers.set("Authorization", "Bearer " + token);
+  const res = await fetch(url, Object.assign({}, opts, { headers }));
+  if (res.status === 401) {
+    location.replace("/static/screens/login.html");
+    throw new Error("로그인이 필요합니다.");
+  }
+  return res;
+}
+
 // 패턴 목록은 서버 GET /api/patterns 로 채운다(빈 배열에서 시작).
 let PATTERNS = [];
 const PAGE = [4478.74, 5669.29];          // design.page_size_pt
@@ -321,14 +339,14 @@ renderPatternGrid();   // 처음엔 '패턴 없음'(도착 전)
 (function refreshServerPill() {
   const pill = document.querySelector(".server-pill");
   if (!pill) return;
-  fetch("/api/health")
+  apiFetch("/api/health")
     .then((r) => r.ok ? r.json() : Promise.reject())
     .then((d) => { pill.innerHTML = `<span class="dot"></span>서버 연결됨 · :${d.port}`; })
     .catch(() => { pill.innerHTML = `<span class="dot" style="background:var(--red-500,#e5484d);"></span>서버 연결 끊김`; });
 })();
 
 // 서버에서 실제 패턴을 받아 그리드 갱신
-fetch("/api/patterns")
+apiFetch("/api/patterns")
   .then((r) => r.ok ? r.json() : Promise.reject())
   .then((list) => { PATTERNS = Array.isArray(list) ? list : []; renderPatternGrid(); })
   .catch(() => { PATTERNS = []; renderPatternGrid(); });
@@ -829,7 +847,7 @@ function savePattern() {
   btn.disabled = true;
   toast("info", "cloud_upload", "패턴 등록 중", `${sizes.length}개 사이즈 변환·검증 중입니다…`);
 
-  fetch("/api/patterns", { method: "POST", body: fd })
+  apiFetch("/api/patterns", { method: "POST", body: fd })
     .then((r) => r.json().then((j) => ({ ok: r.ok, body: j })))
     .then(({ ok, body }) => {
       if (!ok || body.error) {
@@ -870,7 +888,7 @@ function savePattern() {
 
 // 서버에서 패턴 목록을 다시 받아 그리드 갱신(등록 직후 호출).
 function reloadPatterns() {
-  fetch("/api/patterns")
+  apiFetch("/api/patterns")
     .then((r) => r.ok ? r.json() : Promise.reject())
     .then((list) => { PATTERNS = Array.isArray(list) ? list : []; renderPatternGrid(); })
     .catch(() => {});

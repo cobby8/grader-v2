@@ -54,6 +54,24 @@
 <div class="toaster" id="toaster"></div>
 
 <script>
+// ====== 공통 인증 fetch 래퍼 (배포 게이트) ======
+// 로그인 때 sessionStorage 에 저장한 토큰을 모든 /api 호출에 자동 부착한다.
+//  · 로컬(무인증): 토큰 없으면 헤더 안 붙임 → 서버 그대로 통과(회귀 0).
+//  · 401: 로그인 화면으로. · FormData: Content-Type 안 건드리고 headers 만 머지.
+const TOKEN_KEY = "grader_access_token";
+async function apiFetch(url, opts) {
+  opts = opts || {};
+  const headers = new Headers(opts.headers || {});
+  const token = sessionStorage.getItem(TOKEN_KEY);
+  if (token) headers.set("Authorization", "Bearer " + token);
+  const res = await fetch(url, Object.assign({}, opts, { headers }));
+  if (res.status === 401) {
+    location.replace("/static/screens/login.html");
+    throw new Error("로그인이 필요합니다.");
+  }
+  return res;
+}
+
 // 작업 기록은 서버 GET /api/jobs 로 채운다(빈 배열에서 시작 → fetch 후 갱신).
 let JOBS = [];
 const $ = (s) => document.querySelector(s);
@@ -79,7 +97,7 @@ function updateTabCounts() {
 
 // 서버에서 작업 기록을 받아 화면을 그린다.
 function loadJobs() {
-  fetch("/api/jobs")
+  apiFetch("/api/jobs")
     .then((r) => r.ok ? r.json() : Promise.reject())
     .then((list) => {
       // 서버 행을 화면이 쓰는 모양으로 정리(날짜 표기만 다듬음).
@@ -97,7 +115,7 @@ function loadJobs() {
 (function refreshServerPill() {
   const pill = document.querySelector(".server-pill");
   if (!pill) return;
-  fetch("/api/health")
+  apiFetch("/api/health")
     .then((r) => r.ok ? r.json() : Promise.reject())
     .then((d) => { pill.innerHTML = `<span class="dot"></span>서버 연결됨 · :${d.port}`; })
     .catch(() => { pill.innerHTML = `<span class="dot" style="background:var(--red-500,#e5484d);"></span>서버 연결 끊김`; });

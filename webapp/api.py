@@ -45,7 +45,14 @@ import json
 import pikepdf
 
 # /api 아래로 묶일 라우터. main.py 가 이 router 를 앱에 붙인다.
+# ⚠️ 인증(require_auth)은 main.py 가 이 router 를 붙일 때 전역으로 건다.
+#    단, 헬스체크(/api/health)만은 무인증이어야 한다(아래 public_router 참고).
+#    이유: Render 의 healthCheckPath(/api/health)는 로그인 토큰 없이 호출되므로,
+#    여기에 인증을 걸면 배포가 '부팅 실패' 로 막힌다.
 router = APIRouter(prefix="/api")
+
+# 무인증 공개 라우터(헬스체크 전용). main.py 가 인증 dependency 없이 따로 붙인다.
+public_router = APIRouter(prefix="/api")
 
 # ── 디자인 점검 임계값(소스 상수, preset 외 보정 휴리스틱) ──────────────────
 #   왜 이 숫자들이 여기 있나: ②/④ 판정의 '경계선'이라 한 곳에 모아 둔다.
@@ -66,13 +73,36 @@ _AREA_PAD_X = 2.0
 _AREA_PAD_Y = 1.2
 
 
-@router.get("/health")
+# ⚠️ health 만 public_router(무인증)에 둔다 — Render healthCheck 가 토큰 없이 부른다.
+@public_router.get("/health")
 def health() -> Dict[str, Any]:
     """서버 살아있음 신호. 화면 사이드바의 '서버 연결됨 · :8000' 표식이 이걸 부른다.
 
+    무인증 공개 엔드포인트(인증 켜져 있어도 토큰 없이 통과) — 배포 헬스체크 호환.
     반환: {status: "ok", port: 8000}
     """
     return {"status": "ok", "port": DEFAULT_PORT}
+
+
+@public_router.get("/config")
+def public_config() -> Dict[str, Any]:
+    """프런트(login.html)가 런타임에 읽는 '공개 설정'.
+
+    왜 엔드포인트인가(비유): 빌드 단계가 없어 HTML 에 키를 직접 박기 곤란하다.
+    그래서 로그인 화면이 켜질 때 서버에 "공개키 뭐예요?" 하고 물어보게 한다.
+
+    ⚠️ 여기서 내보내는 값은 '공개해도 되는 것만' 이다:
+       · auth_required : 인증이 켜져 있는지(꺼져 있으면 로그인 없이 바로 진입).
+       · supabase_url  : Supabase 프로젝트 URL(공개).
+       · supabase_anon_key : Supabase anon 공개키(프런트 노출용으로 설계된 키).
+    SUPABASE_JWT_SECRET·SERVICE_ROLE_KEY 같은 '비밀키' 는 절대 내보내지 않는다.
+    """
+    from .auth import auth_required
+    return {
+        "auth_required": auth_required(),
+        "supabase_url": os.environ.get("SUPABASE_URL", ""),
+        "supabase_anon_key": os.environ.get("SUPABASE_ANON_KEY", ""),
+    }
 
 
 def _scan_one_pattern(folder: str) -> Dict[str, Any] | None:

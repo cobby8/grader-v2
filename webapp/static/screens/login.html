@@ -1,0 +1,129 @@
+<!-- @dsCard group="grader · 정적 핸드오프" viewport="1280x880" name="로그인" subtitle="Supabase Auth 이메일+비밀번호 로그인(배포 게이트)" -->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>STIZ grader · 로그인</title>
+<link rel="icon" href="../assets/logos/stiz-favicon-32.png" />
+<link rel="stylesheet" href="../styles.css" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-25..0" />
+<link rel="stylesheet" href="app.css" />
+<style>
+  /* 로그인 화면은 사이드바 없이 중앙 정렬 카드 하나만 둔다(가장 단순). */
+  .login-wrap { min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }
+  .login-card { width:100%; max-width:380px; }
+  .login-brand { display:flex; align-items:center; gap:8px; justify-content:center; margin-bottom:20px; }
+  .login-brand img { height:28px; }
+  .login-field { margin-bottom:14px; }
+  .login-field label { display:block; font-size:13px; color:var(--text-subtle); margin-bottom:6px; }
+  .login-field input { width:100%; }
+  .login-msg { margin-top:12px; min-height:20px; font-size:13px; }
+  .login-msg.is-error { color:var(--danger, #d33); }
+  .login-msg.is-ok { color:var(--text-subtle); }
+  .login-btn { width:100%; margin-top:8px; }
+</style>
+</head>
+<body>
+<div class="login-wrap">
+  <div class="card card--pad login-card">
+    <div class="login-brand">
+      <img src="../assets/logos/stiz-logo-black.png" alt="STIZ" />
+      <span class="tag">grader</span>
+    </div>
+
+    <h1 class="page-title" style="text-align:center; margin-bottom:18px;">로그인</h1>
+
+    <form id="loginForm" autocomplete="on">
+      <div class="login-field">
+        <label for="email">이메일</label>
+        <input class="input" type="email" id="email" name="email" required placeholder="name@stiz.co.kr" />
+      </div>
+      <div class="login-field">
+        <label for="password">비밀번호</label>
+        <input class="input" type="password" id="password" name="password" required placeholder="비밀번호" />
+      </div>
+      <button class="btn btn--primary login-btn" type="submit" id="loginBtn">로그인</button>
+    </form>
+
+    <div class="login-msg" id="loginMsg"></div>
+  </div>
+</div>
+
+<!-- Supabase JS SDK(CDN). 빌드 없이 곧장 쓴다(빌드 0 원칙). -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+/* 로그인 화면 동작 개요(비유):
+   1) 서버에 "공개 설정 줘"(/api/config) 하고 물어 Supabase URL/anon키·인증여부를 받는다.
+      - 인증이 꺼져 있으면(로컬) 로그인 불필요 → 곧장 작업 화면으로 보낸다.
+   2) 켜져 있으면 이메일+비번으로 Supabase 로그인을 시도한다.
+   3) 성공하면 받은 access_token 을 sessionStorage 에 저장하고 work.html 로 이동한다.
+      (sessionStorage = 탭을 닫으면 비워지는 '임시 출입증 보관함')
+*/
+const TOKEN_KEY = "grader_access_token";   // 다른 화면의 apiFetch 가 읽는 키와 동일해야 함
+const msgEl = document.getElementById("loginMsg");
+const btnEl = document.getElementById("loginBtn");
+let supa = null;
+
+function showMsg(text, kind) {
+  msgEl.textContent = text || "";
+  msgEl.className = "login-msg" + (kind ? " is-" + kind : "");
+}
+
+// 1) 공개 설정 로드 → Supabase 클라이언트 준비(인증 꺼져 있으면 바로 통과).
+async function init() {
+  let cfg = {};
+  try {
+    const res = await fetch("/api/config");
+    cfg = await res.json();
+  } catch (e) {
+    showMsg("서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.", "error");
+    return;
+  }
+  // 인증이 꺼진 환경(로컬)이면 로그인 절차가 의미 없으므로 곧장 작업 화면으로.
+  if (!cfg.auth_required) {
+    location.replace("/static/screens/work.html");
+    return;
+  }
+  if (!cfg.supabase_url || !cfg.supabase_anon_key) {
+    showMsg("로그인 설정이 준비되지 않았습니다(관리자에게 문의).", "error");
+    return;
+  }
+  // window.supabase 는 CDN SDK 가 노출하는 전역. createClient 로 클라이언트 생성.
+  supa = window.supabase.createClient(cfg.supabase_url, cfg.supabase_anon_key);
+}
+
+// 2) 폼 제출 = 로그인 시도.
+document.getElementById("loginForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!supa) { showMsg("로그인 준비 중입니다. 잠시 후 다시 시도해 주세요.", "error"); return; }
+  const email = document.getElementById("email").value.trim();
+  const password = document.getElementById("password").value;
+  btnEl.disabled = true;
+  showMsg("로그인 중…", "ok");
+  try {
+    const { data, error } = await supa.auth.signInWithPassword({ email, password });
+    if (error) {
+      showMsg("이메일 또는 비밀번호가 올바르지 않습니다.", "error");
+      btnEl.disabled = false;
+      return;
+    }
+    const token = data && data.session && data.session.access_token;
+    if (!token) {
+      showMsg("로그인에 성공했지만 토큰을 받지 못했습니다. 다시 시도해 주세요.", "error");
+      btnEl.disabled = false;
+      return;
+    }
+    // 3) 출입증(토큰) 저장 후 작업 화면으로.
+    sessionStorage.setItem(TOKEN_KEY, token);
+    location.replace("/static/screens/work.html");
+  } catch (err) {
+    showMsg("로그인 중 문제가 발생했습니다: " + err, "error");
+    btnEl.disabled = false;
+  }
+});
+
+init();
+</script>
+</body>
+</html>
