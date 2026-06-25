@@ -4,12 +4,13 @@
 | 파일 | 항목 수 | 최종 업데이트 |
 |------|--------|------------|
 | architecture.md | 7 | 2026-06-22 |
-| errors.md | 7 | 2026-06-22 |
+| errors.md | 8 | 2026-06-25 |
 | conventions.md | 3 | 2026-06-15 |
-| decisions.md | 10 | 2026-06-20 |
+| decisions.md | 11 | 2026-06-25 |
 | lessons.md | 1 | 2026-06-15 |
 
 ## 최근 추가된 지식 (최근 5건)
+- [2026-06-25] decisions/errors: 합성 흰틈/극소형미달 해소 — A 본체색 채움(Piece.bg_cmyk, run_job이 preset.body_fill>detect_background_cmyk>None 1회 결정, place_block이 클립 W n직후·Do앞 fill) + B 사이즈별 자동블리드(cover_bleed dict면 앞판 dev로 clamp(1+1.3dev,1.0,1.12) 단일값 등방). 함정: PDF `W n`은 경로 소비→클립영역 fill하려면 폴리곤 재경로 필수
 - [2026-06-22] decisions/errors: 합성 품질 근본수정 — 조각 자동매핑(디자인 OCG "패턴선" bbox=design_region, SVG 넥깊이로 앞/뒤 식별) / cover+블리드(흰틈 제거, preset 키 있을때만) / 재단선=SVG 폴리곤 1줄 / 디자인 패턴선 두줄방지는 OCG OFF 무효→콘텐츠 BDC…EMC 삭제(빨강1색만, 무손실)
 - [2026-06-22] errors: 브라우저 파일 드롭은 document 레벨 가드+좌표(getBoundingClientRect) 판정 필수. <button>+자식 요소에만 리스너 달면 자식/패딩 드롭이 새 탭으로 샘. playwright 합성 dispatchEvent는 타겟 직접이라 PASS여도 실 OS 드롭 보장 못 함
 - [2026-06-20] architecture: 웹 도구 — webapp/ FastAPI(정적 _handoff 복사본 서빙 + /api: patterns·order/parse·design/check 5케이스·jobs 비동기·preview·zip·patterns등록·settings). 엔진 호출만, 빌드0, 폴더+JSON. 출력형식 PDF/EPS/both(flatten Form그룹제거→eps2write, 페이지 /CS 보존, GS 없으면 PDF fallback). 디자인 본체는 "PDF 호환 저장" 필수(아니면 3.4KB 흰화면)

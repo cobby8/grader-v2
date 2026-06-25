@@ -2,6 +2,12 @@
 <!-- 담당: planner-architect | 최대 30항목 -->
 <!-- "왜 A 대신 B를 선택했는지" 기술 결정의 배경과 이유를 기록 -->
 
+### [2026-06-25] 합성 흰틈/극소형 미달 해소: A 본체색 채움(Piece.bg_cmyk) + B 사이즈별 자동 블리드
+- **분류**: decision
+- **발견자**: planner-architect / developer
+- **내용**: 두 문제를 한 작업으로 해결. **문제1**=패턴선 안쪽 디자인 본체(투명) 빈틈이 흰색으로 남음. **문제2**=XL base 1장을 다른 사이즈로 등방 cover하면 비균일 그레이딩 탓에 극소형(5XS 등)에서 흰 요소(줄무늬)가 재단선까지 못 닿음. **A 채택**: 본체 fill은 클립(`W n`)직후·`Do`앞이어야 디자인이 그 위를 덮음(디자인 있는 곳=디자인색, 빈 곳만 본체색). 호출자 compose는 불변이므로 **Piece에 `bg_cmyk: Optional=None` 필드 추가**(A-4 extra_ops 선례와 동일)→`place_block(...,bg_cmyk=None)`이 fill 주입. 본체색은 run_job이 1회 결정: **preset.body_fill(이번값[0.8,0.5,0,0.1]) > flatten.detect_background_cmyk(pikepdf.Pdf객체, 면적최대 불투명 k) > None(채움생략=하위호환)**. **B 채택**: `_build_precise_layout`에서 앞판(front) 1개 기준 `dev=|(앞판폴리곤 pw/ph)/(디자인영역 dw/dh)-1|`, `bleed=clamp(1.0+k·dev, lo, hi)` **단일값 1회 산출→전 조각 동일 적용**(조각마다 비율 다르므로 통일, 등방 유지=번호/이름 무왜곡). preset `cover_bleed`를 float(기존) 또는 `{auto:true,k:1.3,min:1.0,max:1.12}` dict 둘 다 허용(3분기: dict-auto/float/None). 검증값 XL=1.0·M=1.021·2XS=1.056·5XS=1.098·5XL=1.036(cowork 일치). **불변 준수**: compose/_job_piece_transform(bleed 인자 기존존재) 시그니처 무수정, 신규 전부 기본값. device k+f(CMYK·불투명·벡터)→verify PASS, fill은 Do아님→배치횟수 불변. tester 6/6 PASS·reviewer 통과 치명0.
+- **참조횟수**: 0
+
 ### [2026-06-19] Phase D: 기존 path SVG 활용 + path→polyline 전처리 변환기(parse_svg 무수정)
 - **분류**: decision
 - **발견자**: planner-architect
