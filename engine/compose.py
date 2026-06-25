@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import List, Sequence
+from typing import List, Optional, Sequence
 
 import pikepdf
 
@@ -34,11 +34,15 @@ class Piece:
     extra_ops : 디자인 배치 위에 더 그릴 추가 벡터 PDF 연산자(예: 배번·이름 글자 경로).
                 기본 빈 문자열 → 기존 호출은 전부 그대로 동작(무손실 확장). 디자인 Form 은
                 건드리지 않고 페이지 콘텐츠에만 덧그린다(device CMYK·verify PASS 유지).
+    bg_cmyk   : 본체색(device CMYK 4채널). 기본 None → 기존과 완전 동일(하위호환). 값이 있으면
+                place_block 이 클립(조각 윤곽) 안을 디자인 Do '전'에 이 색으로 칠해, 디자인이
+                비어 있는 곳의 흰틈을 본체색으로 메운다(extra_ops 선례와 같은 무손실 확장).
     """
     outline: Sequence[Point]
     transform: Matrix
     name: str = ""
     extra_ops: str = ""
+    bg_cmyk: Optional[Sequence[float]] = None
 
 
 @dataclass
@@ -74,7 +78,8 @@ def compose(design_pdf: str, layouts: Sequence[SizeLayout], out_path: str,
             name = page.add_resource(xobj, pikepdf.Name("/XObject"))
             blocks = []
             for piece in layout.pieces:
-                blocks.append(place_block(piece.outline, piece.transform, str(name)))
+                blocks.append(place_block(piece.outline, piece.transform, str(name),
+                                          bg_cmyk=piece.bg_cmyk))
                 placements += 1
                 # 디자인 배치(q…Do…Q) 뒤에 추가 벡터(글자 등)를 얹는다 — 디자인 위에 그려짐.
                 # extra_ops 는 Do 를 쓰지 않으므로 placements(=Do 개수)는 변하지 않는다.

@@ -167,6 +167,37 @@ def _job_piece_transform(design_region, poly, shrink_x, shrink_y, bleed=None):
     return scale_translate(s, ox, oy)
 
 
+def _auto_bleed(front_design_region, front_poly, k: float, lo: float, hi: float) -> float:
+    """앞판(front) 1개 기준으로 사이즈 대표 블리드를 1회 산출한다(작업 B).
+
+    왜 '앞판 기준 단일 값'인가:
+      조각마다 폭/높이 비율이 달라 조각별 bleed 를 따로 쓰면 등방성이 깨질 수 있고 일관성도
+      없다. 그래서 앞판 1개의 '디자인영역 대비 조각 윤곽' 가로세로비 어긋남(dev)으로 그 사이즈
+      대표 bleed 를 1회 구해 전 조각에 똑같이 적용한다(번호/이름도 같은 단일 bleed → 등방 유지).
+
+    수식:
+      dev   = |(조각폭/조각높이) / (영역폭/영역높이) - 1|   (가로세로비 어긋남, 0=완전 일치)
+      bleed = clamp(1.0 + k*dev, lo, hi)
+    극단소형 사이즈일수록 패턴 윤곽이 디자인영역 비율과 더 어긋나(dev 큼) bleed 가 커져
+    흰 줄무늬 같은 요소가 재단선까지 확실히 닿는다. XL(거의 일치)은 dev≈0 → bleed≈1.0.
+
+    front_design_region : 앞판 design_region_pt (dx0,dy0,dx1,dy1).
+    front_poly          : 앞판 조각 윤곽(parse_svg 결과, poly.bbox 사용).
+    k/lo/hi             : 민감도 계수·하한·상한.
+    반환                : 전 조각에 동일 적용할 단일 bleed(float).
+    """
+    dx0, dy0, dx1, dy1 = front_design_region
+    px0, py0, px1, py1 = front_poly.bbox
+    dw, dh = (dx1 - dx0), (dy1 - dy0)
+    pw, ph = (px1 - px0), (py1 - py0)
+    if dw <= 0 or dh <= 0 or pw <= 0 or ph <= 0:
+        return float(lo)  # 비정상 입력은 보수적으로 하한(=확대 없음).
+    dev = abs((pw / ph) / (dw / dh) - 1.0)
+    bleed = 1.0 + float(k) * dev
+    # clamp(lo, hi): 너무 작으면 흰틈, 너무 크면 과도 확대(번호 위치 흔들림) 방지.
+    return max(float(lo), min(float(hi), bleed))
+
+
 def _wrap_design_ops(transform, ops: str) -> str:
     """디자인좌표로 만든 글자 ops 를 그 조각의 transform(cm)으로 감싸 시트좌표로 옮긴다.
 
@@ -652,7 +683,8 @@ def _polygon_cutline_ops(points, color_cmyk, stroke_width) -> str:
 
 def _build_precise_layout(preset: dict, size_def: dict, *,
                           number=None, name=None, warnings=None,
-                          cutline_strokes=None, cover_bleed=None) -> SizeLayout:
+                          cutline_strokes=None, cover_bleed=None,
+                          bg_cmyk=None) -> SizeLayout:
     """새 area(front/back_number_area·back_name_area)로 정밀배치한 SizeLayout 1개 생성.
 
     동작은 build_layouts(방식 A)와 같지만, 글자 주입만 place_number/place_name 으로
@@ -666,6 +698,12 @@ def _build_precise_layout(preset: dict, size_def: dict, *,
       4) (이슈4) cutline_strokes(빨간 재단선, 디자인좌표 ops)를 겹침 최대 조각에 매핑해
          그 조각 transform 으로 감싸 extra_ops 에 누적(글자와 동일 경로, 클립 '밖'이라
          조각 경계를 넘는 너치까지 안 잘리고 보존됨).
+
+    cover_bleed : float(전 사이즈 단일) | dict({auto:true,k,min,max})(앞판 기준 사이즈별 산출)
+                  | None(contain·회귀). dict+auto 면 이 함수에서 _auto_bleed 로 단일값 산출 후
+                  전 조각 동일 적용(등방 유지).
+    bg_cmyk     : 본체색(device CMYK 4채널) | None(기본·채움 생략). 값이 있으면 각 Piece.bg_cmyk
+                  에 셋 → place_block 이 클립 안을 디자인 전에 칠해 흰틈 제거(작업 A).
     """
     if warnings is None:
         warnings = []
@@ -679,6 +717,28 @@ def _build_precise_layout(preset: dict, size_def: dict, *,
     svg_path = os.path.join(preset["_dir"], size_def["pattern_file"])
     polys = parse_svg(svg_path)  # 높이 내림차순 정렬
 
+    # ── (작업 B) cover_bleed 해석: float 이면 그대로, dict({auto:true,...}) 이면 앞판 기준
+    #    단일 bleed 를 이 사이즈에 맞춰 1회 산출한다(전 조각·번호/이름 동일값 → 등방 유지).
+    #    cover_bleed 가 None 이면 contain(기존/U넥 회귀 0).
+    bleed_value = cover_bleed  # 기본: float 또는 None 그대로
+    if isinstance(cover_bleed, dict) and cover_bleed.get("auto"):
+        k = float(cover_bleed.get("k", 1.3))
+        lo = float(cover_bleed.get("min", 1.0))
+        hi = float(cover_bleed.get("max", 1.12))
+        front_idx = _find_piece_index(pieces_def, "front")
+        if front_idx is None:
+            front_idx = 0  # front id 없으면 첫 조각으로 폴백
+        front_pdef = pieces_def[front_idx]
+        front_poly = polys[front_pdef["svg_index"]]
+        bleed_value = _auto_bleed(front_pdef["design_region_pt"], front_poly, k, lo, hi)
+        warnings.append(
+            f"[블리드:auto] 사이즈 {size_def['name']} 앞판 기준 단일 bleed={bleed_value:.4f}"
+            f" (k={k}, clamp[{lo},{hi}]).")
+    elif isinstance(cover_bleed, dict):
+        # auto 가 아닌 dict 는 잘못된 설정 → 안전하게 contain 으로 폴백(경고).
+        bleed_value = None
+        warnings.append("🟡 [블리드] cover_bleed dict 에 auto:true 가 없어 contain 으로 진행.")
+
     # ── 2) 조각별 윤곽 + 방식 A transform 으로 Piece 생성(글자 없이 먼저). ──
     layout_pieces: List[Piece] = []
     piece_transforms: List[tuple] = []  # 같은 인덱스로 글자 감싸기에 재사용
@@ -691,11 +751,13 @@ def _build_precise_layout(preset: dict, size_def: dict, *,
         poly = polys[idx]
         # cover_bleed 가 지정되면(작업2) cover+블리드, 아니면 기존 contain(bleed=None→contain).
         transform = _job_piece_transform(pdef["design_region_pt"], poly,
-                                         shrink_x, shrink_y, bleed=cover_bleed)
+                                         shrink_x, shrink_y, bleed=bleed_value)
         piece_transforms.append(transform)
         layout_pieces.append(
+            # bg_cmyk: 본체색(있으면). place_block 이 클립 안을 디자인 전에 칠해 흰틈 제거.
             Piece(outline=poly.points, transform=transform,
-                  name=pdef.get("name", pdef.get("id", ""))))
+                  name=pdef.get("name", pdef.get("id", "")),
+                  bg_cmyk=bg_cmyk))
 
     # ── 3) 글자 ops 생성 → 그 조각 transform 으로 감싸 extra_ops 에 누적 ──
     def _inject(area_key, kind, value):
@@ -937,18 +999,57 @@ def run_job(preset: str,
         except Exception as e:
             warnings.append(f"🟡 [패턴선] OCG 레이어 제거 실패(디자인 패턴선 잔존 가능): {e}")
 
+    # ── (작업 A) 본체색 1회 결정: preset.body_fill > 디자인 자동감지 > None(채움 생략). ──
+    #    왜 1회만: 모든 선수가 같은 base 디자인을 공유하므로 본체색도 1번만 정하면 된다.
+    #    우선순위 이유: preset 에 디자이너가 명시한 값(body_fill)이 가장 정확하다(자동감지는
+    #    휴리스틱=면적 최대 단색이라 디자인에 따라 빗나갈 수 있음). 둘 다 없으면 None →
+    #    place_block 이 채움을 생략해 '기존과 완전 동일' 동작(하위호환).
+    body_fill = None
+    pf = preset_dict.get("body_fill")
+    if pf and len(pf) == 4:
+        body_fill = tuple(float(v) for v in pf)
+        warnings.append(f"[본체색] preset.body_fill 사용: {body_fill} — 패턴선 안쪽 흰틈 채움.")
+    else:
+        # 자동감지: detect_background_cmyk 는 pikepdf.Pdf 객체를 받는다(path 아님).
+        try:
+            _bg_pdf = pikepdf.open(base_design)
+            try:
+                from .flatten import detect_background_cmyk
+                detected = detect_background_cmyk(_bg_pdf, page_index=0)
+            finally:
+                _bg_pdf.close()
+            if detected:
+                body_fill = tuple(float(v) for v in detected)
+                warnings.append(f"[본체색] 자동감지: {body_fill} — 패턴선 안쪽 흰틈 채움.")
+            else:
+                warnings.append("🟡 [본체색] 자동감지 실패(채움 생략). 필요시 preset.body_fill 지정 권장.")
+        except Exception as e:
+            warnings.append(f"🟡 [본체색] 감지 중 오류(채움 생략): {e}")
+
     # 정밀배치 경로 사용 여부(새 area 가 하나라도 있으면 place_*/감싸기 경로). 없으면 폴백.
     use_precise = _has_precise_areas(preset_dict)
 
-    # ── (작업2) cover/블리드 배수 결정: preset.cutline.bleed 또는 cover_bleed 키가 있을 때만. ──
+    # ── (작업2/B) cover/블리드 배수 결정: preset.cutline.bleed 또는 cover_bleed 키가 있을 때만. ──
     #    왜 키가 있을 때만: 없으면(U넥 등) bleed=None → _job_piece_transform 이 기존 contain
     #    경로를 타 회귀가 0 이 된다(U넥 보호). cover/블리드는 '명시적 opt-in'.
+    #    cover_bleed 는 두 형태 허용(하위호환):
+    #      · float(예: 1.03)  → 전 사이즈 동일 단일 cover(기존 동작).
+    #      · dict({auto:true,k,min,max}) → 사이즈별 앞판 기준 자동 산출(_build_precise_layout 에서).
+    #    여기서는 '값을 그대로' 보존해 _build_precise_layout 에 넘긴다(해석은 거기서 사이즈별로).
     cover_bleed = preset_dict.get("cover_bleed")
     if cover_bleed is None:
         cover_bleed = _cutline_cfg0.get("bleed")  # cutline.bleed 도 허용(방침 a)
-    cover_bleed = float(cover_bleed) if cover_bleed else None
-    if cover_bleed:
-        warnings.append(f"[블리드] cover+블리드 적용(배수 {cover_bleed}) — 디자인으로 조각 꽉 채움.")
+    if isinstance(cover_bleed, dict):
+        # dict(auto) — 그대로 통과(사이즈별 산출). auto:true 면 안내만 1회.
+        if cover_bleed.get("auto"):
+            warnings.append(
+                "[블리드] 자동 블리드(auto) — 사이즈별 앞판 기준으로 cover 배수를 산출합니다"
+                f" (k={cover_bleed.get('k', 1.3)}, clamp[{cover_bleed.get('min', 1.0)},"
+                f"{cover_bleed.get('max', 1.12)}]).")
+    else:
+        cover_bleed = float(cover_bleed) if cover_bleed else None
+        if cover_bleed:
+            warnings.append(f"[블리드] cover+블리드 적용(배수 {cover_bleed}) — 디자인으로 조각 꽉 채움.")
 
     # ── (이슈4) 빨간 재단선 1회 추출 (preset 에 cutline 키가 있을 때만). ──
     #    왜 한 번만: 디자인은 모든 선수가 공유하므로 stroke 추출은 1회로 충분(성능).
@@ -1066,7 +1167,8 @@ def run_job(preset: str,
                 layout = _build_precise_layout(
                     preset_dict, size_map[size],
                     number=number, name=name, warnings=row_warns,
-                    cutline_strokes=cutline_strokes, cover_bleed=cover_bleed)
+                    cutline_strokes=cutline_strokes, cover_bleed=cover_bleed,
+                    bg_cmyk=body_fill)
             else:
                 # 폴백: 기존 rel_bbox(number_area/name_area) 기반 build_layouts(방식 A).
                 layouts = build_layouts(sized, base_design,
