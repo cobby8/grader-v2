@@ -13,6 +13,40 @@
 <link rel="stylesheet" href="../styles.css" />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-25..0" />
 <link rel="stylesheet" href="app.css" />
+<style>
+  /* ===== 계정 메뉴 + 비밀번호 변경 모달(4화면 공통 스타일) =====
+     기존 디자인 변수(var(--*))만 사용 — 하드코딩 색 금지 규칙 준수. */
+  .acct { position: relative; }
+  .acct__btn { cursor: pointer; background: none; }            /* user-pill 를 버튼화 */
+  .acct__btn .name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .acct__menu {
+    position: absolute; top: calc(100% + 6px); right: 0; z-index: 80;
+    min-width: 180px; padding: 6px;
+    background: var(--surface-card); border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md); box-shadow: 0 8px 24px rgba(0,0,0,.12);
+  }
+  .acct__item {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    padding: 8px 10px; border: none; background: none; cursor: pointer;
+    font: var(--text-sm); color: var(--text-body); border-radius: var(--radius-sm); text-align: left;
+  }
+  .acct__item:hover { background: var(--surface-hover); }
+  .acct__item .material-symbols-outlined { font-size: 18px; color: var(--text-subtle); }
+
+  /* 비밀번호 변경 모달: 화면 중앙 카드 + 반투명 배경 */
+  .pwmodal { position: fixed; inset: 0; z-index: 90;
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+    background: rgba(0,0,0,.45); }
+  .pwmodal__panel { width: 100%; max-width: 380px; }
+  .pwmodal__title { font: var(--text-lg-strong, 600 18px/1.4 sans-serif); color: var(--text-strong); margin-bottom: 6px; }
+  .pwmodal__desc { font: var(--text-caption); color: var(--text-muted); margin-bottom: 16px; }
+  .pwmodal__msg { min-height: 18px; margin: 4px 0 12px; font: var(--text-caption); color: var(--red-600, #d33); }
+  .pwmodal__actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .login-field { margin-bottom: 12px; }
+  .login-field label { display: block; font: var(--text-sm); color: var(--text-subtle); margin-bottom: 6px; }
+  .login-field input { width: 100%; }
+  /* .hidden 은 app.css 에 이미 정의됨 — 중복 선언하지 않는다. */
+</style>
 </head>
 <body>
 <div class="app">
@@ -44,7 +78,22 @@
       </div>
       <div class="topbar__right">
         <button class="icon-btn" aria-label="도움말"><span class="material-symbols-outlined">help_outline</span></button>
-        <div class="user-pill"><span class="name">출력 1팀</span><span class="avatar">S</span></div>
+        <!-- ===== 계정 메뉴(4화면 공통) =====
+             user-pill 을 클릭하면 드롭다운(비밀번호 변경/로그아웃)이 열린다.
+             .name 자리에 로그인 이메일을 채운다(무인증 로컬이면 기본 텍스트 유지). -->
+        <div class="acct" id="acct">
+          <button class="user-pill acct__btn" id="acctBtn" type="button" aria-haspopup="menu" aria-expanded="false">
+            <span class="name" id="acctEmail">출력 1팀</span><span class="avatar" id="acctAvatar">S</span>
+          </button>
+          <div class="acct__menu hidden" id="acctMenu" role="menu">
+            <button class="acct__item" id="acctPw" type="button" role="menuitem">
+              <span class="material-symbols-outlined">key</span>비밀번호 변경
+            </button>
+            <button class="acct__item" id="acctLogout" type="button" role="menuitem">
+              <span class="material-symbols-outlined">logout</span>로그아웃
+            </button>
+          </div>
+        </div>
       </div>
     </header>
 
@@ -133,6 +182,30 @@
 <!-- ===== 검수 상세(줌) 모달 ===== -->
 <div class="lightbox hidden" id="lightbox"></div>
 
+<!-- ===== 계정 공통 UI(4화면 동일): 비밀번호 변경 모달 + 토스트 컨테이너 ===== -->
+<div class="pwmodal hidden" id="pwModal">
+  <div class="pwmodal__panel card card--pad" role="dialog" aria-modal="true" aria-labelledby="pwTitle">
+    <h2 class="pwmodal__title" id="pwTitle">비밀번호 변경</h2>
+    <p class="pwmodal__desc">새 비밀번호를 입력하세요. (최소 6자)</p>
+    <div class="login-field">
+      <label for="pwNew">새 비밀번호</label>
+      <input class="input" type="password" id="pwNew" autocomplete="new-password" placeholder="새 비밀번호" />
+    </div>
+    <div class="login-field">
+      <label for="pwConfirm">새 비밀번호 확인</label>
+      <input class="input" type="password" id="pwConfirm" autocomplete="new-password" placeholder="한 번 더 입력" />
+    </div>
+    <div class="pwmodal__msg" id="pwMsg"></div>
+    <div class="pwmodal__actions">
+      <button class="btn" type="button" id="pwCancel">취소</button>
+      <button class="btn btn--primary" type="button" id="pwSubmit">변경</button>
+    </div>
+  </div>
+</div>
+<div class="toaster" id="toaster"></div>
+
+<!-- 계정 기능(비번변경/로그아웃)에 필요한 Supabase JS SDK(CDN). 빌드 0 원칙. -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 // ====== 공통 인증 fetch 래퍼 (배포 게이트) ======
 // 왜 필요한가(비유): 배포에서는 모든 /api 호출에 '출입증(토큰)' 을 붙여야 한다.
@@ -1217,6 +1290,116 @@ update();
 refreshServerPill();
 loadSettings();     // 출력 형식 기본값
 loadPatterns();     // 서버에서 실제 패턴을 받아 다시 그린다.
+
+// ====== 토스트(이 화면엔 toast 함수가 없어 추가 — 다른 화면과 동일 시그니처) ======
+function toast(tone, icon, title, body) {
+  const t = document.createElement("div");
+  t.className = "toast toast--" + tone;
+  t.innerHTML = `<span class="material-symbols-outlined toast__icon">${icon}</span><div><div class="toast__title">${title}</div><div class="toast__body">${body}</div></div>`;
+  document.getElementById("toaster").appendChild(t);
+  setTimeout(() => t.remove(), 4000);   // 4초 후 자동 제거
+}
+
+/* ====== 계정 메뉴 + 비밀번호 변경 + 로그아웃 (4화면 공통 블록) ======
+   왜 supabase 클라이언트가 또 필요한가(비유): updateUser/signOut 은 '출입증 발급처'(Supabase)에
+   직접 말을 걸어야 하는 동작이다. 그래서 login.html 과 똑같이 /api/public-config 로
+   URL·공개키만 받아 클라이언트를 만든다(비밀키는 절대 프런트로 안 온다). */
+let acctSupa = null;     // supabase 클라이언트(인증 켜진 환경에서만 생성)
+async function initAccount() {
+  // 1) 공개 설정 로드 — 인증이 꺼진 로컬이면 계정 메뉴를 그냥 숨긴다(의미 없음).
+  let cfg = {};
+  try {
+    const res = await fetch("/api/public-config");
+    cfg = await res.json();
+  } catch (e) { return; }   // 설정 못 받으면 조용히 포기(화면은 정상 동작)
+  if (!cfg.auth_required) {
+    // 무인증(로컬): 계정 메뉴 자체를 숨겨 혼선을 막는다.
+    const acct = document.getElementById("acct");
+    if (acct) acct.classList.add("hidden");
+    return;
+  }
+  if (!cfg.supabase_url || !cfg.supabase_publishable_key) return;
+  // 2) 공개키만으로 클라이언트 생성(SECRET 미사용).
+  acctSupa = window.supabase.createClient(cfg.supabase_url, cfg.supabase_publishable_key);
+
+  // 3) 로그인 이메일을 user-pill 에 표시한다(getUser → 없으면 getSession 폴백).
+  try {
+    let email = null;
+    const u = await acctSupa.auth.getUser();
+    email = u && u.data && u.data.user && u.data.user.email;
+    if (!email) {
+      const s = await acctSupa.auth.getSession();
+      email = s && s.data && s.data.session && s.data.session.user && s.data.session.user.email;
+    }
+    if (email) {
+      document.getElementById("acctEmail").textContent = email;
+      document.getElementById("acctAvatar").textContent = email.charAt(0).toUpperCase();
+    }
+  } catch (e) { /* 이메일 표시는 실패해도 메뉴 동작엔 지장 없음 */ }
+}
+
+// 드롭다운 토글 — 버튼 클릭으로 열고, 바깥 클릭/ESC 로 닫는다.
+const acctBtn = document.getElementById("acctBtn");
+const acctMenu = document.getElementById("acctMenu");
+function closeAcctMenu() { acctMenu.classList.add("hidden"); acctBtn.setAttribute("aria-expanded", "false"); }
+if (acctBtn) {
+  acctBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const open = acctMenu.classList.toggle("hidden");
+    acctBtn.setAttribute("aria-expanded", open ? "false" : "true");
+  });
+  document.addEventListener("click", (e) => { if (!e.target.closest("#acct")) closeAcctMenu(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeAcctMenu(); });
+}
+
+// ── 비밀번호 변경 모달 ──
+const pwModal = document.getElementById("pwModal");
+const pwMsg = document.getElementById("pwMsg");
+function openPwModal() {
+  closeAcctMenu();
+  document.getElementById("pwNew").value = "";
+  document.getElementById("pwConfirm").value = "";
+  pwMsg.textContent = "";
+  pwModal.classList.remove("hidden");
+  document.getElementById("pwNew").focus();
+}
+function closePwModal() { pwModal.classList.add("hidden"); }
+document.getElementById("acctPw").addEventListener("click", openPwModal);
+document.getElementById("pwCancel").addEventListener("click", closePwModal);
+// 배경(패널 바깥) 클릭 시 닫기
+pwModal.addEventListener("click", (e) => { if (e.target === pwModal) closePwModal(); });
+
+document.getElementById("pwSubmit").addEventListener("click", async () => {
+  const np = document.getElementById("pwNew").value;
+  const cf = document.getElementById("pwConfirm").value;
+  // 검증: 최소 6자(Supabase 기본) + 두 값 일치. 실패 시 한국어 오류.
+  if (np.length < 6) { pwMsg.textContent = "비밀번호는 최소 6자 이상이어야 합니다."; return; }
+  if (np !== cf) { pwMsg.textContent = "두 비밀번호가 일치하지 않습니다."; return; }
+  if (!acctSupa) { pwMsg.textContent = "인증 준비 중입니다. 잠시 후 다시 시도해 주세요."; return; }
+  pwMsg.textContent = "변경 중…";
+  try {
+    // updateUser 는 현재 세션 기준으로 비밀번호를 바꾼다(현재 비번 입력 불필요·재로그인 불필요).
+    const { error } = await acctSupa.auth.updateUser({ password: np });
+    if (error) {
+      pwMsg.textContent = "변경하지 못했습니다: " + (error.message || "알 수 없는 오류");
+      return;
+    }
+    closePwModal();
+    toast("pass", "check_circle", "비밀번호가 변경되었습니다", "다음 로그인부터 새 비밀번호를 사용하세요.");
+  } catch (err) {
+    pwMsg.textContent = "변경 중 문제가 발생했습니다: " + err;
+  }
+});
+
+// ── 로그아웃 ──
+document.getElementById("acctLogout").addEventListener("click", async () => {
+  closeAcctMenu();
+  try { if (acctSupa) await acctSupa.auth.signOut(); } catch (e) { /* 실패해도 토큰은 비운다 */ }
+  sessionStorage.removeItem(TOKEN_KEY);   // 우리 임시 출입증 보관함 비우기
+  location.replace("/static/screens/login.html");
+});
+
+initAccount();   // 계정 메뉴 초기화(이메일 표시 + supabase 준비)
 </script>
 </body>
 </html>
