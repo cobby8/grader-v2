@@ -2,6 +2,12 @@
 <!-- 담당: debugger, tester | 최대 30항목 -->
 <!-- 이 프로젝트에서 반복되는 에러 패턴, 함정, 주의사항을 기록 -->
 
+### [2026-06-26] 프런트 인증 게이트: 루트가 앱 화면으로 직행하면 미인증자도 화면이 뜬다 — 루트는 login으로, 서빙 404는 StaticFiles 마운트부터
+- **분류**: error
+- **발견자**: developer
+- **내용**: 배포본에서 ①루트 `/` 404("Cannot GET /") ②`/static/screens/login.html` 404 ③로그인 안 했는데 work 화면이 떠서 첫 `/api/patterns`만 401로 막힘 — "프런트 로그인 흐름 통째 누락" 증상. **근본원인**: 서버는 토큰을 못 본다(sessionStorage·Authorization 헤더는 fetch에만 붙음). 그래서 루트 `/`가 곧장 work 화면으로 RedirectResponse하면 **미인증자에게도 work가 뜨고**, 화면이 첫 API를 호출해 401을 받아야만 비로소 튕긴다(나쁜 UX·게이트 우회처럼 보임). **해결**: 루트 `/`는 **login.html로 리다이렉트**하고, login.html이 (a)로컬 무인증이면 즉시 work (b)유효 세션 있으면 getSession()으로 work 직행 (c)없으면 로그인 폼을 보이게 한다. 그리고 공통 fetch 래퍼(apiFetch)는 **401 시 sessionStorage 토큰 clear 후** login 리다이렉트(만료 토큰 잔류 방지). **예방규칙**: SPA식 인증 게이트는 "서버 라우트 분기(토큰 모름)"가 아니라 "루트→login 진입 + 클라이언트 세션 판정 + apiFetch 401 가드(토큰 clear 포함)" 3종을 모두 둔다. login.html 자체가 404면 코드 문제가 아니라 StaticFiles 마운트 경로/파일 실재/`_handoff→static` 복사 누락부터 확인(라우트 우선순위도). 인증코드(apiFetch)가 webapp/static에만 있고 _handoff 원본엔 없는 **비대칭**이면 _handoff 재복사 시 통째 소실되니 주의.
+- **참조횟수**: 0
+
 ### [2026-06-25] PDF 클립 `W n`은 현재 경로를 소비한다 — 클립영역을 fill하려면 폴리곤을 다시 그려야
 - **분류**: error
 - **발견자**: developer / reviewer

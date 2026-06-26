@@ -18,11 +18,14 @@ import traceback
 import zipfile
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, UploadFile, File, Body, Form
+from fastapi import APIRouter, UploadFile, File, Body, Form, Depends
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 
 from . import state
 from .state import DEFAULT_PORT
+# 관리자 전용 게이트(Dependency). 패턴 등록·설정 저장처럼 '쓰기' 작업에만 건다.
+# (로컬 무인증이면 admin_required 도 통과 — 회귀 0. 배포는 role=='admin' 만.)
+from .auth import admin_required
 
 # 엔진 공개 API 는 import 만 한다(수정 금지). preset.json 로드/검증을 재사용한다.
 from engine.grade import load_preset
@@ -84,7 +87,7 @@ def health() -> Dict[str, Any]:
     return {"status": "ok", "port": DEFAULT_PORT}
 
 
-@public_router.get("/config")
+@public_router.get("/public-config")
 def public_config() -> Dict[str, Any]:
     """프런트(login.html)가 런타임에 읽는 '공개 설정'.
 
@@ -94,14 +97,14 @@ def public_config() -> Dict[str, Any]:
     ⚠️ 여기서 내보내는 값은 '공개해도 되는 것만' 이다:
        · auth_required : 인증이 켜져 있는지(꺼져 있으면 로그인 없이 바로 진입).
        · supabase_url  : Supabase 프로젝트 URL(공개).
-       · supabase_anon_key : Supabase anon 공개키(프런트 노출용으로 설계된 키).
-    SUPABASE_JWT_SECRET·SERVICE_ROLE_KEY 같은 '비밀키' 는 절대 내보내지 않는다.
+       · supabase_publishable_key : Supabase 공개키(프런트 노출용으로 설계된 키).
+    SUPABASE_SECRET_KEY 같은 '비밀키' 는 절대 내보내지 않는다(응답에 키 이름조차 없음).
     """
     from .auth import auth_required
     return {
         "auth_required": auth_required(),
         "supabase_url": os.environ.get("SUPABASE_URL", ""),
-        "supabase_anon_key": os.environ.get("SUPABASE_ANON_KEY", ""),
+        "supabase_publishable_key": os.environ.get("SUPABASE_PUBLISHABLE_KEY", ""),
     }
 
 
@@ -183,7 +186,7 @@ def settings() -> Dict[str, Any]:
     return state.read_settings()
 
 
-@router.put("/settings")
+@router.put("/settings", dependencies=[Depends(admin_required)])
 def update_settings(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     """설정을 '머지' 방식으로 저장한다(부분 갱신 → 전체 반환).
 
@@ -1059,7 +1062,7 @@ def _build_pieces(svg_index_count: int, page_w: float, page_h: float,
     return pieces
 
 
-@router.post("/patterns")
+@router.post("/patterns", dependencies=[Depends(admin_required)])
 async def create_pattern(
     name: str = Form(...),
     base_size: Optional[str] = Form(None),

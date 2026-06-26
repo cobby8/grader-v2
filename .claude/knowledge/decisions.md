@@ -2,6 +2,12 @@
 <!-- 담당: planner-architect | 최대 30항목 -->
 <!-- "왜 A 대신 B를 선택했는지" 기술 결정의 배경과 이유를 기록 -->
 
+### [2026-06-25] 배포 Phase 1 갱신본: JWT secret(HS256) → Supabase 토큰 introspection 교체
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: 2025 Supabase 비대칭 JWT 서명키 도입으로 **HS256 secret 로컬검증 폐기**, `GET {SUPABASE_URL}/auth/v1/user` introspection으로 교체(서명 알고리즘 무관·가장 견고). **auth.py require_auth 전면교체**: 토글 OFF=즉시통과(로컬 회귀0 보존), ON=Authorization Bearer 추출→httpx.get(headers={apikey:PUBLISHABLE, Authorization:Bearer token})→200이면 user(id·email·app_metadata.role)을 request.state, 비200/네트워크예외=401. **성능: 토큰별 60초 메모리캐시**(`_TOKEN_CACHE: dict[token, (user, expire_ts)]` + threading.Lock, 모듈전역, --workers 1이라 일관). **제거**: pyjwt(requirements·auth.py의 import jwt/jwt.decode/secret분기/안내500 전부). **env 이름 정합**: SUPABASE_ANON_KEY/SERVICE_ROLE_KEY/JWT_SECRET 폐기 → URL/PUBLISHABLE_KEY/SECRET_KEY(로컬 .env가 이미 새이름이라 정합·.env.example만 옛이름이라 동기 필요). SECRET_KEY는 introspection 미사용이나 env엔 유지(향후 admin API), public-config·프런트 절대금지. **admin 게이트 신규**: admin_required Dependency(role!='admin'이면 403, 단 토글 OFF시 통과=로컬일관)를 POST /api/patterns·PUT /api/settings 데코레이터 dependencies에만. **/api/config→/api/public-config**: supabase_anon_key→supabase_publishable_key. **프런트**: login.html 2곳(webapp/static+_handoff 동기) /api/public-config·publishable 키명. apiFetch 래퍼는 무변경(토큰명·Authorization 동일). **Dockerfile PORT**: 정본 exec form --port 8000 고정 대신 **현 ${PORT:-8000} shell form 유지 권고** — 근거 Render 공식문서(Docker web service에 PORT 주입·기본 10000·$PORT 바인딩 권장), 8000 고정은 10000과 미스매치로 헬스체크 실패 위험. **tester는 외부 Supabase 호출이라 httpx 모킹 필수**(200/401/timeout·60초캐시 call_count·admin403·로컬토글회귀·SECRET미노출·미로그인401). 불변: 엔진 공개API 무수정·--workers 1·SECRET 레포금지·GRADER_REQUIRE_AUTH 토글 보존.
+- **참조횟수**: 0
+
 ### [2026-06-25] 배포 Phase 1: Docker+Render+Supabase Auth 게이트 설계(GS env 우선·인증 끼움점·_handoff 복사규칙)
 - **분류**: decision
 - **발견자**: planner-architect

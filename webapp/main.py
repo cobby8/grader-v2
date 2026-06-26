@@ -54,24 +54,34 @@ def login():
 
 @app.get("/")
 def root():
-    """루트 접속 시 작업 화면(work.html)으로 보낸다.
+    """루트 접속 시 로그인 화면(login.html)으로 보낸다.
+
+    왜 work 가 아니라 login 인가(배포본 404·미인증 우회 버그 수정):
+      서버는 브라우저의 sessionStorage 토큰을 모른다(토큰은 fetch 헤더에만 실린다).
+      그래서 루트에서 곧장 work.html 로 보내면, 배포(인증 ON)에서 '로그인 안 한
+      사람도 일단 work 화면이 뜨고' 첫 /api 호출이 401 나야 비로소 로그인으로
+      튕긴다(증상: 로그인 없이 work 떠서 막힘). 대신 루트를 login.html 로 보내면:
+        · 미로그인: 로그인 화면이 먼저 보인다(완료기준 충족).
+        · 이미 유효 세션: login.html 의 JS 가 이를 감지해 곧장 work 로 보낸다.
+      로컬(인증 OFF)에서도 login.html 이 /api/public-config 의 auth_required=false
+      를 보고 즉시 work 로 넘기므로 직원 흐름은 그대로다(회귀 0).
 
     왜 '직접 반환' 이 아니라 '리다이렉트' 인가:
-      work.html 의 마크업은 screens/ 폴더 안에서 열리도록 자산을 상대경로
+      login.html 의 마크업은 screens/ 폴더 안에서 열리도록 자산을 상대경로
       (예: ../styles.css)로 참조한다. 루트(/)에서 그대로 내려보내면 브라우저가
       ../styles.css 를 /styles.css 로 잘못 풀어 스타일이 깨진다. 그래서 원본
       마크업을 건드리지 않고, 브라우저 기준 경로가 /static/screens/ 가 되도록
       그 주소로 보내 준다(상대경로가 /static/styles.css 로 정확히 풀린다).
     """
-    work_html = os.path.join(STATIC_DIR, "screens", "work.html")
-    if not os.path.exists(work_html):
+    login_html = os.path.join(STATIC_DIR, "screens", "login.html")
+    if not os.path.exists(login_html):
         # 정적 복사본이 빠졌을 때 비개발자도 알 수 있게 한국어로 안내한다.
         return JSONResponse(
             status_code=500,
             content={
-                "error": "작업 화면 파일을 찾지 못했습니다.",
-                "detail": "webapp/static/screens/work.html 이 있는지 확인하세요. "
+                "error": "로그인 화면 파일을 찾지 못했습니다.",
+                "detail": "webapp/static/screens/login.html 이 있는지 확인하세요. "
                           "디자인 갱신 시 _handoff/grader-v2-static 을 다시 복사해야 합니다.",
             },
         )
-    return RedirectResponse(url="/static/screens/work.html")
+    return RedirectResponse(url="/static/screens/login.html")

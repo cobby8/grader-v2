@@ -149,6 +149,8 @@ async function apiFetch(url, opts) {
   const res = await fetch(url, Object.assign({}, opts, { headers }));
   if (res.status === 401) {
     // 출입증 없음/만료 → 로그인 화면으로(현재 작업은 버려진다).
+    // 만료된 토큰을 임시 보관함(sessionStorage)에서 먼저 비운다(의뢰서4: clear 후 리다이렉트).
+    sessionStorage.removeItem(TOKEN_KEY);
     location.replace("/static/screens/login.html");
     throw new Error("로그인이 필요합니다.");
   }

@@ -17,11 +17,11 @@ services:
       # ── 비밀/환경별 값(레포에 값 없음 — Render 대시보드에서 입력) ──
       - key: SUPABASE_URL
         sync: false
-      - key: SUPABASE_ANON_KEY
+      # 공개키(프런트 노출 OK) — introspection apikey·프런트 createClient 에 쓰인다.
+      - key: SUPABASE_PUBLISHABLE_KEY
         sync: false
-      - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
-      - key: SUPABASE_JWT_SECRET
+      # 비밀키(절대 프런트·레포 노출 금지) — 현재 검증엔 안 쓰지만 향후 admin API 대비 보관.
+      - key: SUPABASE_SECRET_KEY
         sync: false
       # ── 값 포함(비밀 아님) ──
       - key: GS_BIN
