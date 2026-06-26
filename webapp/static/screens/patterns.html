@@ -105,6 +105,17 @@
   .login-field label { display: block; font: var(--text-sm); color: var(--text-subtle); margin-bottom: 6px; }
   .login-field input { width: 100%; }
   /* .hidden 은 app.css 에 이미 정의됨 — 중복 선언하지 않는다. */
+
+  /* 사용 안내 모달: .pwmodal 오버레이를 그대로 재사용하고, 본문이 길어 패널만 넓힌다. */
+  .helpmodal__panel { width: 100%; max-width: 560px; }
+  /* 본문이 길면 화면을 넘지 않게 스크롤(모바일/좁은 화면 포함). */
+  .helpmodal__body { max-height: 70vh; overflow-y: auto; margin: 4px 0 16px; }
+  .helpmodal__body h3 { font: var(--text-md-strong, 600 15px/1.4 sans-serif); color: var(--text-strong); margin: 16px 0 6px; }
+  .helpmodal__body h3:first-child { margin-top: 0; }
+  .helpmodal__body ol, .helpmodal__body ul { margin: 0 0 4px; padding-left: 20px; }
+  .helpmodal__body li { font: var(--text-sm); color: var(--text-body); margin-bottom: 4px; line-height: 1.5; }
+  .helpmodal__body p { font: var(--text-sm); color: var(--text-body); margin: 0 0 4px; }
+  .helpmodal__body strong { color: var(--text-strong); }
 </style>
 </head>
 <body>
@@ -131,7 +142,7 @@
     <header class="topbar">
       <div class="topbar__left"><h1 class="page-title">패턴 관리</h1></div>
       <div class="topbar__right">
-        <button class="icon-btn" aria-label="도움말"><span class="material-symbols-outlined">help_outline</span></button>
+        <button class="icon-btn" id="helpBtn" aria-label="도움말"><span class="material-symbols-outlined">help_outline</span></button>
         <!-- ===== 계정 메뉴(4화면 공통) ===== -->
         <div class="acct" id="acct">
           <button class="user-pill acct__btn" id="acctBtn" type="button" aria-haspopup="menu" aria-expanded="false">
@@ -304,6 +315,49 @@
     </div>
   </div>
 </div>
+<!-- ===== 사용 안내 모달(4화면 동일): 도움말(?) 버튼으로 열림 ===== -->
+<div class="pwmodal hidden" id="helpModal">
+  <div class="pwmodal__panel helpmodal__panel card card--pad" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+    <h2 class="pwmodal__title" id="helpTitle">사용 안내</h2>
+    <div class="helpmodal__body">
+      <p>전사유니폼 주문서를 넣으면 선수별 출력 파일(PDF/EPS)을 자동으로 만들어 ZIP으로 받는 사내 도구입니다.</p>
+
+      <h3>1. 첫 로그인 후 비밀번호 변경 (꼭!)</h3>
+      <ol>
+        <li>관리자에게 받은 <strong>이메일</strong>과 <strong>임시 비밀번호</strong>로 로그인합니다.</li>
+        <li>로그인하면 <strong>우측 상단의 내 이메일</strong>이 보입니다 → 클릭 → <strong>[비밀번호 변경]</strong> 선택.</li>
+        <li>새 비밀번호를 2번 입력(<strong>6자 이상</strong>, 두 칸 일치) → 변경. 재로그인은 필요 없습니다.</li>
+      </ol>
+
+      <h3>2. 출력 파일 만들기 — 5단계</h3>
+      <p>화면 위쪽 순서대로 진행하고, 오른쪽 <strong>주문 요약</strong>에서 진행 상태를 확인합니다.</p>
+      <ol>
+        <li><strong>패턴 선택</strong> — 만들 유니폼 패턴 카드를 클릭합니다.</li>
+        <li><strong>디자인</strong> — <strong>번호·이름 없는 빈 본체</strong>(PDF 호환 AI/PDF)를 업로드합니다. 업로드하면 자동 점검이 돌고, 통과해야 다음 단계가 켜집니다.</li>
+        <li><strong>주문서</strong> — STIZ 주문서 엑셀(.xlsx)을 업로드해 이름·배번·사이즈·수량을 확인합니다.</li>
+        <li><strong>생성</strong> — 출력 형식(PDF/EPS) 확인 후 생성합니다. 큰 주문은 시간이 걸립니다.</li>
+        <li><strong>검수 &amp; 다운로드</strong> — 선수별 미리보기·검증 결과 확인 후 <strong>ZIP 다운로드</strong>.</li>
+      </ol>
+
+      <h3>3. 로그아웃</h3>
+      <p>우측 상단 내 이메일 클릭 → <strong>[로그아웃]</strong>. 공용 PC에서는 꼭 로그아웃하세요.</p>
+
+      <h3>4. 자주 묻는 것 (FAQ)</h3>
+      <ul>
+        <li><strong>첫 화면이 느려요</strong> — 서버를 깨우는 중입니다(약 30초). 잠시 기다리면 떠요.</li>
+        <li><strong>"로그인이 필요합니다"</strong> — 세션이 만료된 것. 다시 로그인하세요.</li>
+        <li><strong>디자인 "본체 누락" 경고</strong> — 일러스트레이터 저장 시 <strong>"PDF 호환 파일 만들기" 체크</strong>, 그리고 완성본 말고 <strong>번호·이름 없는 빈 본체</strong>를 업로드하세요.</li>
+        <li><strong>패턴 등록·설정이 안 돼요</strong> — 관리자(admin) 권한 계정만 가능합니다.</li>
+        <li><strong>비밀번호를 잊었어요</strong> — 관리자에게 임시 비밀번호 재발급을 요청하세요.</li>
+      </ul>
+      <p>문제가 계속되면 화면을 캡처해 관리자에게 전달해 주세요.</p>
+    </div>
+    <div class="pwmodal__actions">
+      <button class="btn btn--primary" type="button" id="helpClose">닫기</button>
+    </div>
+  </div>
+</div>
+
 <div class="toaster" id="toaster"></div>
 
 <!-- 계정 기능(비번변경/로그아웃)에 필요한 Supabase JS SDK(CDN). 빌드 0 원칙. -->
@@ -1064,6 +1118,19 @@ document.getElementById("acctLogout").addEventListener("click", async () => {
   sessionStorage.removeItem(TOKEN_KEY);
   location.replace("/static/screens/login.html");
 });
+
+// ── 사용 안내 모달(도움말 ? 버튼) ──
+// 비밀번호 변경 모달과 동일한 .pwmodal 패턴: 버튼으로 열고, 닫기버튼/배경클릭/ESC 로 닫는다.
+const helpModal = document.getElementById("helpModal");
+const helpBtn = document.getElementById("helpBtn");
+function openHelpModal() { helpModal.classList.remove("hidden"); document.getElementById("helpClose").focus(); }
+function closeHelpModal() { helpModal.classList.add("hidden"); }
+if (helpBtn) helpBtn.addEventListener("click", openHelpModal);
+document.getElementById("helpClose").addEventListener("click", closeHelpModal);
+// 배경(패널 바깥) 클릭 시 닫기 — 오버레이 자체를 클릭했을 때만.
+helpModal.addEventListener("click", (e) => { if (e.target === helpModal) closeHelpModal(); });
+// ESC 로 닫기(열려 있을 때만).
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !helpModal.classList.contains("hidden")) closeHelpModal(); });
 
 initAccount();
 </script>
