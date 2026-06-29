@@ -4,12 +4,13 @@
 | 파일 | 항목 수 | 최종 업데이트 |
 |------|--------|------------|
 | architecture.md | 7 | 2026-06-22 |
-| errors.md | 9 | 2026-06-26 |
+| errors.md | 10 | 2026-06-29 |
 | conventions.md | 4 | 2026-06-26 |
 | decisions.md | 13 | 2026-06-26 |
 | lessons.md | 1 | 2026-06-15 |
 
 ## 최근 추가된 지식 (최근 5건)
+- [2026-06-29] errors: 배포본 404 디버깅 — 404 본문이 "Cannot GET"(Express)이면 우리 FastAPI 앱 아님(이름선점 타인 앱). 코드 의심 전 ①응답 서버시그니처 ②대시보드 실제 URL(해시 suffix) ③서비스 존재여부 확인. health 200 하나로 단정 금지
 - [2026-06-26] decisions/errors: 배포 Phase1 갱신 — 인증을 JWT secret 로컬검증→Supabase 토큰 introspection(httpx GET /auth/v1/user, apikey=PUBLISHABLE, timeout5, 60초캐시)으로 교체. admin_required(role!=admin→403)는 POST patterns·PUT settings에만. env PUBLISHABLE/SECRET. 프런트 함정: 루트가 앱화면 직행하면 미인증 우회→루트는 login으로+클라 세션판정+apiFetch 401가드(토큰clear). login 404는 StaticFiles 마운트/복사부터
 - [2026-06-25] decisions: 배포 Phase1 설계 — Docker+Render+Supabase Auth. GS_BIN env를 eps.find_ghostscript 1순위(로컬 폴백 보존), 인증 Dependency는 /api/health만 제외, 공통 apiFetch 래퍼로 Authorization 부착+401 리다이렉트, _handoff 원본→webapp/static 복사. 엔진/run.bat 무수정·비밀키 레포금지·--workers 1 유지
 - [2026-06-25] decisions/errors: 합성 흰틈/극소형미달 해소 — A 본체색 채움(Piece.bg_cmyk, run_job이 preset.body_fill>detect_background_cmyk>None 1회 결정, place_block이 클립 W n직후·Do앞 fill) + B 사이즈별 자동블리드(cover_bleed dict면 앞판 dev로 clamp(1+1.3dev,1.0,1.12) 단일값 등방). 함정: PDF `W n`은 경로 소비→클립영역 fill하려면 폴리곤 재경로 필수

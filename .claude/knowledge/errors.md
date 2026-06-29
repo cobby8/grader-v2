@@ -2,6 +2,12 @@
 <!-- 담당: debugger, tester | 최대 30항목 -->
 <!-- 이 프로젝트에서 반복되는 에러 패턴, 함정, 주의사항을 기록 -->
 
+### [2026-06-29] 배포본 404 디버깅: 404 응답 본문이 "Cannot GET"이면 우리 앱이 아니다(Express=타인 앱·이름선점). 먼저 URL부터 의심
+- **분류**: error
+- **발견자**: pm
+- **내용**: Render 배포 검증 중 `grader-v2.onrender.com`이 루트 `/`·`/static/screens/login.html`·`/api/public-config` 전부 **404**, 그런데 `/api/health`만 200이라 "최신 코드 미반영"으로 오인하기 쉬웠다. **결정적 단서**: 404 응답 본문이 `Cannot GET /api/public-config` + `<title>Error</title>` HTML이었는데, 이건 **Express(Node.js)** 의 기본 404 문구다. 우리 앱은 **FastAPI(Python)** 이라 없는 경로엔 `{"detail":"Not Found"}` JSON을 준다. 즉 그 도메인에 떠 있는 건 **우리 앱이 아니라 이름(`grader-v2`)을 선점한 타인의 Express 앱**이었다. Render는 서비스명이 겹치면 `grader-v2-<해시>.onrender.com` 으로 실제 URL을 만든다. **여파**: 그 전 세션의 "배포본 루트/login 404" 증상으로 introspection 마이그레이션까지 했는데, 실제로는 **코드가 멀쩡한데 엉뚱한 URL을 보고 있었을** 가능성이 크다(GitHub 미푸시0, 코드 정상). **예방규칙**: 배포본이 404·이상동작이면 코드를 의심하기 전에 **(1) 응답 본문의 서버 시그니처 확인**(`Cannot GET`=Express, `{"detail":...}`=FastAPI, nginx/cloudflare 페이지 등) — 프레임워크가 우리 것과 다르면 그 URL은 우리 앱이 아니다. **(2) 실제 배포 URL을 대시보드에서 확인**(이름 선점 시 해시 suffix). **(3) 서비스 존재 여부**(없으면 배포 연결 자체가 안 된 것). health 200 하나로 "우리 서버 살아있음"이라 단정 금지(타인 앱도 /health를 가질 수 있다).
+- **참조횟수**: 0
+
 ### [2026-06-26] 프런트 인증 게이트: 루트가 앱 화면으로 직행하면 미인증자도 화면이 뜬다 — 루트는 login으로, 서빙 404는 StaticFiles 마운트부터
 - **분류**: error
 - **발견자**: developer
