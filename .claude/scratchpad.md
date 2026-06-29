@@ -1,9 +1,10 @@
 # 작업 스크래치패드
 
 ## 현재 작업
-- **상태**: ⏸️ **세션 정리(2026-06-29)**. 직전까지 배포본(Render) 검증 중 — **배포 URL 확인 대기**.
-- **현재 담당**: pm (다음 세션 이어서)
-- **🚨 다음 세션 최우선**: `grader-v2.onrender.com`은 **우리 앱이 아님**(404 응답이 `Cannot GET`=Express 메시지, 우리는 FastAPI). 이름 선점된 타인 앱 추정. → 수빈이 Render 대시보드에서 **실제 URL**(`grader-v2-xxxx.onrender.com` 형태) 확인해 주면 거기로 재검증(최신 0b8f4e9 반영·루트→login·게이트·도움말). **그동안의 "배포본 404" 증상이 사실 엉뚱한 URL을 본 것일 수 있음**(코드는 정상, 미푸시0). Render에 서비스 자체가 없으면 배포 연결부터 안내.
+- **상태**: ✅ **배포 정상 확인(2026-06-29)**. 실제 URL=**https://grader-v2-47gd.onrender.com** (이름선점으로 -47gd suffix). curl 검증 전부 통과.
+- **현재 담당**: pm
+- **배포 검증 결과**: /api/health=200 `{"status":"ok","port":10000}`(FastAPI·$PORT 주입 정상) / 루트 `/`=307→login.html / login.html=200 / /api/public-config=200(auth_required:true·url·publishable, SECRET 없음) / /api/patterns=401(게이트 작동). 최신 코드(0b8f4e9) 반영됨. ⚠️ 이전 "배포본 404"는 엉뚱한 URL(grader-v2=타인 Express앱) 본 것. 진짜 -47gd는 정상이었음.
+- **다음**: 브라우저에서 직원계정 로그인→work→5단계(패턴→디자인→주문서→생성→검수ZIP)→산출물 다운로드 실사용 검증. Supabase 직원계정/admin role 세팅.
 
 ## 진행 현황 (완료 — 상세는 git 히스토리 + knowledge)
 | 작업 | 내용 | 결과 |
