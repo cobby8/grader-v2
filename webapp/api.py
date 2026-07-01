@@ -1427,3 +1427,103 @@ def drive_tree(folderId: Optional[str] = None) -> JSONResponse:
         "isRoot": fid == gdrive.root_folder_id(),
         "items": items,
     })
+
+
+# ── 사이즈 파서(파일명 → 사이즈 토큰) ──────────────────────────────────────
+#   왜 필요한가: 실제 드라이브 파일명이 제각각이다(언더바/공백/중복공백/소문자 혼재).
+#     "농구유니폼_U넥_스탠다드_암홀X_XL.ai" · "U넥 상의 슬림 XL.ai" · "v넥 상의 스탠다드  XS.ai"
+#   방식: 확장자를 떼고 [공백/_/-] 로 토큰화한 뒤, '토큰 하나가 사이즈 목록과 정확히 일치' 하는
+#     것만 사이즈로 인정한다(부분매칭 금지 → "U넥"의 U, "암홀X"의 X 오인 방지). 여러 개면 끝의 것.
+_SIZE_TOKENS = [
+    "5XS", "4XS", "3XS", "2XS", "XS", "S", "M", "L",
+    "XL", "2XL", "3XL", "4XL", "5XL", "6XL", "7XL",
+]
+_SIZE_SET = set(_SIZE_TOKENS)
+_SIZE_RANK = {s: i for i, s in enumerate(_SIZE_TOKENS)}  # 정렬용(작은→큰)
+
+# 등록 후보로 볼 파일 확장자(대소문자 무시). 나머지는 후보에서 제외.
+_PATTERN_FILE_EXTS = {".ai", ".pdf", ".svg"}
+
+
+def _parse_size_from_filename(filename: str) -> Optional[str]:
+    """파일명에서 사이즈 토큰(예 'XL')을 뽑는다. 못 찾으면 None.
+
+    확장자 제거 → [공백/_/-] 로 토큰화 → 사이즈 목록과 '정확히' 일치하는 토큰만 수집 →
+    여러 개면 마지막(파일명 끝쪽)을 사이즈로 본다(예: 'XL_최종' → XL).
+    """
+    import re
+    stem = os.path.splitext(filename or "")[0]
+    tokens = [t for t in re.split(r"[\s_\-]+", stem) if t]
+    found = [t.upper() for t in tokens if t.upper() in _SIZE_SET]
+    return found[-1] if found else None
+
+
+def _is_temp_or_aux_file(name: str) -> bool:
+    """임시/보조 파일인지(등록 후보에서 빼야 하는지). 예: '~ai-...tmp'.
+
+    규칙: '~' 로 시작하거나 확장자가 '.tmp' 면 임시로 본다.
+    ('원본'·'0.원본'·'원본 작업용' 은 대개 폴더라 트리 탐색에서 보이되, 여기 파일 판정과는 별개.)
+    """
+    n = (name or "").strip()
+    if n.startswith("~"):
+        return True
+    return os.path.splitext(n)[1].lower() == ".tmp"
+
+
+@router.get("/drive/folder/{folder_id}/patternfiles", dependencies=[Depends(admin_required)])
+def drive_pattern_files(folder_id: str) -> JSONResponse:
+    """폴더 안 '사이즈별 패턴 파일 후보' + 파싱된 사이즈 미리보기(등록 전 확인용).
+
+    비유: 폴더를 열어 "이건 XL, 저건 2XL…" 하고 옷 사이즈표를 만들어 보여주는 일.
+    등록(from-drive) 전에 사람이 눈으로 '사이즈 인식이 맞는지' 확인하라고 미리 보여준다.
+
+    분류:
+      · files    : .ai/.pdf/.svg 이면서 사이즈가 인식된 것(사이즈 작은→큰 순). 등록 후보.
+      · warnings : 임시/보조(.tmp·~)이거나, 후보 확장자인데 사이즈를 못 읽은 것(사유 포함).
+      (하위 폴더·기타 확장자는 여기서 제외 — 파일 미리보기 목적.)
+    """
+    if not gdrive.is_configured():
+        return JSONResponse(content=_drive_not_configured_payload())
+
+    fid = (folder_id or "").strip()
+    if not fid:
+        return JSONResponse(status_code=400, content={"error": "folder_id 가 비어 있습니다."})
+    try:
+        children = gdrive.list_children(fid)
+    except gdrive.DriveConfigError as e:
+        return JSONResponse(status_code=500, content={"error": f"Drive 설정 오류: {e}"})
+    except gdrive.DriveError as e:
+        return JSONResponse(status_code=502, content={"error": f"Drive 접근 실패: {e}"})
+
+    files: List[Dict[str, Any]] = []
+    warnings: List[Dict[str, str]] = []
+    for it in children:
+        if it.get("isFolder"):
+            continue  # 하위 폴더는 트리 탐색(/drive/tree)에서 다룬다.
+        name = it.get("name") or ""
+        if _is_temp_or_aux_file(name):
+            warnings.append({"name": name, "reason": "임시/보조 파일(자동 제외)"})
+            continue
+        ext = os.path.splitext(name)[1].lower()
+        if ext not in _PATTERN_FILE_EXTS:
+            continue  # .ai/.pdf/.svg 가 아니면 패턴 후보 아님(조용히 무시).
+        size = _parse_size_from_filename(name)
+        if not size:
+            warnings.append({"name": name, "reason": "사이즈를 인식하지 못함(파일명 확인 필요)"})
+            continue
+        files.append({
+            "id": it.get("id"),
+            "name": name,
+            "size": size,
+            "mimeType": it.get("mimeType"),
+        })
+
+    # 사이즈 작은→큰 순 정렬(미리보기 가독성). 알 수 없는 값은 뒤로.
+    files.sort(key=lambda f: _SIZE_RANK.get(f["size"], len(_SIZE_TOKENS)))
+
+    return JSONResponse(content={
+        "configured": True,
+        "folderId": fid,
+        "files": files,
+        "warnings": warnings,
+    })
