@@ -22,6 +22,7 @@ from fastapi import APIRouter, UploadFile, File, Body, Form, Depends
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 
 from . import state
+from . import gdrive  # Google Drive 연동(서비스계정 읽기전용). 미설정이면 이 기능만 비활성.
 from .state import DEFAULT_PORT
 # 관리자 전용 게이트(Dependency). 패턴 등록·설정 저장처럼 '쓰기' 작업에만 건다.
 # (로컬 무인증이면 admin_required 도 통과 — 회귀 0. 배포는 role=='admin' 만.)
@@ -1372,3 +1373,57 @@ def _cleanup_dir(path: str) -> None:
             _sh.rmtree(path, ignore_errors=True)
     except Exception:
         pass
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Google Drive 패턴 라이브러리 (공유드라이브 트리 탐색 → 폴더 선택 → 등록)
+#   서버가 '서비스 계정(로봇 계정)' 으로 공유드라이브를 '읽기 전용' 탐색한다.
+#   전부 admin 전용(로컬 무인증이면 통과 — 회귀 0). 실제 Drive 접속은 webapp/gdrive.py.
+#   미설정(GDRIVE_* env 없음)이면 에러가 아니라 200 + {configured:false} 로 안내한다
+#   → 화면이 "관리자 설정 필요" 빈상태를 그려 주면 된다(관리자가 아직 안 켠 정상 상태).
+# ══════════════════════════════════════════════════════════════════════════
+
+def _drive_not_configured_payload() -> Dict[str, Any]:
+    """Drive 미설정 안내 본문(여러 엔드포인트 공용)."""
+    return {
+        "configured": False,
+        "message": (
+            "Google Drive 연동이 설정되지 않았습니다. 관리자에게 문의하세요"
+            " (서버 환경변수 GDRIVE_SA_JSON · GDRIVE_ROOT_FOLDER_ID 필요)."
+        ),
+    }
+
+
+@router.get("/drive/tree", dependencies=[Depends(admin_required)])
+def drive_tree(folderId: Optional[str] = None) -> JSONResponse:
+    """폴더 하나의 '바로 아래' 항목(하위폴더·파일)을 1단계만 나열(트리 지연 로딩).
+
+    비유: 파일 탐색기에서 폴더 하나를 '펼치면' 그 안 항목만 보이는 것과 같다.
+    깊은 트리를 한 번에 다 읽지 않고, 화면이 펼칠 때마다 이 API 를 폴더별로 부른다.
+
+    쿼리:
+      folderId : 펼칠 폴더 ID. 없으면 루트(GDRIVE_ROOT_FOLDER_ID)부터.
+    반환:
+      · 미설정 : {configured:false, message}
+      · 정상   : {configured:true, folderId, isRoot, items:[{id,name,isFolder,mimeType}]}
+                 items 는 폴더 먼저·이름순.
+    """
+    if not gdrive.is_configured():
+        return JSONResponse(content=_drive_not_configured_payload())
+
+    fid = (folderId or "").strip() or gdrive.root_folder_id()
+    try:
+        items = gdrive.list_children(fid)
+    except gdrive.DriveConfigError as e:
+        # 키/자격증명 문제 = 서버 설정 오류.
+        return JSONResponse(status_code=500, content={"error": f"Drive 설정 오류: {e}"})
+    except gdrive.DriveError as e:
+        # 권한 없음·잘못된 폴더ID·네트워크 등 Drive 호출 실패.
+        return JSONResponse(status_code=502, content={"error": f"Drive 접근 실패: {e}"})
+
+    return JSONResponse(content={
+        "configured": True,
+        "folderId": fid,
+        "isRoot": fid == gdrive.root_folder_id(),
+        "items": items,
+    })
