@@ -1470,31 +1470,15 @@ def _is_temp_or_aux_file(name: str) -> bool:
     return os.path.splitext(n)[1].lower() == ".tmp"
 
 
-@router.get("/drive/folder/{folder_id}/patternfiles", dependencies=[Depends(admin_required)])
-def drive_pattern_files(folder_id: str) -> JSONResponse:
-    """폴더 안 '사이즈별 패턴 파일 후보' + 파싱된 사이즈 미리보기(등록 전 확인용).
+def _scan_folder_pattern_files(fid: str):
+    """폴더 내 사이즈별 패턴 파일 후보를 분류한다(미리보기 엔드포인트·등록에서 공용).
 
-    비유: 폴더를 열어 "이건 XL, 저건 2XL…" 하고 옷 사이즈표를 만들어 보여주는 일.
-    등록(from-drive) 전에 사람이 눈으로 '사이즈 인식이 맞는지' 확인하라고 미리 보여준다.
-
-    분류:
-      · files    : .ai/.pdf/.svg 이면서 사이즈가 인식된 것(사이즈 작은→큰 순). 등록 후보.
-      · warnings : 임시/보조(.tmp·~)이거나, 후보 확장자인데 사이즈를 못 읽은 것(사유 포함).
-      (하위 폴더·기타 확장자는 여기서 제외 — 파일 미리보기 목적.)
+    반환: (files, warnings)
+      files    : [{id,name,size,mimeType}] — .ai/.pdf/.svg 이고 사이즈 인식됨(작은→큰 정렬).
+      warnings : [{name,reason}] — 임시/보조 파일이거나 사이즈 미상.
+    gdrive 예외(DriveConfigError/DriveError)는 호출부가 처리하도록 그대로 올린다.
     """
-    if not gdrive.is_configured():
-        return JSONResponse(content=_drive_not_configured_payload())
-
-    fid = (folder_id or "").strip()
-    if not fid:
-        return JSONResponse(status_code=400, content={"error": "folder_id 가 비어 있습니다."})
-    try:
-        children = gdrive.list_children(fid)
-    except gdrive.DriveConfigError as e:
-        return JSONResponse(status_code=500, content={"error": f"Drive 설정 오류: {e}"})
-    except gdrive.DriveError as e:
-        return JSONResponse(status_code=502, content={"error": f"Drive 접근 실패: {e}"})
-
+    children = gdrive.list_children(fid)
     files: List[Dict[str, Any]] = []
     warnings: List[Dict[str, str]] = []
     for it in children:
@@ -1517,9 +1501,35 @@ def drive_pattern_files(folder_id: str) -> JSONResponse:
             "size": size,
             "mimeType": it.get("mimeType"),
         })
-
-    # 사이즈 작은→큰 순 정렬(미리보기 가독성). 알 수 없는 값은 뒤로.
+    # 사이즈 작은→큰 순 정렬(가독성). 알 수 없는 값은 뒤로.
     files.sort(key=lambda f: _SIZE_RANK.get(f["size"], len(_SIZE_TOKENS)))
+    return files, warnings
+
+
+@router.get("/drive/folder/{folder_id}/patternfiles", dependencies=[Depends(admin_required)])
+def drive_pattern_files(folder_id: str) -> JSONResponse:
+    """폴더 안 '사이즈별 패턴 파일 후보' + 파싱된 사이즈 미리보기(등록 전 확인용).
+
+    비유: 폴더를 열어 "이건 XL, 저건 2XL…" 하고 옷 사이즈표를 만들어 보여주는 일.
+    등록(from-drive) 전에 사람이 눈으로 '사이즈 인식이 맞는지' 확인하라고 미리 보여준다.
+
+    분류:
+      · files    : .ai/.pdf/.svg 이면서 사이즈가 인식된 것(사이즈 작은→큰 순). 등록 후보.
+      · warnings : 임시/보조(.tmp·~)이거나, 후보 확장자인데 사이즈를 못 읽은 것(사유 포함).
+      (하위 폴더·기타 확장자는 여기서 제외 — 파일 미리보기 목적.)
+    """
+    if not gdrive.is_configured():
+        return JSONResponse(content=_drive_not_configured_payload())
+
+    fid = (folder_id or "").strip()
+    if not fid:
+        return JSONResponse(status_code=400, content={"error": "folder_id 가 비어 있습니다."})
+    try:
+        files, warnings = _scan_folder_pattern_files(fid)
+    except gdrive.DriveConfigError as e:
+        return JSONResponse(status_code=500, content={"error": f"Drive 설정 오류: {e}"})
+    except gdrive.DriveError as e:
+        return JSONResponse(status_code=502, content={"error": f"Drive 접근 실패: {e}"})
 
     return JSONResponse(content={
         "configured": True,
@@ -1527,3 +1537,125 @@ def drive_pattern_files(folder_id: str) -> JSONResponse:
         "files": files,
         "warnings": warnings,
     })
+
+
+class _DriveUpload:
+    """create_pattern 이 먹는 UploadFile 흉내(duck-type).
+
+    create_pattern 은 업로드 객체에서 '.filename' 과 state.save_upload() 만 쓰고,
+    save_upload 는 다시 '.filename'·'.file'(seek/read) 만 쓴다(정독으로 확인). 그래서
+    이 둘만 갖추면 기존 등록 로직을 안전하게 그대로 재사용할 수 있다(엔진·등록 무수정).
+    """
+
+    def __init__(self, filename: str, fileobj) -> None:
+        self.filename = filename
+        self.file = fileobj
+
+
+@router.post("/patterns/from-drive", dependencies=[Depends(admin_required)])
+async def create_pattern_from_drive(payload: Dict[str, Any] = Body(...)) -> Any:
+    """Google Drive 폴더 하나를 골라 패턴으로 등록한다(기존 create_pattern 재사용).
+
+    payload:
+      folderId          : (필수) 등록할 폴더 ID.
+      name              : (필수) 패턴 이름.
+      base_size         : (선택) 기준 사이즈(없으면 XL→중앙 자동).
+      glyph_file_id     : (선택) 글리프셋 소스 파일 ID(폴더 내).
+      reference_file_id : (선택) 완성본 파일 ID(area 자동추출).
+      glyph_artbox      : (선택) "x0,y0,x1,y1".
+      glyph_order       : (선택) 글리프 정렬 문자열.
+
+    흐름: Drive 다운로드(임시) → 파일명을 '<사이즈>.<확장자>' 로 정리 → '가짜 업로드'로
+    감싸 create_pattern 에 넘긴다 → 기존 변환·검증·preset 생성이 그대로 돈다. 임시파일 정리.
+    """
+    if not gdrive.is_configured():
+        return JSONResponse(content=_drive_not_configured_payload())
+
+    folder_id = str(payload.get("folderId") or "").strip()
+    name = str(payload.get("name") or "").strip()
+    if not folder_id:
+        return JSONResponse(status_code=400, content={"error": "folderId 가 필요합니다."})
+    if not name:
+        return JSONResponse(status_code=400, content={"error": "패턴 이름(name)이 필요합니다."})
+
+    # 1) 폴더 스캔 → 사이즈 인식된 파일 목록(미리보기와 동일 로직).
+    try:
+        files, scan_warnings = _scan_folder_pattern_files(folder_id)
+    except gdrive.DriveConfigError as e:
+        return JSONResponse(status_code=500, content={"error": f"Drive 설정 오류: {e}"})
+    except gdrive.DriveError as e:
+        return JSONResponse(status_code=502, content={"error": f"Drive 접근 실패: {e}"})
+
+    if not files:
+        return JSONResponse(status_code=400, content={
+            "error": "등록할 사이즈 파일이 없습니다(사이즈 인식 실패 또는 빈 폴더).",
+            "warnings": scan_warnings,
+        })
+
+    base_size = payload.get("base_size") or None
+    glyph_artbox = payload.get("glyph_artbox") or None
+    glyph_order = payload.get("glyph_order") or None
+    glyph_file_id = str(payload.get("glyph_file_id") or "").strip()
+    reference_file_id = str(payload.get("reference_file_id") or "").strip()
+
+    # 2) 임시 다운로드 폴더(끝나면 통째 삭제). 열린 파일핸들도 finally 에서 닫는다.
+    tmp_dir = tempfile.mkdtemp(prefix="fromdrive_")
+    open_handles: List[Any] = []
+    try:
+        # 2a) 사이즈 파일들 다운로드 → '<사이즈>.<ext>' 어댑터(create_pattern 파서가 정확히 읽음).
+        size_uploads: List[_DriveUpload] = []
+        for f in files:
+            ext = os.path.splitext(f["name"])[1].lower() or ".ai"
+            dest = os.path.join(tmp_dir, f"src_{f['size']}{ext}")
+            gdrive.download_file(f["id"], dest)
+            fh = open(dest, "rb")
+            open_handles.append(fh)
+            size_uploads.append(_DriveUpload(f"{f['size']}{ext}", fh))
+
+        # 2b) 글리프셋(선택).
+        glyph_upload = None
+        if glyph_file_id:
+            meta = gdrive.get_file_meta(glyph_file_id)
+            gext = os.path.splitext(meta.get("name") or "")[1].lower() or ".ai"
+            gdest = os.path.join(tmp_dir, f"glyph{gext}")
+            gdrive.download_file(glyph_file_id, gdest)
+            gfh = open(gdest, "rb")
+            open_handles.append(gfh)
+            glyph_upload = _DriveUpload(f"glyph{gext}", gfh)
+
+        # 2c) 완성본(선택).
+        ref_upload = None
+        if reference_file_id:
+            meta = gdrive.get_file_meta(reference_file_id)
+            rext = os.path.splitext(meta.get("name") or "")[1].lower() or ".ai"
+            rdest = os.path.join(tmp_dir, f"reference{rext}")
+            gdrive.download_file(reference_file_id, rdest)
+            rfh = open(rdest, "rb")
+            open_handles.append(rfh)
+            ref_upload = _DriveUpload(f"reference{rext}", rfh)
+
+        # 3) 기존 등록 로직 재사용(중복 구현 금지). create_pattern 은 async.
+        result = await create_pattern(
+            name=name,
+            base_size=base_size,
+            glyph_artbox=glyph_artbox,
+            glyph_order=glyph_order,
+            glyphset=glyph_upload,
+            reference=ref_upload,
+            files=size_uploads,
+        )
+    except gdrive.DriveError as e:
+        return JSONResponse(status_code=502, content={"error": f"Drive 파일 다운로드 실패: {e}"})
+    finally:
+        for fh in open_handles:
+            try:
+                fh.close()
+            except Exception:
+                pass
+        _cleanup_dir(tmp_dir)
+
+    # create_pattern 은 성공 시 dict, 실패 시 JSONResponse 를 돌려준다 → 그대로 전달.
+    #   등록 성공이면 스캔 경고(사이즈 미상 등)를 덧붙여 화면이 함께 보여줄 수 있게 한다.
+    if isinstance(result, dict) and scan_warnings:
+        result.setdefault("drive_warnings", scan_warnings)
+    return result
