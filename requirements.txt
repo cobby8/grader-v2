@@ -17,5 +17,12 @@ python-multipart==0.0.32
 #   GET {SUPABASE_URL}/auth/v1/user 로 토큰 주인을 물어본다(GRADER_REQUIRE_AUTH 켜질 때만 사용).
 httpx==0.28.1
 
+# Google Drive 연동(패턴 라이브러리): 서버가 '서비스 계정(로봇 계정)' 으로 공유드라이브를
+#   읽기 전용으로 탐색·다운로드한다(직원별 구글 로그인 불필요). GDRIVE_* env 켜질 때만 사용.
+#   google-auth       : 서비스계정 JSON 으로 인증(JWT 서명) — 비밀키는 env 로만 주입.
+#   google-api-python-client : Drive API v3 클라이언트(폴더 목록·파일 다운로드).
+google-auth==2.55.1
+google-api-python-client==2.198.0
+
 # 선택: Ghostscript(gswin64c) 설치 시 inkcov 색 교차검증 가능 (없어도 동작)
 # (pip 패키지가 아니라 별도 설치 프로그램이라 위 목록에 넣지 않음)

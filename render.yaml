@@ -23,6 +23,13 @@ services:
       # 비밀키(절대 프런트·레포 노출 금지) — 현재 검증엔 안 쓰지만 향후 admin API 대비 보관.
       - key: SUPABASE_SECRET_KEY
         sync: false
+      # 서비스계정 JSON(로봇 계정 열쇠) — 절대 레포·프런트 금지. Drive 읽기 전용.
+      #   원본 JSON 또는 base64 한 줄 둘 다 가능(줄바꿈 많아 base64 권장).
+      - key: GDRIVE_SA_JSON
+        sync: false
+      # 패턴 트리 탐색의 루트 폴더 ID(Drive URL .../folders/<이 값>). 비밀 아님이나 환경별 값.
+      - key: GDRIVE_ROOT_FOLDER_ID
+        sync: false
       # ── 값 포함(비밀 아님) ──
       - key: GS_BIN
         value: gs
