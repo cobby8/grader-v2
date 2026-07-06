@@ -1142,6 +1142,7 @@ function backToList() {
 // 선택된 폴더 상태 — 3단계(미리보기)·4단계(등록)에서 이 값을 이어받는다.
 let driveSelectedFolder = null;   // {id, name} 또는 null
 let driveSelectedRow = null;      // 선택 하이라이트가 걸린 현재 트리 행(DOM)
+let driveSaving = false;          // 4단계: from-drive 등록 진행중 플래그(중복 클릭·재진입 차단)
 
 // 트리/미리보기 진입: 목록·로컬등록을 닫고 드라이브 화면을 켠 뒤 루트 트리 로드.
 function showDriveMode() {
@@ -1351,6 +1352,115 @@ function renderDrivePreviewBody(panel, folder, body) {
 
   html += `</div>`;
   panel.innerHTML = html;
+
+  // ★4단계(등록) 연결★: 방금 그린 '이 폴더로 패턴 등록' 버튼에 클릭 핸들러를 붙인다.
+  //   패널은 폴더 선택/재시도마다 innerHTML 로 통째 다시 그려지므로(=버튼이 새로 생김), 최상위에서
+  //   1회 등록하는 게 아니라 재시도 버튼과 똑같이 '여기서 매번' 새 버튼에 부착한다(리스너 누수 없음).
+  //   후보 0(files 없음)일 때 버튼은 disabled 라 부착하지 않는다(눌러도 이벤트 미발생이지만 명시적으로 가드).
+  const regBtn = panel.querySelector("#btnDriveRegister");
+  if (regBtn && !regBtn.disabled) regBtn.addEventListener("click", registerFromDrive);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+//  Phase 2 · 4단계 — '이 폴더로 패턴 등록'(POST /api/patterns/from-drive)
+//    선택 폴더 + 패턴 이름 + 기준 사이즈만 서버로 보내면, 서버가 드라이브에서 파일을 받아
+//    기존 등록 로직(create_pattern)을 그대로 돌린다. 로컬 등록 savePattern 과 동일한 UX 흐름.
+// ─────────────────────────────────────────────────────────────────────
+function registerFromDrive() {
+  if (driveSaving) return;                 // 이미 등록 진행중이면 무시(중복 클릭·재진입 차단)
+  if (!driveSelectedFolder) return;        // 선택된 폴더가 없으면 할 일 없음
+
+  // 1) 패턴 이름 검증 — 비어 있으면 등록 불가(폴더명으로 쓰임). 입력에 포커스 주고 중단.
+  const nameInput = document.getElementById("driveName");
+  const name = ((nameInput && nameInput.value) || "").trim();
+  if (!name) {
+    toast("warn", "warning", "패턴 이름을 입력하세요", "이름은 폴더명으로 쓰입니다.");
+    if (nameInput) nameInput.focus();
+    return;
+  }
+
+  // 2) 기준 사이즈 — 후보 파일이 0 이면 select 자체가 안 그려진다(renderDrivePreviewBody).
+  //    그래서 반드시 null 가드 후, 있을 때만 값을 읽어 payload 에 담는다(없으면 서버가 XL→중앙 자동).
+  const baseSel = document.getElementById("driveBaseSize");
+  const baseSize = baseSel ? baseSel.value : null;
+
+  // 3) 요청 본문(JSON). 선택 필드(glyph_file_id·reference_file_id 등)는 이번 UI 에선 생략.
+  //    ※ 로컬 savePattern 은 FormData(파일 업로드)지만, from-drive 는 서버가 드라이브에서 직접
+  //      받으므로 파일 없이 JSON body 만 보낸다(백엔드가 Body(...) 로 JSON 을 받음).
+  const payload = { folderId: driveSelectedFolder.id, name: name };
+  if (baseSize) payload.base_size = baseSize;
+
+  // 4) 진행 상태 진입: 재진입 플래그 ON + 버튼 비활성 + 진행 문구 + 안내 토스트.
+  //    (드라이브 다운로드+변환+콜드스타트로 오래 걸릴 수 있어 타임아웃은 걸지 않는다 — 기존 fetch 관례 유지.)
+  driveSaving = true;
+  const btn = document.getElementById("btnDriveRegister");
+  const orig = btn ? btn.innerHTML : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="material-symbols-outlined">hourglass_top</span>등록 중…';
+  }
+  toast("info", "cloud_download", "드라이브에서 패턴 등록 중",
+    "드라이브에서 파일을 받아 변환하고 있습니다. 잠시 기다려 주세요.");
+
+  apiFetch("/api/patterns/from-drive", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+    // 트리·미리보기와 동일 정규화({ok,status,body}) — 본문 JSON 파싱 실패해도 안전.
+    .then((r) => r.json().catch(() => ({})).then((body) => ({ ok: r.ok, status: r.status, body })))
+    .then((res) => {
+      const body = res.body || {};
+
+      // (a) 미설정(200 + configured:false) — 실제 등록은 일어나지 않았다. 안내만.
+      if (res.ok && body.configured === false) {
+        toast("warn", "cloud_off", "드라이브 연동 필요",
+          body.message || "Google Drive 연동이 설정되지 않았습니다.");
+        return;
+      }
+
+      // (b) 실패 — 상태코드별로 사람이 이해할 한글 메시지.
+      if (!res.ok || body.error) {
+        let msg;
+        if (res.status === 403) msg = "관리자(admin) 권한이 필요합니다.";
+        else if (res.status === 400) msg = body.error || "요청 값을 확인해 주세요(이름/폴더).";
+        else msg = body.error || `등록에 실패했습니다 (오류 ${res.status}).`;
+        toast("warn", "error", "패턴 등록 실패", msg);
+        return;
+      }
+
+      // (c) 성공(2xx dict) — 등록된 패턴 정보를 성공 토스트로. (savePattern 성공 토스트와 동일 톤)
+      const glyphMsg = body.glyph_source ? "글리프셋" : "기본폰트";
+      const sizeCount = (body.active_sizes || []).length;
+      toast("pass", "check_circle", "패턴이 등록되었습니다",
+        `${body.pattern_id} · 조각 ${body.pieces} · 사이즈 ${sizeCount}개 · ${glyphMsg}`);
+
+      // 등록 경고(warnings, 문자열) + 드라이브 스캔 경고(drive_warnings, {name,reason})를
+      //   이어서 최대 2개까지 '확인 필요' 로 안내(부분 실패·사이즈 미상 등).
+      const allWarn = (body.warnings || []).concat(body.drive_warnings || []);
+      allWarn.slice(0, 2).forEach((w) => {
+        const text = (typeof w === "string")
+          ? w
+          : (w && w.name ? `${w.name} — ${w.reason || ""}` : (w && w.reason) || String(w));
+        toast("warn", "warning", "확인 필요", text);
+      });
+
+      // 목록을 새로고침하고 1.4초 뒤 목록 화면으로 복귀 → 새로 등록된 카드가 보이게.
+      //   (backToList 가 driveMode 를 닫는다. 다음에 다시 드라이브 모드에 들어오면 loadDriveRoot 가
+      //    선택 상태를 초기화하므로 상태 잔류 없이 정상 동작한다.)
+      setTimeout(() => { reloadPatterns(); backToList(); }, 1400);
+    })
+    .catch(() => {
+      // 네트워크/예외 — apiFetch 의 401 리다이렉트를 제외한 실패.
+      toast("warn", "error", "패턴 등록 실패",
+        "요청 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.");
+    })
+    .finally(() => {
+      // 실패했으면 사용자가 곧바로 재시도할 수 있게 버튼을 원복·재활성화한다.
+      //   성공 시엔 1.4초 뒤 목록으로 넘어가지만, 원복해도 무해하다(savePattern 과 동일 처리).
+      driveSaving = false;
+      if (btn) { btn.disabled = false; btn.innerHTML = orig; }
+    });
 }
 
 // 폴더/파일 노드 하나를 DOM 으로 만든다(지연 로딩·선택 상태 때문에 문자열이 아닌 요소 사용).
