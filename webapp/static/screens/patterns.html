@@ -1212,17 +1212,145 @@ function selectDriveFolder(item, row) {
   renderDrivePreview(driveSelectedFolder);
 }
 
-// 우측 미리보기 패널. ★2단계는 placeholder★ — 3단계에서 이 함수 '본문만' /patternfiles 호출로 교체한다.
+// 표준 사이즈 정렬 순서 — 백엔드 api.py _SIZE_TOKENS 와 '완전히 동일'하게 유지한다.
+//   왜? "10XL" 같은 것 때문에 문자열 정렬(localeCompare)은 순서가 뒤틀린다("2XL"이 "XL"보다 앞으로 감).
+//   그래서 사람이 정한 이 순서표의 '인덱스'로 작은→큰 정렬한다(백엔드 정렬 규칙과 1:1로 맞춤).
+const DRIVE_SIZE_ORDER = [
+  "5XS", "4XS", "3XS", "2XS", "XS", "S", "M", "L",
+  "XL", "2XL", "3XL", "4XL", "5XL", "6XL", "7XL",
+];
+// 사이즈 하나의 '순위'(작을수록 앞). 순서표에 없는 값은 맨 뒤로 보낸다.
+function driveSizeRank(sz) {
+  const i = DRIVE_SIZE_ORDER.indexOf(String(sz == null ? "" : sz).toUpperCase());
+  return i < 0 ? DRIVE_SIZE_ORDER.length : i;
+}
+// files 배열에서 사이즈만 뽑아 '중복 제거 + 표준 순서(작은→큰)' 로 반환.
+//   (같은 사이즈의 .ai/.svg 가 둘 다 있으면 칩·옵션이 겹치지 않도록 한 번만 노출)
+function driveUniqueSizes(files) {
+  const seen = [];
+  (files || []).forEach((f) => {
+    if (f && f.size && seen.indexOf(f.size) < 0) seen.push(f.size);
+  });
+  seen.sort((a, b) => driveSizeRank(a) - driveSizeRank(b));
+  return seen;
+}
+
+// 우측 미리보기 패널 — 3단계: 선택 폴더의 '사이즈별 파일'을 서버에서 읽어 미리보기로 보여준다.
+//   흐름: (A) 로딩 표시 → /patternfiles 호출(트리와 같은 정규화) → 경쟁조건 가드 → 분류 → (B) 정상 렌더.
 function renderDrivePreview(folder) {
   const panel = $("#drivePanel");
   if (!panel) return;
+  // 아무 폴더도 선택 안 됨(초기·루트 재로드) → 안내만.
   if (!folder) {
     panel.innerHTML = driveEmptyHtml("touch_app", "폴더를 선택하세요",
       "왼쪽 트리에서 등록할 패턴 폴더를 클릭하세요.");
     return;
   }
-  panel.innerHTML = driveEmptyHtml("folder_open", `'${driveEsc(folder.name)}' 선택됨`,
-    "사이즈 미리보기는 다음 단계에서 표시됩니다.");
+  // (A) 로딩 표시 후 폴더 안 파일 목록 요청. apiFetch 가 Bearer 부착 + 401 리다이렉트를 대신한다.
+  panel.innerHTML = `<div class="dtree__loading"><span class="spinner"></span>폴더를 읽는 중…</div>`;
+  apiFetch("/api/drive/folder/" + encodeURIComponent(folder.id) + "/patternfiles")
+    .then((r) => r.json().catch(() => ({})).then((body) => ({ ok: r.ok, status: r.status, body })))
+    .then((res) => {
+      // ★경쟁 조건 가드★: 응답이 늦게 도착했는데 사용자가 그새 다른 폴더를 골랐다면(=현재 선택과 id 불일치),
+      //   이 응답은 옛 것이므로 화면에 그리지 않고 버린다(엉뚱한 폴더 내용이 뜨는 것 방지).
+      if (!driveSelectedFolder || driveSelectedFolder.id !== folder.id) return;
+      const err = classifyDriveRes(res);   // 트리와 동일한 4갈래 분류 재사용
+      if (err) {
+        // 미설정=cloud_off / 403=lock(권한) / 500·502=error(+다시 시도). 다시 시도는 같은 폴더로 재호출.
+        panel.innerHTML = driveEmptyHtml(err.icon, driveEsc(err.title), driveEsc(err.msg))
+          + (err.retry ? `<div style="text-align:center; margin-top:8px;"><button class="btn btn--ghost btn--sm" id="drivePreviewRetry"><span class="material-symbols-outlined">refresh</span>다시 시도</button></div>` : "");
+        const b = panel.querySelector("#drivePreviewRetry");
+        if (b) b.addEventListener("click", () => renderDrivePreview(folder));
+        return;
+      }
+      renderDrivePreviewBody(panel, folder, res.body);   // (B) 정상
+    })
+    .catch(() => {
+      if (!driveSelectedFolder || driveSelectedFolder.id !== folder.id) return;   // 가드(네트워크 실패도 stale 무시)
+      panel.innerHTML = driveEmptyHtml("error", "불러오지 못했습니다", "네트워크 상태를 확인하고 다시 시도하세요.")
+        + `<div style="text-align:center; margin-top:8px;"><button class="btn btn--ghost btn--sm" id="drivePreviewRetry"><span class="material-symbols-outlined">refresh</span>다시 시도</button></div>`;
+      const b = panel.querySelector("#drivePreviewRetry");
+      if (b) b.addEventListener("click", () => renderDrivePreview(folder));
+    });
+}
+
+// 정상 응답(files/warnings)을 우측 패널에 그린다.
+//   ★4단계(등록) 인계★: 이 함수가 만드는 세 DOM id 를 4단계가 그대로 읽어 POST 한다 —
+//     #driveName(패턴 이름) · #driveBaseSize(기준 사이즈) · #btnDriveRegister(등록 버튼).
+//   이번 단계에서는 버튼에 '클릭 핸들러를 붙이지 않는다'(마크업만). 눌러도 아직 동작 없음.
+function renderDrivePreviewBody(panel, folder, body) {
+  const files = (body && body.files) || [];        // 사이즈 인식된 등록 후보
+  const warnings = (body && body.warnings) || [];  // 임시/보조·사이즈 미상(제외 사유)
+  const sizes = driveUniqueSizes(files);           // 표준 순서 + 중복 제거
+
+  let html = `<div class="stack-4">`;
+
+  // 1) 폴더명 헤더(외부값 → driveEsc)
+  html += `<div style="font:var(--text-h3); color:var(--text-strong); display:flex; align-items:center; gap:6px;">
+      <span class="material-symbols-outlined" style="color:var(--accent);">folder_open</span>
+      <span>${driveEsc(folder.name)}</span>
+    </div>`;
+
+  // 2) 인식된 사이즈 칩(표준 순서). 없으면 안내 문구로 대체.
+  if (sizes.length) {
+    html += `<div>
+        <div class="field__hint" style="margin-bottom:6px;">등록 후보 · ${sizes.length}개 사이즈</div>
+        <div style="display:flex; flex-wrap:wrap; gap:var(--space-3);">` +
+          sizes.map((s) => `<span class="badge badge--neutral">${driveEsc(s)}</span>`).join("") +
+        `</div>
+      </div>`;
+  } else {
+    html += `<div class="note"><span class="material-symbols-outlined">info</span>
+        <span>이 폴더에서 사이즈가 인식된 패턴 파일(.ai/.pdf/.svg)을 찾지 못했습니다.</span></div>`;
+  }
+
+  // 3) 제외/경고 목록(있을 때만). 각 항목: "{파일명} — {사유}"
+  if (warnings.length) {
+    html += `<div class="alert alert--warn">
+        <span class="alert__icon material-symbols-outlined">warning</span>
+        <div>
+          <div class="alert__title">등록에서 제외됨 · ${warnings.length}개</div>
+          <div class="alert__body"><ul style="margin:4px 0 0; padding-left:18px;">` +
+            warnings.map((w) => `<li>${driveEsc(w.name)} — ${driveEsc(w.reason)}</li>`).join("") +
+          `</ul></div>
+        </div>
+      </div>`;
+  }
+
+  // 4) 패턴 이름 입력 — 기본값은 폴더명을 다듬어 채움(앞뒤 공백 제거 + 연속 공백 1칸). 수정 가능.
+  //    value 는 HTML 속성이라 driveEsc 로 " 등을 이스케이프해야 안전하다.
+  const defaultName = String(folder.name || "").trim().replace(/\s+/g, " ");
+  html += `<div class="field">
+      <label class="field__label" for="driveName">패턴 이름</label>
+      <input id="driveName" class="input" type="text" value="${driveEsc(defaultName)}" placeholder="패턴 이름을 입력하세요">
+    </div>`;
+
+  // 5) 기준 사이즈 선택 — files 의 사이즈들로 옵션 구성(표준 순서). 기본값=XL 있으면 XL, 없으면 첫 사이즈.
+  if (sizes.length) {
+    const base = sizes.indexOf("XL") >= 0 ? "XL" : sizes[0];
+    html += `<div class="field">
+        <label class="field__label" for="driveBaseSize">기준 사이즈</label>
+        <select id="driveBaseSize" class="select">` +
+          sizes.map((s) => `<option value="${driveEsc(s)}"${s === base ? " selected" : ""}>${driveEsc(s)}</option>`).join("") +
+        `</select>
+        <div class="field__hint">디자인 배치의 기준이 되는 사이즈입니다(보통 XL).</div>
+      </div>`;
+  }
+
+  // 6) 등록 버튼 — 이번 단계는 마크업만(클릭 핸들러는 4단계에서 연결).
+  //    등록 후보(files)가 0 이면 disabled + 안내. 있으면 enabled(눌러도 아직 동작 없음).
+  if (sizes.length) {
+    html += `<button class="btn btn--primary" id="btnDriveRegister" style="align-self:flex-start;">
+        <span class="material-symbols-outlined">cloud_download</span>이 폴더로 패턴 등록</button>`;
+  } else {
+    html += `<button class="btn btn--primary" id="btnDriveRegister" style="align-self:flex-start;" disabled>
+        <span class="material-symbols-outlined">cloud_download</span>이 폴더로 패턴 등록</button>
+      <div class="note"><span class="material-symbols-outlined">info</span>
+        <span>등록할 사이즈 파일이 없습니다. 파일명에 사이즈가 들어있는지 확인하세요.</span></div>`;
+  }
+
+  html += `</div>`;
+  panel.innerHTML = html;
 }
 
 // 폴더/파일 노드 하나를 DOM 으로 만든다(지연 로딩·선택 상태 때문에 문자열이 아닌 요소 사용).
