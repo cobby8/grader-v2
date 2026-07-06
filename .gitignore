@@ -31,6 +31,11 @@ data/settings.json
 .env.local
 .env.*.local
 
+# Google 서비스계정 키 파일 (비밀! env GDRIVE_SA_JSON 으로만 쓰고 파일은 절대 커밋 금지)
+stiz-*.json
+*-service-account*.json
+*.iam.gserviceaccount.com.json
+
 # 디자인 원본 .ai (1.7~1.9MB 바이너리, preset design_file/글리프셋 소스가 참조)
 # clone 시 디자이너에게 별도 확보 필요. design_source/README.md 참고.
 design_source/*.ai
