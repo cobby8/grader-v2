@@ -116,6 +116,57 @@
   .helpmodal__body li { font: var(--text-sm); color: var(--text-body); margin-bottom: 4px; line-height: 1.5; }
   .helpmodal__body p { font: var(--text-sm); color: var(--text-body); margin: 0 0 4px; }
   .helpmodal__body strong { color: var(--text-strong); }
+
+  /* ===== 드라이브에서 등록 모드: 폴더 트리(좌) + 미리보기(우) — Phase 2 · 2단계 =====
+     색·간격은 전부 디자인 토큰(var(--*))만 사용(하드코딩 색 금지 규칙 준수). */
+  .drivewrap {
+    display: grid; grid-template-columns: 320px 1fr; gap: var(--space-6); align-items: start;
+  }
+  /* 좁은 화면(태블릿 이하)에서는 위아래로 쌓는다. */
+  @media (max-width: 860px) {
+    .drivewrap { grid-template-columns: 1fr; }
+  }
+  /* 좌: 트리 컨테이너(길면 자체 스크롤). */
+  .drivewrap__tree {
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+    background: var(--surface-card); padding: var(--space-4);
+    max-height: 560px; overflow: auto;
+  }
+  /* 우: 미리보기 패널(2단계에선 placeholder). */
+  .drivewrap__panel {
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+    background: var(--surface-card); padding: var(--space-5); min-height: 220px;
+  }
+  /* 트리 노드 */
+  .dtree { font: var(--text-sm); }
+  .dtree__node { }
+  .dtree__row {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 8px; border-radius: var(--radius-sm);
+    color: var(--text-body); cursor: pointer; user-select: none;
+  }
+  .dtree__row:hover { background: var(--surface-hover); }
+  /* 선택된 폴더 하이라이트 */
+  .dtree__row.is-selected { background: var(--surface-active); color: var(--text-strong); font: var(--text-sm-strong); }
+  .dtree__row.is-selected .dtree__icon { color: var(--accent); }
+  .dtree__toggle {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 18px; height: 18px; flex: none; color: var(--text-subtle);
+  }
+  .dtree__toggle .material-symbols-outlined { font-size: 18px; }
+  .dtree__icon { display: inline-flex; flex: none; color: var(--text-subtle); }
+  .dtree__icon .material-symbols-outlined { font-size: 18px; }
+  .dtree__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 파일(잎)은 클릭 대상이 아니다(등록 단위는 폴더). */
+  .dtree__leaf { cursor: default; color: var(--text-muted); }
+  .dtree__leaf:hover { background: transparent; }
+  /* 자식 컨테이너: 한 단계 들여쓰기. */
+  .dtree__children { margin-left: 16px; }
+  /* 빈 폴더 / 인라인 안내 문구. */
+  .dtree__empty { padding: 4px 8px 4px 24px; color: var(--text-subtle); font: var(--text-caption); }
+  /* 자식 지연 로드 중 표시(그 폴더 아래 스피너). */
+  .dtree__loading { padding: 4px 8px 4px 24px; display: flex; align-items: center; gap: 8px; color: var(--text-subtle); font: var(--text-caption); }
+  .dtree__loading .spinner { width: 14px; height: 14px; }
 </style>
 </head>
 <body>
@@ -166,7 +217,11 @@
       <section id="listMode" class="stack-5">
         <div class="row-between">
           <span class="muted" style="font:var(--text-sm);" id="patternCount">패턴 프리셋</span>
-          <button class="btn btn--primary" id="btnRegister"><span class="material-symbols-outlined">add</span>패턴 등록</button>
+          <div class="row">
+            <!-- 드라이브에서 등록: 공유드라이브 폴더를 골라 바로 패턴으로 등록(Phase 2). 기존 로컬 등록 버튼은 그대로. -->
+            <button class="btn btn--ghost" id="btnDrive"><span class="material-symbols-outlined">cloud</span>드라이브에서 등록</button>
+            <button class="btn btn--primary" id="btnRegister"><span class="material-symbols-outlined">add</span>패턴 등록</button>
+          </div>
         </div>
         <div class="grid-3" id="patternGrid"></div>
       </section>
@@ -288,6 +343,27 @@
         <div class="actionbar">
           <button class="btn btn--ghost" id="regPrev"><span class="material-symbols-outlined">arrow_back</span>이전</button>
           <button class="btn btn--primary" id="regNext">다음 단계<span class="material-symbols-outlined">arrow_forward</span></button>
+        </div>
+      </section>
+
+      <!-- ===== DRIVE MODE (드라이브에서 등록) — Phase 2 · 2단계 =====
+           목록/로컬등록(registerMode)과 형제인 세 번째 화면. 셋은 상호배타로 켜지고 꺼진다.
+           좌: 공유드라이브 폴더 트리(#driveTree, 지연 로딩) / 우: 미리보기 패널(#drivePanel, 이번엔 자리만). -->
+      <section id="driveMode" class="hidden stack-5">
+        <div class="row-between">
+          <button class="linkbtn" id="btnDriveBack" style="color:var(--text-muted);"><span class="material-symbols-outlined">arrow_back</span>패턴 목록</button>
+          <span class="muted" style="font:var(--text-sm);">드라이브에서 등록</span>
+        </div>
+        <div class="drivewrap">
+          <!-- 좌측: 폴더 트리 -->
+          <div class="drivewrap__tree">
+            <div class="field__label" style="margin-bottom:8px;">공유 드라이브 폴더</div>
+            <div id="driveTree" class="dtree"></div>
+          </div>
+          <!-- 우측: 선택 폴더 미리보기(3단계에서 사이즈 미리보기로 채움) -->
+          <div class="drivewrap__panel">
+            <div id="drivePanel"></div>
+          </div>
         </div>
       </section>
 
@@ -1045,11 +1121,194 @@ $("#regPrev").addEventListener("click", regBack);
 
 // ---- mode switching ----
 $("#btnRegister").addEventListener("click", () => {
+  $("#driveMode").classList.add("hidden");       // 상호배타: 드라이브 화면이 열려 있으면 함께 닫음
   $("#listMode").classList.add("hidden"); $("#registerMode").classList.remove("hidden");
   rs = 0; showSub();
 });
 $("#btnBack").addEventListener("click", backToList);
-function backToList() { $("#registerMode").classList.add("hidden"); $("#listMode").classList.remove("hidden"); }
+// 세 화면(목록/로컬등록/드라이브등록) 공통 '목록으로 복귀'. 등록/드라이브 화면을 모두 닫고 목록만 켠다.
+function backToList() {
+  $("#registerMode").classList.add("hidden");
+  $("#driveMode").classList.add("hidden");
+  $("#listMode").classList.remove("hidden");
+}
+
+// =====================================================================
+//  드라이브에서 등록 (Phase 2 · 2단계) — 공유드라이브 폴더 트리(지연 로딩)
+//    · 진입 시 루트 트리 로드 → 폴더를 펼칠 때마다 서버(/api/drive/tree)를 폴더별로 호출.
+//    · 우측 미리보기(renderDrivePreview)는 이번 단계엔 자리만. 3단계에서 /patternfiles 로 교체.
+// =====================================================================
+
+// 선택된 폴더 상태 — 3단계(미리보기)·4단계(등록)에서 이 값을 이어받는다.
+let driveSelectedFolder = null;   // {id, name} 또는 null
+let driveSelectedRow = null;      // 선택 하이라이트가 걸린 현재 트리 행(DOM)
+
+// 트리/미리보기 진입: 목록·로컬등록을 닫고 드라이브 화면을 켠 뒤 루트 트리 로드.
+function showDriveMode() {
+  $("#listMode").classList.add("hidden");
+  $("#registerMode").classList.add("hidden");    // 상호배타
+  $("#driveMode").classList.remove("hidden");
+  loadDriveRoot();
+}
+$("#btnDrive").addEventListener("click", showDriveMode);
+$("#btnDriveBack").addEventListener("click", backToList);
+
+// 외부(드라이브)에서 온 폴더/파일 이름을 innerHTML 에 넣기 전 이스케이프(안전).
+function driveEsc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// /api/drive/tree 호출 → {ok, status, body} 로 정규화(본문 JSON 실패해도 안전).
+//   apiFetch 가 Bearer 부착 + 401 처리(로그인 리다이렉트)를 대신한다.
+function fetchDriveTree(folderId) {
+  const url = folderId
+    ? ("/api/drive/tree?folderId=" + encodeURIComponent(folderId))
+    : "/api/drive/tree";
+  return apiFetch(url).then((r) =>
+    r.json().catch(() => ({})).then((body) => ({ ok: r.ok, status: r.status, body })));
+}
+
+// 응답을 분류. 문제가 있으면 {icon,title,msg,retry}, 정상이면 null.
+//   · configured:false(200) = 관리자가 아직 연동 안 켬 → 안내
+//   · 403 = admin 아님(apiFetch 는 401 만 처리하므로 403 은 여기로)
+//   · 그 밖에 !ok(500/502 등) = 오류 + 다시 시도 제공
+function classifyDriveRes(res) {
+  if (res.ok && res.body && res.body.configured === false) {
+    return { icon: "cloud_off", title: "드라이브 연동 필요",
+      msg: res.body.message || "Google Drive 연동이 설정되지 않았습니다.", retry: false };
+  }
+  if (res.status === 403) {
+    return { icon: "lock", title: "권한 필요", msg: "관리자(admin) 권한이 필요합니다.", retry: false };
+  }
+  if (!res.ok) {
+    return { icon: "error", title: "불러오지 못했습니다",
+      msg: (res.body && res.body.error) || `요청에 실패했습니다 (오류 ${res.status}).`, retry: true };
+  }
+  return null;   // 정상
+}
+
+// 재사용 빈상태(.empty) 블록. 인자는 이미 안전한 문자열이라고 본다(외부값은 호출부에서 이스케이프).
+function driveEmptyHtml(icon, title, desc) {
+  return `<div class="empty">
+    <div class="empty__icon"><span class="material-symbols-outlined">${icon}</span></div>
+    <div class="empty__title">${title}</div>
+    <div class="empty__desc">${desc}</div>
+  </div>`;
+}
+
+// 펼침 토글 아이콘(▸ chevron_right / ▾ expand_more) 갱신.
+function setDriveToggle(row, expanded) {
+  const ic = row.querySelector(".dtree__toggle .material-symbols-outlined");
+  if (ic) ic.textContent = expanded ? "expand_more" : "chevron_right";
+}
+
+// 폴더 하나 선택 → 이전 하이라이트 해제 + 현재 행 강조 + 상태 저장 + 우측 패널 갱신.
+function selectDriveFolder(item, row) {
+  if (driveSelectedRow) driveSelectedRow.classList.remove("is-selected");
+  row.classList.add("is-selected");
+  driveSelectedRow = row;
+  driveSelectedFolder = { id: item.id, name: item.name };
+  renderDrivePreview(driveSelectedFolder);
+}
+
+// 우측 미리보기 패널. ★2단계는 placeholder★ — 3단계에서 이 함수 '본문만' /patternfiles 호출로 교체한다.
+function renderDrivePreview(folder) {
+  const panel = $("#drivePanel");
+  if (!panel) return;
+  if (!folder) {
+    panel.innerHTML = driveEmptyHtml("touch_app", "폴더를 선택하세요",
+      "왼쪽 트리에서 등록할 패턴 폴더를 클릭하세요.");
+    return;
+  }
+  panel.innerHTML = driveEmptyHtml("folder_open", `'${driveEsc(folder.name)}' 선택됨`,
+    "사이즈 미리보기는 다음 단계에서 표시됩니다.");
+}
+
+// 폴더/파일 노드 하나를 DOM 으로 만든다(지연 로딩·선택 상태 때문에 문자열이 아닌 요소 사용).
+function makeDriveNode(item) {
+  const node = document.createElement("div");
+  node.className = "dtree__node";
+  const row = document.createElement("div");
+  row.className = "dtree__row" + (item.isFolder ? "" : " dtree__leaf");
+
+  if (item.isFolder) {
+    // 폴더: 펼침토글 + 폴더아이콘 + 이름
+    row.innerHTML =
+      `<span class="dtree__toggle"><span class="material-symbols-outlined">chevron_right</span></span>` +
+      `<span class="dtree__icon"><span class="material-symbols-outlined">folder</span></span>` +
+      `<span class="dtree__name">${driveEsc(item.name)}</span>`;
+    const children = document.createElement("div");
+    children.className = "dtree__children hidden";
+    // 이 폴더의 로드/펼침 상태(클로저로 보관). loaded=자식 이미 받아옴(재클릭 시 재요청 안 함).
+    let loaded = false, expanded = false, loading = false;
+    row.addEventListener("click", () => {
+      selectDriveFolder(item, row);              // (c) 선택 상태 + 우측 패널
+      expanded = !expanded;                      // (a) 펼침/접힘
+      children.classList.toggle("hidden", !expanded);
+      setDriveToggle(row, expanded);
+      // (b) 처음 펼칠 때만 자식 지연 로드(캐시됨)
+      if (expanded && !loaded && !loading) {
+        loading = true;
+        children.innerHTML = `<div class="dtree__loading"><span class="spinner"></span>불러오는 중…</div>`;
+        fetchDriveTree(item.id)
+          .then((res) => {
+            children.innerHTML = "";
+            const err = classifyDriveRes(res);
+            if (err) { children.innerHTML = `<div class="dtree__empty">${driveEsc(err.msg)}</div>`; return; }
+            loaded = true;                        // 정상 로드 성공 → 캐시 확정
+            const kids = res.body.items || [];
+            if (!kids.length) { children.innerHTML = `<div class="dtree__empty">(빈 폴더)</div>`; return; }
+            kids.forEach((k) => children.appendChild(makeDriveNode(k)));
+          })
+          .catch(() => { children.innerHTML = `<div class="dtree__empty">불러오지 못했습니다.</div>`; })
+          .finally(() => { loading = false; });
+      }
+    });
+    node.appendChild(row);
+    node.appendChild(children);
+  } else {
+    // 파일(잎): 아이콘 + 이름만(클릭 대상 아님).
+    row.innerHTML =
+      `<span class="dtree__toggle"></span>` +
+      `<span class="dtree__icon"><span class="material-symbols-outlined">description</span></span>` +
+      `<span class="dtree__name">${driveEsc(item.name)}</span>`;
+    node.appendChild(row);
+  }
+  return node;
+}
+
+// 루트 트리 로드(드라이브 화면 진입 때마다). 선택 상태 초기화 + 우측 안내.
+function loadDriveRoot() {
+  driveSelectedFolder = null;
+  driveSelectedRow = null;
+  renderDrivePreview(null);
+  const tree = $("#driveTree");
+  if (!tree) return;
+  tree.innerHTML = `<div class="dtree__loading"><span class="spinner"></span>드라이브 폴더를 불러오는 중…</div>`;
+  fetchDriveTree(null)
+    .then((res) => {
+      const err = classifyDriveRes(res);
+      if (err) {
+        // 미설정/권한/오류: 빈상태(+오류일 때만 다시 시도 버튼).
+        tree.innerHTML = driveEmptyHtml(err.icon, driveEsc(err.title), driveEsc(err.msg))
+          + (err.retry ? `<div style="text-align:center; margin-top:4px;"><button class="btn btn--ghost btn--sm" id="driveRetry"><span class="material-symbols-outlined">refresh</span>다시 시도</button></div>` : "");
+        const b = tree.querySelector("#driveRetry");
+        if (b) b.addEventListener("click", loadDriveRoot);
+        return;
+      }
+      const items = res.body.items || [];
+      tree.innerHTML = "";
+      if (!items.length) { tree.innerHTML = `<div class="dtree__empty">공유 드라이브에 폴더가 없습니다.</div>`; return; }
+      items.forEach((it) => tree.appendChild(makeDriveNode(it)));
+    })
+    .catch(() => {
+      tree.innerHTML = driveEmptyHtml("error", "불러오지 못했습니다", "네트워크 상태를 확인하고 다시 시도하세요.")
+        + `<div style="text-align:center; margin-top:4px;"><button class="btn btn--ghost btn--sm" id="driveRetry"><span class="material-symbols-outlined">refresh</span>다시 시도</button></div>`;
+      const b = tree.querySelector("#driveRetry");
+      if (b) b.addEventListener("click", loadDriveRoot);
+    });
+}
 
 window.addEventListener("resize", () => document.querySelectorAll(".region").forEach(fitSample));
 showSub();
