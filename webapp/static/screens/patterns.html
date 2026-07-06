@@ -436,10 +436,10 @@ function renderPatternGrid() {
     return;
   }
   grid.innerHTML = PATTERNS.map((p) => `
-  <div class="card card--interactive" style="padding:0;">
+  <div class="card card--interactive" data-pattern="${p.id}" style="padding:0;">
     <div style="aspect-ratio:16/10; background:var(--surface-sunken); display:flex; align-items:center; justify-content:center; border-bottom:1px solid var(--border-subtle); position:relative;">
       <span class="material-symbols-outlined" style="font-size:40px; color:var(--ink-300);">${p.icon}</span>
-      <span style="position:absolute; top:10px; right:10px;"><span class="badge badge--neutral badge--sm tnum">${p.pieces}조각</span></span>
+      <span style="position:absolute; top:10px; right:10px; display:flex; gap:4px;">${p.glyph_source ? '<span class="badge badge--info badge--sm">글리프셋</span>' : ""}<span class="badge badge--neutral badge--sm tnum">${p.pieces}조각</span></span>
     </div>
     <div style="padding:14px;">
       <div class="row-between" style="align-items:flex-start;">
@@ -454,6 +454,19 @@ function renderPatternGrid() {
       </div>
     </div>
   </div>`).join("");
+
+  // 카드 본문 클릭 → 고른 패턴을 세션에 담아 두고 작업 화면으로 이동한다.
+  //   work.html 이 이 값을 읽어 해당 패턴을 자동으로 선택한다(사이드바 네비와 같은 상대경로 이동).
+  grid.querySelectorAll("[data-pattern]").forEach((card) => {
+    card.addEventListener("click", () => {
+      sessionStorage.setItem("grader_selected_pattern", card.dataset.pattern);
+      location.href = "work.html";
+    });
+  });
+  // 수정/삭제 아이콘 버튼은 아직 동작이 없다. 다만 클릭이 카드(작업 이동)까지 번지지 않게만 막는다.
+  grid.querySelectorAll(".icon-btn").forEach((btn) => {
+    btn.addEventListener("click", (e) => e.stopPropagation());
+  });
 }
 renderPatternGrid();   // 처음엔 '패턴 없음'(도착 전)
 

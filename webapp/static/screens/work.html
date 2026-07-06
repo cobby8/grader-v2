@@ -1311,6 +1311,13 @@ function loadPatterns() {
     .then((r) => r.ok ? r.json() : Promise.reject())
     .then((list) => {
       PATTERNS = Array.isArray(list) ? list : [];
+      // 패턴 관리 화면의 카드에서 넘어온 선택 패턴이 있으면 그것을 먼저 고른다(1회성).
+      //   키가 없거나 목록에 그 패턴이 없으면 아무것도 하지 않아 기존 동작과 100% 동일하다.
+      const pre = sessionStorage.getItem("grader_selected_pattern");
+      if (pre) {
+        sessionStorage.removeItem("grader_selected_pattern");   // 한 번 쓰고 즉시 지운다(새로고침 시 재적용 방지).
+        if (PATTERNS.some((p) => p.id === pre)) patternId = pre;
+      }
       // 아직 선택된 패턴이 없으면 첫 패턴을 기본 선택으로 잡는다.
       if (!patternId && PATTERNS.length) patternId = PATTERNS[0].id;
       renderPatterns();
