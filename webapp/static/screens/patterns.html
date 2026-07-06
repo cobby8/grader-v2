@@ -167,6 +167,18 @@
   /* 자식 지연 로드 중 표시(그 폴더 아래 스피너). */
   .dtree__loading { padding: 4px 8px 4px 24px; display: flex; align-items: center; gap: 8px; color: var(--text-subtle); font: var(--text-caption); }
   .dtree__loading .spinner { width: 14px; height: 14px; }
+
+  /* ===== 드라이브에서 등록: [자동 찾기 | 폴더 트리] 탭 — Phase 3·4 =====
+     탭 세그먼트(.seg)는 기존 스타일을 그대로 재사용한다. 여기선 배치만 소량 보강.
+     색·간격은 전부 디자인 토큰(var(--*))만 사용(하드코딩 색 금지 규칙 준수). */
+  /* stack-5(세로 flex) 안에서 .seg 가 가로로 꽉 늘어나지 않게 왼쪽 정렬 + 아이콘 정렬. */
+  #driveTabs { align-self: flex-start; }
+  #driveTabs button { display: inline-flex; align-items: center; gap: 4px; }
+  #driveTabs .material-symbols-outlined { font-size: 16px; }
+  /* 자동 찾기 카드 그리드: 좁은 화면(720px 이하)에서 3열이 너무 좁아지므로 1열로 접는다. */
+  @media (max-width: 720px) {
+    #driveScanGrid.grid-3 { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
@@ -346,23 +358,57 @@
         </div>
       </section>
 
-      <!-- ===== DRIVE MODE (드라이브에서 등록) — Phase 2 · 2단계 =====
+      <!-- ===== DRIVE MODE (드라이브에서 등록) — Phase 2 + Phase 3·4 =====
            목록/로컬등록(registerMode)과 형제인 세 번째 화면. 셋은 상호배타로 켜지고 꺼진다.
-           좌: 공유드라이브 폴더 트리(#driveTree, 지연 로딩) / 우: 미리보기 패널(#drivePanel, 이번엔 자리만). -->
+           안에 [자동 찾기 | 폴더 트리] 탭 2개(상호배타 뷰).
+             · 자동 찾기(#driveScanView, 기본): GET /api/drive/scan 결과를 카드 그리드로 노출 → 카드 클릭 시 미리보기.
+             · 폴더 트리(#driveTreeView): 기존 좌 트리(#driveTree) + 우 미리보기(#drivePanel). 마크업·동작 무변경. -->
       <section id="driveMode" class="hidden stack-5">
         <div class="row-between">
           <button class="linkbtn" id="btnDriveBack" style="color:var(--text-muted);"><span class="material-symbols-outlined">arrow_back</span>패턴 목록</button>
           <span class="muted" style="font:var(--text-sm);">드라이브에서 등록</span>
         </div>
-        <div class="drivewrap">
-          <!-- 좌측: 폴더 트리 -->
-          <div class="drivewrap__tree">
-            <div class="field__label" style="margin-bottom:8px;">공유 드라이브 폴더</div>
-            <div id="driveTree" class="dtree"></div>
+
+        <!-- 탭: [자동 찾기 | 폴더 트리] — 기존 .seg 세그먼트 스타일 재사용. 활성은 .is-active 로 표시. -->
+        <div class="seg" id="driveTabs" role="tablist" aria-label="드라이브 등록 방식">
+          <button type="button" id="driveTabScan" class="is-active" role="tab"><span class="material-symbols-outlined">auto_awesome</span>자동 찾기</button>
+          <button type="button" id="driveTabTree" role="tab"><span class="material-symbols-outlined">account_tree</span>폴더 트리</button>
+        </div>
+
+        <!-- ── 뷰 1: 자동 찾기(기본) ── 2단계 마법사: 카드 목록(#driveScanList) → 미리보기(#driveScanPreviewWrap) -->
+        <div id="driveScanView">
+          <!-- 서브뷰 A: 카드 목록 -->
+          <div id="driveScanList" class="stack-4">
+            <div class="row-between">
+              <!-- 개수 + 최신성("방금 스캔"/"N분 전"). renderDriveScanCards 가 채운다(외부값 없음). -->
+              <div id="driveScanMeta" class="muted" style="font:var(--text-sm);"></div>
+              <!-- 다시 스캔(refresh=1). 서버 TTL 캐시를 무시하고 새로 훑는다. -->
+              <button class="btn btn--ghost btn--sm" id="btnDriveScanRefresh"><span class="material-symbols-outlined">refresh</span>새로고침</button>
+            </div>
+            <!-- 카드 그리드 / 로딩 / 빈상태 / 오류가 이 안에 렌더된다(className 을 상황별로 grid-3↔"" 로 토글). -->
+            <div id="driveScanGrid"></div>
           </div>
-          <!-- 우측: 선택 폴더 미리보기(3단계에서 사이즈 미리보기로 채움) -->
-          <div class="drivewrap__panel">
-            <div id="drivePanel"></div>
+          <!-- 서브뷰 B: 미리보기(카드 클릭 시). #driveScanPreview 에 기존 renderDrivePreview 를 재사용해 렌더. -->
+          <div id="driveScanPreviewWrap" class="hidden stack-4">
+            <button class="linkbtn" id="btnDriveScanBackToList" style="color:var(--text-muted); align-self:flex-start;"><span class="material-symbols-outlined">arrow_back</span>패턴 폴더 목록</button>
+            <div class="drivewrap__panel">
+              <div id="driveScanPreview"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── 뷰 2: 폴더 트리(기존 마크업 그대로, #driveTreeView 로 감싸기만 함) ── -->
+        <div id="driveTreeView" class="hidden">
+          <div class="drivewrap">
+            <!-- 좌측: 폴더 트리 -->
+            <div class="drivewrap__tree">
+              <div class="field__label" style="margin-bottom:8px;">공유 드라이브 폴더</div>
+              <div id="driveTree" class="dtree"></div>
+            </div>
+            <!-- 우측: 선택 폴더 미리보기 -->
+            <div class="drivewrap__panel">
+              <div id="drivePanel"></div>
+            </div>
           </div>
         </div>
       </section>
@@ -1140,19 +1186,209 @@ function backToList() {
 // =====================================================================
 
 // 선택된 폴더 상태 — 3단계(미리보기)·4단계(등록)에서 이 값을 이어받는다.
+//   ★자동 찾기 탭과 폴더 트리 탭이 이 전역을 '공유'한다★ — 그래서 탭/서브뷰를 바꿀 때
+//   상대 패널의 미리보기를 비워 #driveName 등 입력칸이 동시에 두 곳에 존재하지 않게 한다.
 let driveSelectedFolder = null;   // {id, name} 또는 null
 let driveSelectedRow = null;      // 선택 하이라이트가 걸린 현재 트리 행(DOM)
 let driveSaving = false;          // 4단계: from-drive 등록 진행중 플래그(중복 클릭·재진입 차단)
+let driveScanLoaded = false;      // 자동 찾기 카드가 한 번이라도 로드됐는지(탭 재전환마다 재요청 방지)
 
-// 트리/미리보기 진입: 목록·로컬등록을 닫고 드라이브 화면을 켠 뒤 루트 트리 로드.
+// 드라이브 화면 진입: 목록·로컬등록을 닫고 드라이브 화면을 켠 뒤 '자동 찾기' 탭을 기본으로 연다.
+//   (트리 로드는 '폴더 트리' 탭을 눌렀을 때만 — showDriveTab 이 담당.)
 function showDriveMode() {
   $("#listMode").classList.add("hidden");
   $("#registerMode").classList.add("hidden");    // 상호배타
   $("#driveMode").classList.remove("hidden");
-  loadDriveRoot();
+  driveScanLoaded = false;      // 진입 때마다 자동 찾기를 새로 로드(서버 TTL 캐시가 실제 부하를 줄여줌)
+  showDriveTab("scan");         // 기본 탭 = 자동 찾기
 }
 $("#btnDrive").addEventListener("click", showDriveMode);
 $("#btnDriveBack").addEventListener("click", backToList);
+
+// 탭 버튼(자동 찾기 / 폴더 트리) — 상호배타 뷰 전환.
+$("#driveTabScan").addEventListener("click", () => showDriveTab("scan"));
+$("#driveTabTree").addEventListener("click", () => showDriveTab("tree"));
+
+// ─────────────────────────────────────────────────────────────────────
+//  Phase 3·4 — 자동 찾기 탭(GET /api/drive/scan → 카드 그리드) + 탭 전환
+//    · 깊은 폴더 트리를 일일이 펼치지 않고, 서버가 '등록 가능한 패턴 폴더'를 한 번에 찾아준다.
+//    · 카드 클릭 → 기존 미리보기(renderDrivePreview)+등록(registerFromDrive) 흐름을 그대로 재사용.
+// ─────────────────────────────────────────────────────────────────────
+
+// 현재 '보이는' 미리보기 패널을 고른다(자동 찾기 미리보기 우선 → 트리 패널).
+//   registerFromDrive 가 #driveName 등을 이 패널 기준으로 읽어, 같은 id 가 두 곳에 있어도 안전.
+//   ※ 트리 경로에서는 자동 찾기 미리보기가 숨겨져 있어 항상 #drivePanel 을 돌려준다(= 기존 동작 동일).
+function activeDrivePanel() {
+  const wrap = $("#driveScanPreviewWrap");
+  if (wrap && !wrap.classList.contains("hidden")) return $("#driveScanPreview");
+  return $("#drivePanel");
+}
+
+// 탭 전환: 두 뷰(#driveScanView / #driveTreeView)를 상호배타로 켠다.
+//   ★핵심★: 전환 시 '상대 뷰'의 미리보기/입력칸을 비워 #driveName 등이 두 곳에 동시에 존재하지 않게 한다.
+function showDriveTab(which) {
+  const isScan = which !== "tree";
+
+  // 1) 뷰·탭 활성 상태 토글(상호배타)
+  $("#driveScanView").classList.toggle("hidden", !isScan);
+  $("#driveTreeView").classList.toggle("hidden", isScan);
+  $("#driveTabScan").classList.toggle("is-active", isScan);
+  $("#driveTabTree").classList.toggle("is-active", !isScan);
+
+  // 2) 공유 선택 상태 초기화(두 탭이 driveSelectedFolder 를 공유 → 전환 시 리셋으로 오등록 방지)
+  driveSelectedFolder = null;
+  if (driveSelectedRow) { driveSelectedRow.classList.remove("is-selected"); driveSelectedRow = null; }
+
+  // 3) 자동 찾기 미리보기는 항상 닫아 카드 목록 상태로 되돌린다(= #driveScanPreview 입력칸 제거)
+  driveScanShowList();
+
+  if (isScan) {
+    // 트리 패널 비우기(입력칸 #driveName 제거) — 상대 뷰 미리보기 제거
+    const tp = $("#drivePanel"); if (tp) tp.innerHTML = "";
+    // 처음(또는 재진입)에만 스캔 로드. 탭만 오가는 재전환에서는 이미 로드된 카드를 유지한다.
+    if (!driveScanLoaded) loadDriveScan(false);
+  } else {
+    // 폴더 트리: 진입 시 루트 재로드(기존 loadDriveRoot 동작 그대로). #drivePanel 은 renderDrivePreview(null) 안내만.
+    loadDriveRoot();
+  }
+}
+
+// 자동 찾기 서브뷰: 카드 목록으로(미리보기 닫기 + #driveScanPreview 비워 입력칸 제거).
+function driveScanShowList() {
+  const list = $("#driveScanList"); if (list) list.classList.remove("hidden");
+  const wrap = $("#driveScanPreviewWrap"); if (wrap) wrap.classList.add("hidden");
+  const prev = $("#driveScanPreview"); if (prev) prev.innerHTML = "";
+}
+
+// 자동 찾기 서브뷰: 미리보기로(카드 목록 숨김).
+function driveScanShowPreview() {
+  const list = $("#driveScanList"); if (list) list.classList.add("hidden");
+  const wrap = $("#driveScanPreviewWrap"); if (wrap) wrap.classList.remove("hidden");
+}
+
+// GET /api/drive/scan → {ok, status, body} 정규화(트리/미리보기와 동일 패턴). refresh=true 면 서버 TTL 캐시 무시.
+function fetchDriveScan(refresh) {
+  const url = "/api/drive/scan" + (refresh ? "?refresh=1" : "");
+  return apiFetch(url).then((r) =>
+    r.json().catch(() => ({})).then((body) => ({ ok: r.ok, status: r.status, body })));
+}
+
+// 자동 찾기 로드: (A) 스캔 중 표시 → 호출 → classifyDriveRes 4갈래 → 정상=카드 렌더.
+//   grid.className 을 상황별로 "" ↔ grid-3 로 토글(로딩/빈/오류는 격자 밖, 카드만 3열 격자).
+function loadDriveScan(refresh) {
+  const grid = $("#driveScanGrid");
+  const meta = $("#driveScanMeta");
+  if (!grid) return;
+  if (meta) meta.textContent = "";
+  // (A) 로딩(수 초 걸릴 수 있음 안내)
+  grid.className = "";
+  grid.innerHTML = `<div class="dtree__loading"><span class="spinner"></span>드라이브를 스캔하는 중… (수 초 걸릴 수 있어요)</div>`;
+  fetchDriveScan(refresh)
+    .then((res) => {
+      const err = classifyDriveRes(res);   // 미설정=cloud_off / 403=lock / 500·502=error(+다시 시도)
+      if (err) {
+        grid.className = "";
+        grid.innerHTML = driveEmptyHtml(err.icon, driveEsc(err.title), driveEsc(err.msg))
+          + (err.retry ? `<div style="text-align:center; margin-top:8px;"><button class="btn btn--ghost btn--sm" id="driveScanRetry"><span class="material-symbols-outlined">refresh</span>다시 시도</button></div>` : "");
+        const b = grid.querySelector("#driveScanRetry");
+        if (b) b.addEventListener("click", () => loadDriveScan(refresh));
+        return;
+      }
+      driveScanLoaded = true;               // 정상 로드 성공 → 탭 재전환 시 재요청 안 함
+      renderDriveScanCards(res.body);
+    })
+    .catch(() => {
+      grid.className = "";
+      grid.innerHTML = driveEmptyHtml("error", "불러오지 못했습니다", "네트워크 상태를 확인하고 다시 시도하세요.")
+        + `<div style="text-align:center; margin-top:8px;"><button class="btn btn--ghost btn--sm" id="driveScanRetry"><span class="material-symbols-outlined">refresh</span>다시 시도</button></div>`;
+      const b = grid.querySelector("#driveScanRetry");
+      if (b) b.addEventListener("click", () => loadDriveScan(refresh));
+    });
+}
+
+// 최신성 문구(방금 스캔 / N분 전 / N시간 전 + 캐시 표시). scanned_at(epoch초)와 현재시각 차이로 계산.
+//   인자는 count(숫자)와 서버 body 뿐 — 외부 문자열 주입 없음(innerHTML 안전).
+function driveScanMetaHtml(count, body) {
+  let s = `<strong style="color:var(--text-strong);">${count}개</strong> 패턴 폴더`;
+  const at = body && body.scanned_at;
+  if (at) {
+    const ageMin = Math.floor((Date.now() / 1000 - at) / 60);
+    let when;
+    if (ageMin <= 0) when = "방금 스캔";
+    else if (ageMin < 60) when = `${ageMin}분 전 스캔`;
+    else when = `${Math.floor(ageMin / 60)}시간 전 스캔`;
+    s += ` · ${when}`;
+    if (body.cached) s += " (캐시)";
+  }
+  return s;
+}
+
+// 카드 한 장 HTML. 폴더명·경로는 외부값 → driveEsc. i=folders 배열 인덱스(클릭 시 원본 폴더를 되찾는 키).
+function driveScanCardHtml(f, i) {
+  const name = driveEsc(f && f.name);
+  const path = driveEsc(f && f.path);
+  const sizeCount = (f && typeof f.size_count === "number")
+    ? f.size_count : ((f && f.sizes) || []).length;
+  return `<div class="card card--interactive" data-scan-idx="${i}" style="padding:14px; display:flex; flex-direction:column; gap:10px;">
+    <div class="row-between" style="align-items:flex-start; gap:8px;">
+      <div style="font:var(--text-body-strong); color:var(--text-strong); min-width:0; display:flex; align-items:center; gap:6px;">
+        <span class="material-symbols-outlined" style="font-size:18px; color:var(--accent); flex:none;">folder</span>
+        <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${name}</span>
+      </div>
+      <span class="badge badge--info badge--sm tnum" style="flex:none;">${sizeCount} 사이즈</span>
+    </div>
+    <div style="font:var(--text-caption); color:var(--text-muted); line-height:1.45; word-break:break-word;">${path}</div>
+    <button class="btn btn--primary btn--sm" style="align-self:flex-start; margin-top:2px;">
+      <span class="material-symbols-outlined">cloud_download</span>등록</button>
+  </div>`;
+}
+
+// 스캔 결과(body.folders)를 카드 그리드로 렌더. 0개면 빈상태. 카드/[등록] 클릭 → 미리보기.
+function renderDriveScanCards(body) {
+  const grid = $("#driveScanGrid");
+  const meta = $("#driveScanMeta");
+  if (!grid) return;
+  const folders = (body && body.folders) || [];
+  const count = (body && typeof body.count === "number") ? body.count : folders.length;
+
+  // 툴바: 개수 + 최신성
+  if (meta) meta.innerHTML = driveScanMetaHtml(count, body);
+
+  // 0개: 빈상태(격자 밖)
+  if (!folders.length) {
+    grid.className = "";
+    grid.innerHTML = driveEmptyHtml("search_off", "패턴 폴더를 찾지 못했습니다",
+      "파일명에 사이즈가 들어 있는지, 폴더가 공유돼 있는지 확인하세요.");
+    return;
+  }
+
+  // 카드 그리드(grid-3)
+  grid.className = "grid-3";
+  grid.innerHTML = folders.map((f, i) => driveScanCardHtml(f, i)).join("");
+
+  // 카드/[등록] 클릭 → 해당 폴더 미리보기로. (버튼 클릭도 카드로 버블링되어 한 번만 호출)
+  grid.querySelectorAll("[data-scan-idx]").forEach((card) => {
+    card.addEventListener("click", () => {
+      const idx = parseInt(card.dataset.scanIdx, 10);
+      openDriveScanFolder(folders[idx]);
+    });
+  });
+}
+
+// 카드 → 미리보기 배선: 선택 폴더를 전역에 담고(등록 흐름이 읽음) 자동 찾기 미리보기 패널에 렌더.
+function openDriveScanFolder(folder) {
+  if (!folder) return;
+  driveSelectedFolder = { id: folder.id, name: folder.name };      // 등록(registerFromDrive)이 읽는 전역
+  driveScanShowPreview();                                          // 카드 목록 → 미리보기 서브뷰
+  renderDrivePreview(driveSelectedFolder, $("#driveScanPreview")); // ★기존 미리보기 재사용(패널만 지정)
+}
+
+// 툴바 버튼: 새로고침(refresh=1 강제 재스캔) / 미리보기에서 카드 목록으로 뒤로가기.
+$("#btnDriveScanRefresh").addEventListener("click", () => loadDriveScan(true));
+$("#btnDriveScanBackToList").addEventListener("click", () => {
+  driveSelectedFolder = null;   // 미리보기 취소 → 선택 해제(대기 중 응답도 경쟁 가드로 버려짐)
+  driveScanShowList();
+});
 
 // 외부(드라이브)에서 온 폴더/파일 이름을 innerHTML 에 넣기 전 이스케이프(안전).
 function driveEsc(s) {
@@ -1236,10 +1472,12 @@ function driveUniqueSizes(files) {
   return seen;
 }
 
-// 우측 미리보기 패널 — 3단계: 선택 폴더의 '사이즈별 파일'을 서버에서 읽어 미리보기로 보여준다.
+// 미리보기 패널 — 선택 폴더의 '사이즈별 파일'을 서버에서 읽어 미리보기로 보여준다.
 //   흐름: (A) 로딩 표시 → /patternfiles 호출(트리와 같은 정규화) → 경쟁조건 가드 → 분류 → (B) 정상 렌더.
-function renderDrivePreview(folder) {
-  const panel = $("#drivePanel");
+//   ★panelEl 파라미터화★: 생략 시 기존 트리 패널(#drivePanel) — 트리 경로 동작 100% 무변경(하위호환).
+//     자동 찾기 탭은 여기에 #driveScanPreview 를 넘겨 '같은 미리보기+등록 로직'을 그대로 재사용한다.
+function renderDrivePreview(folder, panelEl) {
+  const panel = panelEl || $("#drivePanel");
   if (!panel) return;
   // 아무 폴더도 선택 안 됨(초기·루트 재로드) → 안내만.
   if (!folder) {
@@ -1261,7 +1499,7 @@ function renderDrivePreview(folder) {
         panel.innerHTML = driveEmptyHtml(err.icon, driveEsc(err.title), driveEsc(err.msg))
           + (err.retry ? `<div style="text-align:center; margin-top:8px;"><button class="btn btn--ghost btn--sm" id="drivePreviewRetry"><span class="material-symbols-outlined">refresh</span>다시 시도</button></div>` : "");
         const b = panel.querySelector("#drivePreviewRetry");
-        if (b) b.addEventListener("click", () => renderDrivePreview(folder));
+        if (b) b.addEventListener("click", () => renderDrivePreview(folder, panel));
         return;
       }
       renderDrivePreviewBody(panel, folder, res.body);   // (B) 정상
@@ -1271,7 +1509,7 @@ function renderDrivePreview(folder) {
       panel.innerHTML = driveEmptyHtml("error", "불러오지 못했습니다", "네트워크 상태를 확인하고 다시 시도하세요.")
         + `<div style="text-align:center; margin-top:8px;"><button class="btn btn--ghost btn--sm" id="drivePreviewRetry"><span class="material-symbols-outlined">refresh</span>다시 시도</button></div>`;
       const b = panel.querySelector("#drivePreviewRetry");
-      if (b) b.addEventListener("click", () => renderDrivePreview(folder));
+      if (b) b.addEventListener("click", () => renderDrivePreview(folder, panel));
     });
 }
 
@@ -1370,8 +1608,14 @@ function registerFromDrive() {
   if (driveSaving) return;                 // 이미 등록 진행중이면 무시(중복 클릭·재진입 차단)
   if (!driveSelectedFolder) return;        // 선택된 폴더가 없으면 할 일 없음
 
+  // ★최소 보강★: 입력칸을 document 전역이 아니라 '현재 보이는 미리보기 패널' 기준으로 읽는다.
+  //   자동 찾기(#driveScanPreview)와 폴더 트리(#drivePanel)가 같은 id(#driveName 등)를 쓸 수 있어,
+  //   전역 getElementById 는 문서상 먼저 나오는 쪽을 잡을 위험이 있다. 활성 패널로 스코프하면 안전.
+  //   (탭 전환 시 상대 패널을 비우므로 실제로는 동시 존재하지 않지만, 이중 방어로 확실히 한다.)
+  const panel = activeDrivePanel();
+
   // 1) 패턴 이름 검증 — 비어 있으면 등록 불가(폴더명으로 쓰임). 입력에 포커스 주고 중단.
-  const nameInput = document.getElementById("driveName");
+  const nameInput = panel ? panel.querySelector("#driveName") : document.getElementById("driveName");
   const name = ((nameInput && nameInput.value) || "").trim();
   if (!name) {
     toast("warn", "warning", "패턴 이름을 입력하세요", "이름은 폴더명으로 쓰입니다.");
@@ -1381,7 +1625,7 @@ function registerFromDrive() {
 
   // 2) 기준 사이즈 — 후보 파일이 0 이면 select 자체가 안 그려진다(renderDrivePreviewBody).
   //    그래서 반드시 null 가드 후, 있을 때만 값을 읽어 payload 에 담는다(없으면 서버가 XL→중앙 자동).
-  const baseSel = document.getElementById("driveBaseSize");
+  const baseSel = panel ? panel.querySelector("#driveBaseSize") : document.getElementById("driveBaseSize");
   const baseSize = baseSel ? baseSel.value : null;
 
   // 3) 요청 본문(JSON). 선택 필드(glyph_file_id·reference_file_id 등)는 이번 UI 에선 생략.
@@ -1393,7 +1637,7 @@ function registerFromDrive() {
   // 4) 진행 상태 진입: 재진입 플래그 ON + 버튼 비활성 + 진행 문구 + 안내 토스트.
   //    (드라이브 다운로드+변환+콜드스타트로 오래 걸릴 수 있어 타임아웃은 걸지 않는다 — 기존 fetch 관례 유지.)
   driveSaving = true;
-  const btn = document.getElementById("btnDriveRegister");
+  const btn = panel ? panel.querySelector("#btnDriveRegister") : document.getElementById("btnDriveRegister");
   const orig = btn ? btn.innerHTML : "";
   if (btn) {
     btn.disabled = true;
