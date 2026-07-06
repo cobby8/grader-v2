@@ -70,6 +70,12 @@
 - **내용**: 배포본에서 [드라이브에서 등록] 루트 트리는 정상인데, 폴더 하위를 **동시에 여러 개** 펼치면 `Drive 접근 실패: Drive 폴더 목록 조회 실패: [SSL] record layer failure (_ssl.c:2590)`(502 DriveError). **근본원인**: `gdrive.py`가 `build()` 결과 Drive 클라이언트를 전역 `_SERVICE` 1개로 캐시했는데, 그 내부 HTTP 계층 `httplib2.Http`는 **스레드 세이프가 아니다**(TLS 소켓 1개를 여러 스레드가 동시에 write 하면 레코드가 섞여 SSL 계층이 깨짐). FastAPI 는 **sync 엔드포인트(def drive_tree 등)를 스레드풀에서 동시 실행**하므로, 트리 하위를 여러 개 동시에 펼치면 같은 전역 service(=같은 소켓)에 execute 가 겹쳐 충돌한다. 루트는 호출 1건이라 우연히 통과. `_SERVICE_LOCK`은 **service 생성만 보호**하고 실제 `.execute()`는 보호하지 않아 무력. **함정**: 로컬(단일 요청 수동 클릭)·모킹 테스트에선 동시성이 없어 안 보인다 — "동시 다중 펼침"이라는 실사용 동시성에서만 재현. **해결**: (1) 전역 공유를 없애고 `threading.local()`로 **스레드마다 자기 service(=자기 httplib2 연결)**를 캐시(스레드풀 스레드는 재사용→스레드당 build 1회). (2) 전송계층 일시 실패(`ssl.SSLError`·`OSError`/`socket.error`·`ConnectionError`·`BrokenPipeError`·`http.client.HTTPException`·httplib2 `ServerNotFoundError`/`HttpLib2Error`)면 그 스레드 연결을 폐기·재생성해 **새 연결로 1회 재시도**(총 2회). **⚠️ HttpError(googleapiclient) 403/404 는 재시도 금지**(권한/없음=일시적 아님) → 그대로 DriveError. (3) `get_service()`를 try 밖에서 선호출해 미설정 `DriveConfigError` 가 `DriveError` 로 안 감싸지게(api.py 분리처리 보존). **예방규칙**: 스레드/이벤트루프에서 병렬로 쓰는 SDK 클라이언트는 "스레드 세이프인지" 먼저 확인. httplib2 기반(google-api-python-client 기본) 은 **연결 공유 금지** → 스레드로컬 또는 요청마다 생성. 전역 캐시 + Lock 은 '생성'만 직렬화할 뿐 '동시 사용'은 못 막는다. 동시성 버그는 로컬 수동테스트로 안 잡히니, 재현 시 **동일 자원 동시호출**을 의심.
 - **참조횟수**: 0
 
+### [2026-07-07] jsdom 로 이스케이프 검증 시 element.innerHTML 를 되읽으면 텍스트 노드의 " ' 가 리터럴로 환원돼 오탐(FAIL) — raw 생성문자열/속성값으로 검증하라
+- **분류**: error
+- **발견자**: tester
+- **내용**: 프론트 driveEsc(사용자 폴더명 이스케이프)를 검증하며, 요소에 `innerHTML=driveScanCardHtml(...)` 을 넣은 뒤 `grid.innerHTML` 를 되읽어 `&quot;`/`&#39;` 문자열을 찾았더니 **매칭 실패(FAIL)**. 실제 driveEsc 는 정상(`"`→`&quot;`, `'`→`&#39;`)인데도 오탐이다. **원인**: HTML **텍스트 노드**에서는 `"` 와 `'` 를 이스케이프하지 **않는다**(직렬화 시 `&`,`<`,`>`,nbsp 만 이스케이프). 그래서 소스 문자열의 `&quot;반팔&quot;` 은 DOM 파싱 때 텍스트 `"반팔"` 로 변하고, `innerHTML` 재직렬화 시 텍스트의 `"`/`'` 는 **리터럴 그대로** 나온다(`&amp;` 만 그대로 유지). 즉 innerHTML 왕복이 표현을 바꾼다. **함정**: 이 오탐을 실제 이스케이프 버그로 오인하면 안 된다(텍스트 위치의 `"`/`'` 는 보안상 무해하기도 함 — 각괄호만 태그 인젝션 위험이라 `<img>`→`&lt;img` 만 확인하면 텍스트 컨텍스트는 충분). **예방규칙**: 이스케이프 정확성은 (1) 헬퍼 반환 **raw 문자열**(`driveEsc('a&b<c>"e\'f')` === `a&amp;b&lt;c&gt;&quot;e&#39;f`)로 직접 단언, (2) **속성 컨텍스트**(예 `value="${driveEsc(x)}"`)는 XSS 관점으로 — 탈출 시도 문자열 주입 후 `querySelectorAll('[onload]').length===0` + `input.value` 리터럴 보존으로 검증한다. innerHTML 되읽기 매칭은 텍스트의 따옴표에 대해 신뢰하지 말 것.
+- **참조횟수**: 0
+
 ### [2026-07-06] 배포 후 Drive/admin 기능 403 "관리자 권한 필요" — Supabase app_metadata.role 누락
 - **분류**: error
 - **발견자**: pm
