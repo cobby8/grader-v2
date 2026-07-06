@@ -2,6 +2,12 @@
 <!-- 담당: planner-architect | 최대 30항목 -->
 <!-- "왜 A 대신 B를 선택했는지" 기술 결정의 배경과 이유를 기록 -->
 
+### [2026-07-06] Drive 연동 Phase 2(프론트 UI): 독립 #driveMode 채택 + 카드 glyphset배지·클릭이동
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: patterns.html에 Drive 폴더 트리→미리보기→등록 UI를 얹을 때 배치 3안 비교. **A(독립 #driveMode 섹션, listMode/registerMode의 형제) 채택.** 근거 2개: ①**from-drive는 원샷 서버호출**이다(folderId+name→create_pattern 재사용이 다운로드·변환·매핑·preset 생성을 서버에서 전부 처리). ②**현 로컬 savePattern은 subB(디자인↔조각 매핑)·subC(배번/이름 영역) 드래그 결과를 서버로 전송하지 않는다**(name/base_size/files/glyphset/reference만 FormData 전송, api.py savePattern 954~963). 즉 매핑은 create_pattern이 OCG "패턴선" 자동매핑으로 수행 → Drive 흐름은 subA/B/C 없이 **폴더선택+이름만으로 완결**된다. 따라서 트리 UI를 registerMode 3단계에 끼울 필요가 없고, 독립 패널이 가장 단순·기존흐름 충돌0. **대안 B(registerMode 앞에 Drive 0단계 서브스텝)**=의뢰서 "3단계 플로우 연결" 문구엔 가깝지만 stepper·로컬 savePattern 경로를 복잡화하고 from-drive가 subB/C를 우회해 어색 → 기각. **대안 C(listMode 인라인 접이식 트리)**=단일화면 장점이나 실제 트리가 깊고(4대 카테고리×핏×암홀×원본) 넓어 카드 그리드와 공간 경합 → 기각. **카드 개선**: GET /api/patterns가 이미 **glyph_source(bool)** 반환(api.py:116,153) → 카드 glyphset 배지는 프론트만으로 추가(백엔드 무변경). 카드 클릭→작업이동은 **sessionStorage `grader_selected_pattern`=p.id 후 work.html 이동**, work.html이 PATTERNS 로드 후 그 키를 읽어 patternId 프리셀렉트+키 삭제(URL 파싱보다 단순, 양쪽 이미 sessionStorage 사용). work.html이 유일한 크로스파일 접촉(리더 소량 추가, 키 없으면 기존 동작 무변경). **admin 게이트**: Drive 엔드포인트 전부 admin_required → 로컬 무인증=통과, 배포 non-admin=403. apiFetch는 401만 특수처리하므로 403은 r.ok=false로 떨어져 트리/미리보기 영역이 "관리자(admin) 권한이 필요합니다" 빈상태로 안내(configured:false와 동일 톤). **미설정**(GDRIVE_* env 없음)=200+{configured:false}+message → 같은 빈상태. **불변**: 엔진/인증/기존 등록흐름 무수정, 빌드0(정적+fetch), 하드코딩색 금지→var(--*)만, Material Symbols, _handoff 원본 아닌 webapp/static 복사본만. **1차 범위 축소**: glyph_file_id·reference_file_id(폴더 내 글리프셋/완성본 지정)는 from-drive가 지원하나 Phase2 UI에선 생략(create_pattern이 없으면 폰트 폴백) → 백로그. **리스크**: from-drive는 .ai 다수 다운로드로 느릴 수 있어 "등록 중…(드라이브 다운로드·변환)" 진행표시+saving 가드 필수. 이름 자동제안은 선택 폴더명 trim+연속공백 정규화(실데이터에 "v넥 상의 스탠다드  XS" 등 중복공백 존재), 편집 가능.
+- **참조횟수**: 0
+
 ### [2026-06-25] 배포 Phase 1 갱신본: JWT secret(HS256) → Supabase 토큰 introspection 교체
 - **분류**: decision
 - **발견자**: planner-architect

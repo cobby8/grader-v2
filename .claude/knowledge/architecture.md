@@ -2,6 +2,12 @@
 <!-- 담당: planner-architect, developer | 최대 30항목 -->
 <!-- 프로젝트의 폴더 구조, 파일 역할, 핵심 패턴을 기록 -->
 
+### [2026-07-06] Google Drive 패턴 연동 경로 (webapp/gdrive.py + api.py Drive섹션 + patterns.html #driveMode)
+- **분류**: architecture
+- **발견자**: planner-architect
+- **내용**: 공유드라이브에서 패턴 폴더를 탐색→선택→등록하는 기능. **핵심 설계=기존 create_pattern 재사용**(중복구현 금지). **백엔드**: `webapp/gdrive.py`(서비스계정 자격증명 drive.readonly, GDRIVE_SA_JSON을 base64/JSON 둘다 파싱, supportsAllDrives/includeItemsFromAllDrives/corpora=allDrives, 전역 service 캐시+Lock, 지연 import). 함수: is_configured/root_folder_id/list_children(폴더 1단계·orderBy folder,name·페이지네이션)/download_file(get_media)/get_file_meta. `api.py` Drive 3엔드포인트(전부 admin_required): GET /api/drive/tree(1단계 지연로딩, folderId 없으면 ROOT, items[{id,name,isFolder,mimeType}]) / GET /drive/folder/{id}/patternfiles(사이즈파서로 후보 .ai/.pdf/.svg 인식→files[{id,name,size,mimeType}]+warnings[{name,reason}], 보조폴더는 트리에서 다루므로 스킵·임시/.tmp는 warnings) / POST /api/patterns/from-drive(JSON body {folderId,name,base_size?,glyph_file_id?,reference_file_id?}→tempfile.mkdtemp 다운로드→**`_DriveUpload` duck-type 어댑터**(.filename/.file만 흉내)로 감싸 기존 create_pattern await 호출→try/finally 임시정리, 성공 dict {ok,pattern_id,pieces,active_sizes,glyph_source,warnings,drive_warnings}). 규약: 미설정=200 {configured:false,message}, 500 DriveConfigError·502 DriveError. **사이즈파서** `_parse_size_from_filename`: 확장자 제거→`[\s_\-]+` 토큰화→`_SIZE_SET`(5XS~7XL 15토큰) **정확 토큰일치만**(부분매칭 금지 "U넥"의 U·"암홀X"의 X 오탐방지), 다중매칭 시 끝의 것. env: GDRIVE_SA_JSON·GDRIVE_ROOT_FOLDER_ID(render.yaml sync:false·비밀·레포금지). **프론트**(patterns.html, Phase2): 목록/로컬등록과 형제 **#driveMode**(상호배타, backToList가 셋 다 제어). 좌 #driveTree=/api/drive/tree 지연로딩(폴더 펼침마다 자식 호출·loaded 성공시만 캐시·파일=잎 클릭X). 우 renderDrivePreview(driveSelectedFolder{id,name})=/patternfiles(사이즈칩 DRIVE_SIZE_ORDER 인덱스정렬·경고 alert--warn·#driveName 자동제안·#driveBaseSize XL기본·#btnDriveRegister). registerFromDrive: driveSaving 재진입가드→JSON POST→성공 pass토스트+reloadPatterns+backToList, 실패 403/400/409/500/502/configured:false/네트워크. classifyDriveRes 4갈래 공통. 경쟁조건 가드(응답 시 driveSelectedFolder.id 일치할 때만 렌더). 카드 클릭→sessionStorage grader_selected_pattern→work.html 프리셀렉트, glyph_source→'글리프셋' badge--info. 빌드0·var(--*)만·엔진/인증 무변경.
+- **참조횟수**: 0
+
 ### [2026-06-20] 출력형식(PDF/EPS/both) 경로 + EPS 벡터화의 핵심 함정(Form그룹 vs 페이지그룹)
 - **분류**: architecture
 - **발견자**: developer

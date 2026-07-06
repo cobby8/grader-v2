@@ -3,13 +3,15 @@
 ## 파일별 요약
 | 파일 | 항목 수 | 최종 업데이트 |
 |------|--------|------------|
-| architecture.md | 7 | 2026-06-22 |
+| architecture.md | 8 | 2026-07-06 |
 | errors.md | 10 | 2026-06-29 |
-| conventions.md | 4 | 2026-06-26 |
-| decisions.md | 13 | 2026-06-26 |
+| conventions.md | 5 | 2026-07-06 |
+| decisions.md | 14 | 2026-07-06 |
 | lessons.md | 1 | 2026-06-15 |
 
 ## 최근 추가된 지식 (최근 5건)
+- [2026-07-06] architecture+convention: Drive 연동 완결(백엔드 gdrive.py+api.py 3엔드포인트+patterns.html #driveMode). 등록은 _DriveUpload 어댑터로 기존 create_pattern 재사용(중복구현 금지). 사이즈파서 _SIZE_TOKENS 정확토큰일치. **프론트 사이즈 정렬은 문자열 정렬 금지→순서표 인덱스**(2XL/XL 오탐). _handoff 비대칭에 drive JS 추가(재복사 시 소실 주의, 참조+1)
+- [2026-07-06] decisions: Drive연동 Phase2(프론트) — 독립 #driveMode 채택(from-drive 원샷 서버호출·현 savePattern이 subB/C 매핑 미전송=자동매핑이라 폴더선택+이름만으로 완결). 카드 glyphset배지는 GET /api/patterns의 glyph_source(bool)로 프론트만. 카드클릭→sessionStorage `grader_selected_pattern`+work.html 프리셀렉트. admin 403/미설정 configured:false는 동일 빈상태 톤. 엔진/인증/등록흐름 무수정
 - [2026-06-29] errors: 배포본 404 디버깅 — 404 본문이 "Cannot GET"(Express)이면 우리 FastAPI 앱 아님(이름선점 타인 앱). 코드 의심 전 ①응답 서버시그니처 ②대시보드 실제 URL(해시 suffix) ③서비스 존재여부 확인. health 200 하나로 단정 금지
 - [2026-06-26] decisions/errors: 배포 Phase1 갱신 — 인증을 JWT secret 로컬검증→Supabase 토큰 introspection(httpx GET /auth/v1/user, apikey=PUBLISHABLE, timeout5, 60초캐시)으로 교체. admin_required(role!=admin→403)는 POST patterns·PUT settings에만. env PUBLISHABLE/SECRET. 프런트 함정: 루트가 앱화면 직행하면 미인증 우회→루트는 login으로+클라 세션판정+apiFetch 401가드(토큰clear). login 404는 StaticFiles 마운트/복사부터
 - [2026-06-25] decisions: 배포 Phase1 설계 — Docker+Render+Supabase Auth. GS_BIN env를 eps.find_ghostscript 1순위(로컬 폴백 보존), 인증 Dependency는 /api/health만 제외, 공통 apiFetch 래퍼로 Authorization 부착+401 리다이렉트, _handoff 원본→webapp/static 복사. 엔진/run.bat 무수정·비밀키 레포금지·--workers 1 유지
