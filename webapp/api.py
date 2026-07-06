@@ -14,6 +14,7 @@ import io
 import os
 import tempfile
 import threading
+import time
 import traceback
 import zipfile
 from typing import Any, Dict, List, Optional
@@ -1659,3 +1660,171 @@ async def create_pattern_from_drive(payload: Dict[str, Any] = Body(...)) -> Any:
     if isinstance(result, dict) and scan_warnings:
         result.setdefault("drive_warnings", scan_warnings)
     return result
+
+
+# ── 패턴 폴더 자동 스캔(드라이브 전체 벌크 조회 → 등록 가능한 폴더 발견) ──────────
+#   왜: 깊은 트리를 폴더마다 일일이 펼치지 않아도, '사이즈 파일이 든 폴더'를 자동으로 찾아
+#     카드처럼 나열해 주려는 것. 폴더별 list_children 반복(= 느림)을 피하고, 전 폴더·전 파일을
+#     각 1쿼리(list_all_folders / list_all_pattern_files)로 긁어와 메모리에서 조립한다.
+#   발견 전용이다 — 실제 등록은 기존 정확 경로(/patternfiles → /from-drive)가 결정한다.
+#     (여기 사이즈 판정은 근사치라 오차가 나도 등록 결과에 영향 없음.)
+
+# 스캔 결과 캐시(느린 벌크 조회를 매번 반복하지 않도록). root_folder_id 별로 보관.
+#   구조: { root_id: {"result": {...}, "ts": <스캔시각 epoch초>} }
+_SCAN_CACHE: Dict[str, Dict[str, Any]] = {}
+# 캐시 접근·재스캔을 감싸는 락 = '동시에 같은 스캔이 두 번 도는 것'을 막는다(중복 벌크 조회 방지).
+_SCAN_CACHE_LOCK = threading.Lock()
+# 캐시 유효시간(초). 이 시간이 지나면 다음 요청 때 다시 스캔한다. refresh=true 면 즉시 재스캔.
+_SCAN_CACHE_TTL = 300.0
+# 부모 사슬을 거슬러 올라갈 때의 최대 깊이(사이클/비정상 데이터 방어용 상한).
+_SCAN_MAX_DEPTH = 30
+
+
+def _scope_path(pid: str, fmap: Dict[str, Dict[str, Any]], root: str) -> Any:
+    """폴더 pid 가 '루트(root)의 자손'인지 판정하고, 맞으면 경로(폴더명 리스트)를 만든다.
+
+    fmap 으로 pid → 부모 → 부모 … 를 따라 올라가며 root 를 만나면 자손으로 인정한다.
+    반환: (in_scope: bool, path_names: List[str])
+      · in_scope=True  : path_names = [루트 바로 아래 … pid 까지의 폴더명](breadcrumb 순서).
+      · in_scope=False : 사슬이 끊겼거나(부모가 fmap 에 없음)·루트 못 만남·사이클/과깊이 → [].
+    사이클(잘못된 부모 순환)과 과도한 깊이는 visited 집합 + 상한(_SCAN_MAX_DEPTH)으로 방어.
+    """
+    names: List[str] = []
+    cur: Optional[str] = pid
+    visited = set()
+    for _ in range(_SCAN_MAX_DEPTH):
+        if cur == root:
+            # 루트 도달 = 자손 확정. 지금까지 위로 쌓은 이름들을 뒤집어 breadcrumb 순으로.
+            names.reverse()
+            return True, names
+        if not cur or cur in visited:
+            return False, []  # 빈 부모(사슬 끊김) 또는 사이클.
+        visited.add(cur)
+        node = fmap.get(cur)
+        if node is None:
+            return False, []  # 부모 폴더를 목록에서 못 찾음(스코프 밖/접근 불가).
+        names.append(node.get("name") or "")
+        cur = node.get("parent")
+    return False, []  # 상한까지 못 만나면 스코프 밖으로 간주.
+
+
+def _build_drive_scan() -> Dict[str, Any]:
+    """드라이브 전체를 벌크 2쿼리로 훑어 '등록 가능한 패턴 폴더'를 조립한다.
+
+    반환: {"count": int, "folders": [{id, name, path, size_count, sizes}]}
+          (cached/scanned_at 은 호출부가 캐시 정보로 덧붙인다.)
+    gdrive 예외(DriveConfigError/DriveError)는 호출부가 처리하도록 그대로 올린다.
+    """
+    root = gdrive.root_folder_id()
+
+    # 1) 전 폴더 → 'id → {name, parent}' 맵. 경로/루트 소속 계산의 뼈대.
+    folders = gdrive.list_all_folders()
+    fmap: Dict[str, Dict[str, Any]] = {}
+    for fo in folders:
+        fid = fo.get("id")
+        if not fid:
+            continue
+        parents = fo.get("parents") or []
+        fmap[fid] = {
+            "name": fo.get("name") or "",
+            "parent": parents[0] if parents else None,  # 부모는 대개 1개.
+        }
+
+    # 2) 전 파일 → 확장자/임시 필터 후, '부모 폴더 id' 별로 파일명을 모은다(폴더당 재호출 없이).
+    files = gdrive.list_all_pattern_files()
+    by_parent: Dict[str, List[str]] = {}
+    for fl in files:
+        name = fl.get("name") or ""
+        if _is_temp_or_aux_file(name):
+            continue  # 임시/보조(~·.tmp) 제외 — 기존 미리보기와 동일 규칙.
+        ext = os.path.splitext(name)[1].lower()
+        if ext not in _PATTERN_FILE_EXTS:
+            continue  # .ai/.pdf/.svg 아니면 후보 아님(endswith 확장자 필터는 여기서).
+        parents = fl.get("parents") or []
+        if not parents:
+            continue  # 부모가 없으면 어느 폴더 소속인지 모름 → 스킵.
+        by_parent.setdefault(parents[0], []).append(name)
+
+    # 3) 부모 폴더마다: 사이즈 판정 → 루트 자손 판정 → 경로 조립 → 후보 채택.
+    result_folders: List[Dict[str, Any]] = []
+    for pid, names in by_parent.items():
+        # 파일명들에서 인식된 사이즈 집합(중복 제거·None 제외). 기존 파서 재사용.
+        sizes = set()
+        for n in names:
+            s = _parse_size_from_filename(n)
+            if s:
+                sizes.add(s)
+        if not sizes:
+            continue  # 사이즈를 하나도 못 읽으면 '패턴 폴더' 아님.
+
+        # 루트 스코프 판정 + 경로. 루트 자손이 아니면(사슬 끊김 등) 제외.
+        in_scope, path_names = _scope_path(pid, fmap, root)
+        if not in_scope:
+            continue
+
+        folder_name = (fmap.get(pid) or {}).get("name") or ""
+        if not folder_name:
+            continue  # 이름을 못 얻으면 카드로 못 그림 → 제외(대개 root 자기 자신 케이스).
+
+        # 사이즈 작은→큰 정렬(기존 _SIZE_RANK 재사용, 미상 토큰은 맨 뒤).
+        sizes_sorted = sorted(
+            sizes, key=lambda s: _SIZE_RANK.get(s, len(_SIZE_TOKENS))
+        )
+        result_folders.append({
+            "id": pid,
+            "name": folder_name,
+            "path": " › ".join(path_names),  # breadcrumb(루트 바로 아래 … 폴더).
+            "size_count": len(sizes_sorted),
+            "sizes": sizes_sorted,
+        })
+
+    # 4) 경로 → 이름 순 정렬(같은 위치끼리 모여 보기 좋게).
+    result_folders.sort(key=lambda f: (f["path"], f["name"]))
+    return {"count": len(result_folders), "folders": result_folders}
+
+
+@router.get("/drive/scan", dependencies=[Depends(admin_required)])
+def drive_scan(refresh: bool = False) -> JSONResponse:
+    """드라이브 전체에서 '등록 가능한 패턴 폴더'를 자동으로 찾아 목록으로 돌려준다.
+
+    비유: 창고(드라이브) 전체를 한 번 훑어 "사이즈 파일이 든 방(폴더)"만 골라 카드로 뽑아 준다.
+    화면은 이 목록으로 카드 그리드를 그리고, 카드를 누르면 기존 미리보기/등록 경로로 이어간다.
+
+    쿼리:
+      refresh : true 면 캐시를 무시하고 즉시 다시 스캔한다(기본 false = TTL 내면 캐시 사용).
+    반환:
+      · 미설정 : {configured:false, message}
+      · 정상   : {configured:true, cached, scanned_at, count,
+                  folders:[{id, name, path, size_count, sizes}]}
+                 cached=이번 응답이 캐시 재사용인지 · scanned_at=그 결과를 스캔한 시각(epoch초).
+    """
+    if not gdrive.is_configured():
+        return JSONResponse(content=_drive_not_configured_payload())
+
+    root = gdrive.root_folder_id()
+    try:
+        # 락 안에서 캐시 확인·재스캔을 한 덩어리로 처리 → 동시에 여러 요청이 와도 스캔은
+        #   한 번만 돌고, 나머지는 그 결과(또는 방금 채운 캐시)를 받는다(중복 벌크 조회 방지).
+        with _SCAN_CACHE_LOCK:
+            now = time.time()
+            entry = _SCAN_CACHE.get(root)
+            cached = bool(entry) and (not refresh) and (now - entry["ts"] < _SCAN_CACHE_TTL)
+            if not cached:
+                data = _build_drive_scan()  # 느린 벌크 스캔(락 안 = 동시 중복 방지).
+                entry = {"result": data, "ts": time.time()}
+                _SCAN_CACHE[root] = entry
+    except gdrive.DriveConfigError as e:
+        # 키/자격증명 문제 = 서버 설정 오류(tree/patternfiles 와 동일 규약).
+        return JSONResponse(status_code=500, content={"error": f"Drive 설정 오류: {e}"})
+    except gdrive.DriveError as e:
+        # 권한 없음·네트워크 등 Drive 호출 실패.
+        return JSONResponse(status_code=502, content={"error": f"Drive 접근 실패: {e}"})
+
+    data = entry["result"]
+    return JSONResponse(content={
+        "configured": True,
+        "cached": cached,
+        "scanned_at": entry["ts"],
+        "count": data["count"],
+        "folders": data["folders"],
+    })

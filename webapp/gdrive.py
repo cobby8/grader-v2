@@ -282,6 +282,108 @@ def list_children(folder_id: str) -> List[Dict[str, Any]]:
     return items
 
 
+def list_all_folders() -> List[Dict[str, Any]]:
+    """접근 가능한 '모든 폴더'를 재귀 없이 한 번에 대량 조회한다(패턴 폴더 자동 스캔용).
+
+    비유: list_children 이 서랍 하나를 열어 그 안만 보는 것이라면, 이건 창고의 '서랍 목록
+    전체'를 한 방에 받아오는 것이다. 폴더별로 list_children 를 반복 호출하면 느리므로(그게
+    깊은 트리 탐색의 병목), 폴더 전부를 한 쿼리로 긁어와 호출부(api.py)가 'id→이름·부모' 맵을
+    조립해 경로/루트 소속을 계산하게 한다.
+
+    q      : '폴더이고 휴지통 아님'.  ← 폴더만.
+    반환   : [{id, name, parents}] — parents 없으면 [](루트/공유드라이브 직속).
+             공유드라이브 항목까지 보이도록 supportsAllDrives 계열을 켠다.
+    항목이 많으면 nextPageToken 으로 끝까지 모은다(list_children 와 동일 안전패턴).
+    """
+    # 설정 검증은 여기서(try 밖) — 미설정이면 DriveConfigError 를 그대로 전파(아래 try 에
+    # 안 감싸지게). 실제 호출은 _call_with_retry 가 스레드 서비스를 다시 받아 쓴다.
+    get_service()
+    query = f"mimeType = '{_FOLDER_MIME}' and trashed = false"
+    items: List[Dict[str, Any]] = []
+    page_token: Optional[str] = None
+    try:
+        while True:
+            # list_children 과 동일: 각 페이지 .execute() 를 재시도 단위로 감싸고, 재시도 시
+            # 같은 pageToken 으로 재실행하며 이미 모은 items 는 유지한다.
+            resp = _call_with_retry(
+                lambda svc, pt=page_token: svc.files()
+                .list(
+                    q=query,
+                    fields="nextPageToken, files(id, name, parents)",
+                    pageSize=1000,
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
+                    corpora="allDrives",
+                    pageToken=pt,
+                )
+                .execute()
+            )
+            for f in resp.get("files", []):
+                items.append(
+                    {
+                        "id": f.get("id"),
+                        "name": f.get("name"),
+                        # parents 는 리스트(대개 1개). 없으면 [](루트 직속 등).
+                        "parents": f.get("parents") or [],
+                    }
+                )
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+    except Exception as exc:  # googleapiclient.errors.HttpError 등
+        raise DriveError(f"Drive 폴더 대량 조회 실패: {exc}") from exc
+    return items
+
+
+def list_all_pattern_files() -> List[Dict[str, Any]]:
+    """접근 가능한 '폴더가 아닌 모든 파일'을 재귀 없이 한 번에 대량 조회한다(자동 스캔용).
+
+    ⚠️ q 에 `name contains '.ai'` 같은 확장자 필터를 절대 넣지 않는다 — Drive 의 contains 는
+       '토큰 prefix' 매칭이라(예: '.ai' 가 진짜 .ai 파일을 놓칠 수 있음) 진짜 파일이 누락될
+       위험이 있다. 그래서 여기선 '폴더만 제외'하고 전부 가져온 뒤, 확장자(.ai/.pdf/.svg)
+       판정은 api.py 가 파일명 os.path.splitext(...).lower() 로 정확히 한다.
+
+    q      : '폴더가 아니고 휴지통 아님'.  ← 폴더만 제외, 나머지 파일 전부.
+    반환   : [{id, name, parents, mimeType}] — parents 없으면 []. 공유드라이브 포함.
+    항목이 많으면 nextPageToken 으로 끝까지 모은다(list_children 와 동일 안전패턴).
+    """
+    # 설정 검증은 try 밖(미설정이면 DriveConfigError 그대로 전파).
+    get_service()
+    query = f"mimeType != '{_FOLDER_MIME}' and trashed = false"
+    items: List[Dict[str, Any]] = []
+    page_token: Optional[str] = None
+    try:
+        while True:
+            resp = _call_with_retry(
+                lambda svc, pt=page_token: svc.files()
+                .list(
+                    q=query,
+                    fields="nextPageToken, files(id, name, parents, mimeType)",
+                    pageSize=1000,
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
+                    corpora="allDrives",
+                    pageToken=pt,
+                )
+                .execute()
+            )
+            for f in resp.get("files", []):
+                items.append(
+                    {
+                        "id": f.get("id"),
+                        "name": f.get("name"),
+                        "parents": f.get("parents") or [],
+                        "mimeType": f.get("mimeType"),
+                    }
+                )
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+    except Exception as exc:  # googleapiclient.errors.HttpError 등
+        raise DriveError(f"Drive 파일 대량 조회 실패: {exc}") from exc
+    return items
+
+
 def download_file(file_id: str, dest_path: str) -> str:
     """파일 하나를 dest_path 로 내려받는다(패턴 등록 시 .ai 원본 가져오기용).
 
