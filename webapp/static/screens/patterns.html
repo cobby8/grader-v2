@@ -1513,6 +1513,19 @@ function driveUniqueSizes(files) {
   return seen;
 }
 
+// 완성본/글리프셋 '자동 추천' — others(사이즈 없는 .ai/.pdf) 중 파일명에 keywords 가 하나라도
+//   들어간 첫 파일의 id 를 돌려준다(대소문자 무시). 없으면 "" (=선택 안 함).
+//   ★추천일 뿐★ 사용자가 드롭다운에서 언제든 바꿀 수 있다(강제 아님).
+function drivePickRecommend(others, keywords) {
+  const lowerKw = (keywords || []).map((k) => String(k).toLowerCase());
+  const list = others || [];
+  for (let i = 0; i < list.length; i++) {
+    const nm = String((list[i] && list[i].name) || "").toLowerCase();
+    if (lowerKw.some((k) => nm.indexOf(k) >= 0)) return list[i].id;
+  }
+  return "";
+}
+
 // 미리보기 패널 — 선택 폴더의 '사이즈별 파일'을 서버에서 읽어 미리보기로 보여준다.
 //   흐름: (A) 로딩 표시 → /patternfiles 호출(트리와 같은 정규화) → 경쟁조건 가드 → 분류 → (B) 정상 렌더.
 //   ★panelEl 파라미터화★: 생략 시 기존 트리 패널(#drivePanel) — 트리 경로 동작 100% 무변경(하위호환).
@@ -1561,7 +1574,13 @@ function renderDrivePreview(folder, panelEl) {
 function renderDrivePreviewBody(panel, folder, body) {
   const files = (body && body.files) || [];        // 사이즈 인식된 등록 후보
   const warnings = (body && body.warnings) || [];  // 임시/보조·사이즈 미상(제외 사유)
+  const others = (body && body.others) || [];      // 사이즈 없는 .ai/.pdf = 완성본/글리프셋 선택 후보(id 포함)
   const sizes = driveUniqueSizes(files);           // 표준 순서 + 중복 제거
+
+  // ★등록 시 참조용★: 현재 폴더의 완성본/글리프셋 후보를 선택 폴더 객체에 보관해 둔다(안전망).
+  //   실제 선택값은 아래 드롭다운의 option value(=파일 id)에서 직접 읽지만, others 를 함께 붙여두면
+  //   등록 로직이 필요 시 후보 목록을 되짚을 수 있다. (호출부 가드로 이 시점 folder.id 는 선택과 일치)
+  if (driveSelectedFolder && driveSelectedFolder.id === folder.id) driveSelectedFolder.others = others;
 
   let html = `<div class="stack-4">`;
 
@@ -1615,6 +1634,47 @@ function renderDrivePreviewBody(panel, folder, body) {
         `</select>
         <div class="field__hint">디자인 배치의 기준이 되는 사이즈입니다(보통 XL).</div>
       </div>`;
+  }
+
+  // 5-2) 완성본·글리프셋 선택 — 번호·이름 위치를 등록 즉시 채우려면 '완성본'을 골라야 한다.
+  //   왜: 서버는 완성본(reference)에서 번호·이름이 그려질 위치(number_area/name_area)를 추출한다.
+  //       완성본을 안 고르면(=선택 안 함) 위치 정보가 없어 주문 시 번호·이름이 조용히 안 찍힌다.
+  //   후보 = others(사이즈 없는 .ai/.pdf). 등록이 가능한 폴더(sizes.length>0)에서만 노출한다.
+  if (sizes.length) {
+    if (others.length) {
+      // 자동 추천: 파일명 키워드로 기본 선택 후보를 고른다(추천일 뿐 — 사용자가 바꿀 수 있음).
+      const recRef = drivePickRecommend(others, ["완성", "샘플", "final", "본체포함"]);
+      const recGlyph = drivePickRecommend(others, ["글리프", "glyph", "번호", "숫자"]);
+      // "선택 안 함"(value="") 을 항상 첫 옵션으로 → 기본은 기존 동작(reference 없이 등록).
+      //   각 파일 옵션의 value 는 파일 id. id·name 은 외부값이므로 driveEsc 로 이스케이프.
+      const optsFor = (selId) =>
+        `<option value="">선택 안 함</option>` +
+        others.map((o) =>
+          `<option value="${driveEsc(o.id)}"${o.id === selId ? " selected" : ""}>${driveEsc(o.name)}</option>`
+        ).join("");
+
+      html += `<div class="field">
+          <label class="field__label" for="driveReference">완성본 파일 (번호·이름 위치)</label>
+          <select id="driveReference" class="select">${optsFor(recRef)}</select>
+          <div class="field__hint">번호·이름이 찍힐 위치를 이 완성본에서 자동으로 읽습니다. 없으면 '선택 안 함'.</div>
+        </div>`;
+      html += `<div class="field">
+          <label class="field__label" for="driveGlyph">글리프셋 파일 (숫자 모양)</label>
+          <select id="driveGlyph" class="select">${optsFor(recGlyph)}</select>
+          <div class="field__hint">디자이너가 그린 숫자 글리프를 쓰려면 선택하세요. 없으면 기본 폰트로 등록됩니다.</div>
+        </div>`;
+    } else {
+      // 후보 없음: 등록은 그대로 가능하되(번호·이름 없이 등록), 위치를 넣으려면 로컬 등록을 권한다(경고 톤).
+      html += `<div class="alert alert--warn">
+          <span class="alert__icon material-symbols-outlined">warning</span>
+          <div>
+            <div class="alert__title">완성본 후보 파일이 없습니다</div>
+            <div class="alert__body">이 폴더에 완성본 후보 파일이 없어 번호·이름 위치를 채울 수 없습니다.
+              번호·이름을 넣으려면 <b>로컬 등록(패턴 등록)</b>에서 완성본을 함께 올리세요.
+              (이대로 등록하면 번호·이름 없이 등록됩니다.)</div>
+          </div>
+        </div>`;
+    }
   }
 
   // 6) 등록 버튼 — 이번 단계는 마크업만(클릭 핸들러는 4단계에서 연결).
@@ -1678,6 +1738,17 @@ function registerFromDrive() {
   //      받으므로 파일 없이 JSON body 만 보낸다(백엔드가 Body(...) 로 JSON 을 받음).
   const payload = { folderId: driveSelectedFolder.id, name: name };
   if (baseSize) payload.base_size = baseSize;
+
+  // 3-2) 완성본·글리프셋 선택(선택 안 함이면 값이 "" → payload 에 넣지 않음 = 기존 동작 그대로).
+  //   select 의 option value 가 파일 id 라 그대로 서버 payload(reference_file_id/glyph_file_id)로 넘긴다.
+  //   입력칸과 마찬가지로 활성 패널 기준으로 읽어 자동찾기/트리 탭의 같은 id 충돌을 방어한다.
+  const refSel = panel ? panel.querySelector("#driveReference") : document.getElementById("driveReference");
+  const refId = refSel ? String(refSel.value || "").trim() : "";
+  if (refId) payload.reference_file_id = refId;   // 완성본 → 번호·이름 위치 추출용
+
+  const glyphSel = panel ? panel.querySelector("#driveGlyph") : document.getElementById("driveGlyph");
+  const glyphId = glyphSel ? String(glyphSel.value || "").trim() : "";
+  if (glyphId) payload.glyph_file_id = glyphId;   // 글리프셋 → 디자이너 숫자 글리프
 
   // 4) 진행 상태 진입: 재진입 플래그 ON + 버튼 비활성 + 진행 문구 + 안내 토스트.
   //    (드라이브 다운로드+변환+콜드스타트로 오래 걸릴 수 있어 타임아웃은 걸지 않는다 — 기존 fetch 관례 유지.)
