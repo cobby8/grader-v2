@@ -202,10 +202,12 @@
     border: none; border-radius: 50%; cursor: pointer; color: var(--text-subtle);
     background: color-mix(in srgb, var(--paper) 78%, transparent);
   }
-  .pm-star:hover { color: var(--brand); }
-  .pm-star.is-fav { color: var(--brand); }             /* 즐겨찾기 켜짐 = 브랜드색 채운 별 */
+  .pm-star:hover { color: var(--star-fav); }           /* OFF 별에 마우스 올리면 골드로 미리보기 */
+  .pm-star.is-fav { color: var(--star-fav); }          /* 즐겨찾기 켜짐 = 골드색으로 안쪽까지 채운 별 */
+  /* 즐겨찾기 ON = Material Symbols 채움(FILL 1)으로 별 속을 꽉 채운다(프로젝트 관례) */
+  .pm-star.is-fav .material-symbols-outlined { font-variation-settings: "FILL" 1; }
   .pm-star--readonly { cursor: default; background: transparent; }
-  .pm-star--readonly:hover { color: var(--brand); }
+  .pm-star--readonly:hover { color: var(--star-fav); }
   .pm-star .material-symbols-outlined { font-size: 20px; }
   /* 관리자 카테고리 변경 select(작게) */
   .pm-cat-select {

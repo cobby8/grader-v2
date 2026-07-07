@@ -103,6 +103,9 @@
   --brand-hover: var(--stiz-red-strong);
   --brand-soft: var(--stiz-red-soft);
 
+  /* Favorite star (즐겨찾기 별 = 골드/앰버, 기존 amber 스케일 재사용) */
+  --star-fav: var(--amber-500);
+
   /* Status (validation) */
   --status-pass: var(--green-600);
   --status-pass-bg: var(--green-bg);

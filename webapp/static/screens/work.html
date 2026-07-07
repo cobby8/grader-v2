@@ -1454,7 +1454,8 @@ function pmDecorateCardWork(card) {
   line.style.alignItems = "center";
   line.style.gap = "6px";
   let inner = "";
-  if (fav) inner += `<span class="material-symbols-outlined" title="즐겨찾기" style="font-size:18px; color:var(--brand);">star</span>`;
+  // 즐겨찾기 표시 = 골드색으로 속을 채운(FILL 1) 별. patterns.html의 카드 별과 색/채움 일관성 유지
+  if (fav) inner += `<span class="material-symbols-outlined" title="즐겨찾기" style="font-size:18px; color:var(--star-fav); font-variation-settings:'FILL' 1;">star</span>`;
   inner += `<span class="badge badge--neutral badge--sm">${esc(cat)}</span>`;
   line.innerHTML = inner;
   nameBlock.appendChild(line);
