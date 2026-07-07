@@ -138,6 +138,12 @@ def _scan_one_pattern(folder: str) -> Dict[str, Any] | None:
     back = preset.get("back_number_area", {}) or {}
     glyph_source = bool(front.get("glyph_source") or back.get("glyph_source"))
 
+    # has_number_area: 번호·이름 영역(앞번호/뒤번호/뒤이름)이 하나라도 유효하게 있으면 True.
+    # 완성본을 안 올려 이 영역이 아예 없는 패턴은 주문 시 번호·이름이 조용히 안 찍히므로,
+    # 작업 화면(work.html)이 이 값으로 안전 경고를 띄운다. 엔진 _has_precise_areas 와 같은 기준.
+    name_area = preset.get("back_name_area", {}) or {}
+    has_number_area = bool(front or back or name_area)
+
     # disabled_sizes: 자산 결함 등으로 비활성된 사이즈 목록(이름+사유 그대로 전달).
     disabled_sizes = [
         {"name": d.get("name"), "reason": d.get("reason", "")}
@@ -152,6 +158,7 @@ def _scan_one_pattern(folder: str) -> Dict[str, Any] | None:
         "pieces": pieces,
         "icon": "checkroom",
         "glyph_source": glyph_source,
+        "has_number_area": has_number_area,
         "disabled_sizes": disabled_sizes,
     }
 
@@ -1326,18 +1333,34 @@ async def create_pattern(
 
     # area(번호·이름) — 완성본에서 추출된 것만 붙이고, 글리프셋이 있으면 number_area
     # 에 glyph_source 를 함께 단다(없으면 폰트 폴백이라 키 생략).
+    #
+    # ★ piece_id 자동부여(핵심 구멍 수정) ★
+    #   왜: 엔진 job._inject 는 area.piece_id 로 조각을 찾아(job.py: _find_piece_index)
+    #   그 조각 위에 번호·이름을 얹는다. 그런데 완성본 자동추출(build_area_preset)이
+    #   만든 area 에는 piece_id 가 없어서, 엔진이 조각을 못 찾아 번호·이름을 '조용히'
+    #   건너뛴다(로컬·드라이브 등록 둘 다). → 여기 웹계층에서 piece_id 를 채워 해결한다.
+    #   방법: 하드코딩 "front"/"back" 이 아니라, 위에서 만든 '실제 조각 목록(pieces)'의
+    #   id 를 쓴다(_find_piece_index 가 pdef["id"] 와 매칭하므로 정확히 일치해야 함).
+    #     · 앞 번호      → 첫 조각(앞판) id
+    #     · 뒤 번호·이름 → 두 번째 조각(뒤판) id, 조각이 1개뿐이면 첫 조각으로 폴백
+    #   setdefault 라서 이미 piece_id 가 있으면 그대로 둔다(기존 2패턴 회귀 0).
+    front_pid = pieces[0]["id"] if pieces else "front"           # 앞판 조각 id
+    back_pid = pieces[1]["id"] if len(pieces) >= 2 else front_pid  # 뒤판 조각 id(폴백)
     fa = areas.get("front_number_area")
     ba = areas.get("back_number_area")
     na = areas.get("back_name_area")
     if fa:
+        fa.setdefault("piece_id", front_pid)  # 앞 번호 → 앞판 조각과 매칭
         if glyph_source:
             fa["glyph_source"] = glyph_source
         preset["front_number_area"] = fa
     if ba:
+        ba.setdefault("piece_id", back_pid)   # 뒤 번호 → 뒤판 조각과 매칭
         if glyph_source:
             ba["glyph_source"] = glyph_source
         preset["back_number_area"] = ba
     if na:
+        na.setdefault("piece_id", back_pid)   # 뒤 이름 → 뒤판 조각과 매칭
         preset["back_name_area"] = na
     if not (fa or ba):
         warnings.append(
