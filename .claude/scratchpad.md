@@ -2,10 +2,114 @@
 
 ## 현재 작업
 - **상태**: ✅✅ **Google Drive 패턴 연동 — 전 과정 완료**(백엔드1a~1d + 프론트2-1~2-4 + 푸시·배포·admin권한). 2026-07-06 사용자 "완료" 보고. 의뢰서 완료기준(트리탐색→미리보기→등록→카드) 실서버 동작.
-- **현재 담당**: pm → planner-architect (**신규기능: 패턴 폴더 자동 스캔**). SSL 수정 배포 완료·**사용자 브라우저 검증 성공**(2026-07-07 스크린샷: 0.농구>단면>U넥>스탠다드>스탠다드-A(암홀X) 깊이 5단계 무에러 탐색+미리보기 13사이즈 정상=SSL 재발 없음). 커밋 4783a12(gdrive 스레드로컬+재시도)·ac785a5(키 gitignore). **새 요청**: 깊은 폴더 일일이 안 파도 등록가능 패턴폴더를 자동 스캔해 **카드 그리드**로 노출(사용자 선택=카드). 제안설계: 드라이브 전폴더+전패턴파일 각 1쿼리로 훑어→폴더맵 조립→사이즈파서로 패턴폴더 선별→경로/사이즈수 카드→클릭시 renderDrivePreview 재사용. 캐시+진행표시. 이하 이전 완료상태: 푸시완료 origin/main 59d0417 미푸시0. **2026-07-06 브라우저 라이브 검증 성공**: 배포사이트(onrender.com) 로그인상태→[드라이브에서 등록]→**실제 공유드라이브 트리 정상 노출**(0.농구유니폼/1.야구저지/2.배구/3.럭비티/슈팅셔츠/라운드반팔/축구복 등 실폴더+지연로딩 "불러오는중" 작동). admin+env+폴더공유 전부 정상 확정. **admin 403 이슈 해결**: Supabase app_metadata.role="admin"(사용자 SQL, grader Supabase begxkadzvcczdlewcmrj는 Claude MCP 접근불가). errors.md 기록. **남은 관찰(의뢰서6)**: 반팔/긴팔/하의/야구/축구 등 비농구 합성품질 미검증(농구 V넥 기준 튜닝)—등록은 되나 결과는 테스트가이드북대로 관찰대상. 로컬 서버(127.0.0.1:8000)도 병행 사용중.
+- **현재 담당**: pm → planner-architect (**신규기능: 즐겨찾기+자동분류+영속저장**). 사용자 확정: 저장=Supabase(영구·공유·무료, 관리자 SQL 1회) / 분류=자동(경로기반 옷종류) / 대상=등록된 패턴(작업용) / 직원도 열람·사용·관리자만 정리·등록. ⚠️확인결과: Render 영구디스크 없음→등록패턴도 재배포시 소실(현재 repo커밋 2개만 잔존), Supabase는 auth전용(DB쓰기 0, SECRET/SERVICE_ROLE 제거상태=백엔드 키리스 유지 필요→프론트direct Supabase+RLS 또는 user JWT프록시). architect가 스키마+RLS SQL·자동분류·권한·UI(patterns목록+work step1)·등록패턴 영속화 단계분리 여부 설계중. 아래 완료분:
+- **[이전]** ✅ **패턴 폴더 자동 스캔 완성·배포**: 백엔드 f3b3257(/api/drive/scan 대량조회+캐시·tester68/68) + 프론트 25f490c([자동찾기|트리]탭+카드그리드·tester69/69·트리회귀0·입력칸중복0) + docs f977d75. origin/main f977d75 미푸시0. 재배포 스모크통과(scan 401·프론트 마커). **사용자 실서버 [자동찾기] 카드 확인 대기**. 스캔=발견전용·등록은 기존 정확경로. 남은 관찰(의뢰서6): 비농구(야구/축구/반팔/하의) 합성품질 미검증(농구V넥 튜닝)=관찰대상.
+- **이전 완료(2026-07-06~07)**: Drive Phase1(백엔드)+Phase2(프론트 트리/미리보기/등록)+배포+admin권한(Supabase role=admin, grader Supabase는 Claude MCP 접근불가)+SSL동시성수정(gdrive 스레드로컬+재시도 4783a12)+키 gitignore(ac785a5). 실서버 트리탐색·5단계깊이·미리보기 브라우저 검증 성공. 배포 URL grader-v2-47gd.onrender.com. 로컬(127.0.0.1:8000)도 병행.
 - **목표**: 패턴 관리에서 ①공유드라이브 폴더 트리 탐색 ②폴더선택→사이즈미리보기→등록(기존 create_pattern 재사용) ③등록패턴 카드노출·선택. 서버가 서비스계정으로 Drive 읽기전용.
 - **Phase 2 커밋(미푸시)**: 2-1 카드 glyphset배지+클릭이동 `322cea0`(tester7/7) · 2-2 driveMode+트리 지연로딩 `30a18f9`(8/8) · 2-3 우측 사이즈미리보기 `e16314a`(12/12) · 2-4 from-drive 등록연결 `f69f937`(20/20). 전부 rev 치명0.
 - **⏳ 남은 것(Phase 3)**: (1) **사용자 Google Cloud 설정** — 서비스계정 JSON키 발급 + 드라이브 폴더를 서비스계정 이메일에 공유 + Render env 2개(GDRIVE_SA_JSON, GDRIVE_ROOT_FOLDER_ID). (2) **git push** → Render 자동 재배포. (3) 실드라이브 왕복(다운로드→변환→카드노출) 검증. **로컬 GDRIVE 미설정이라 현재 스텁으로 전 분기 결정론 검증만 완료** — 실드라이브 검증은 env 설정 후.
+
+### 기획설계 — 등록패턴 즐겨찾기+자동분류+메타 영구저장 [2026-07-07 planner-architect]
+
+🎯 목표: 등록된 패턴을 (자동분류된) 카테고리로 묶어 보여주고, 관리자가 즐겨찾기(별표)를 지정하면 전 직원이 공유·열람. 저장=Supabase(begxkadzvcczdlewcmrj), 백엔드 키리스 유지.
+
+🔑 핵심 확정(설계):
+- **읽기/쓰기 아키텍처 = (a) 프론트 직접 Supabase**(publishable 클라 + 로그인 세션 JWT). 백엔드 무변경·service_role 0. login/계정메뉴가 이미 쓰는 `window.supabase.createClient(url, publishable)` 재사용. RLS가 권한 강제.
+- **RLS**: SELECT=로그인 전체(`to authenticated using(true)`), INSERT/UPDATE/DELETE=admin만(`(auth.jwt()->'app_metadata'->>'role')='admin'`). auth.py의 app_metadata.role 판정과 정합.
+- **스키마**: 단일 표 `pattern_meta{pattern_id text PK(=폴더명=/api/patterns id), is_favorite bool default false, category text(override, null이면 파생값 사용), updated_by uuid, updated_at timestamptz}`.
+- **자동분류 = 키워드 사전 파생(프론트)**: 패턴명에서 옷종류 키워드(농구/야구/배구/축구/슈팅저지/라운드반팔/하의…) 매칭→category. 무매칭=미분류. 관리자 override는 Supabase에 저장. **유효 카테고리=override ?? 파생**. 기존 2개(농구_U넥/V넥)=이름파생 "농구"로 즉시 커버(마이그레이션 0). Drive 최상위폴더 캡처(정확도↑)는 create_pattern/from-drive 수정 필요 → **후속 단계로 미룸**.
+- **등록패턴 파일 영속화 = 이번 범위 제외(별도 Phase B)**: preset 폴더가 작음(U넥 20KB·V넥 88KB, SVG는 정규화 path). Storage 백업 가능하나 백엔드 변경 수반. 이번엔 **메타만** 저장. 재배포 소실 시 from-drive 재등록으로 복구(Drive=원본), 같은 이름 재등록 시 pattern_id 동일→메타 자동 재부착.
+
+📍 만들 위치: webapp/static/screens/patterns.html + work.html (프론트만·추가) + docs SQL 1장(사용자 1회 실행).
+
+📋 실행계획(각 독립 커밋, 최대 6):
+| 순서 | 작업 | 담당 | 선행 |
+|------|------|------|------|
+| 1 | Supabase SQL(표+RLS) 문서 작성 → **사용자가 SQL Editor 1회 실행** | developer(문서)+사용자(실행) | 없음 |
+| 2 | 프론트 공용 메타 유틸(getSupaClient·fetchMeta·deriveCategory·isAdmin) + patterns.html 목록에 카테고리 필터/그룹 + 별표 읽기표시 | developer | 1 |
+| 3 | patterns.html 쓰기(admin): 별표 토글·카테고리 지정 upsert(RLS 이중방어·UI admin 게이트) | developer | 2 |
+| 4 | work.html step1: 즐겨찾기 상단+카테고리 필터(선택흐름 무변경) | developer | 2 |
+| 5 | tester+reviewer 병렬(권한/오프라인폴백/회귀) | tester+reviewer | 3,4 |
+
+⚠️ developer 주의: 기존 renderPatternGrid/renderPatterns/loadPatterns=확장만(교체 금지). Supabase 실패·로컬 미설정=파생카테고리+별표없음으로 degrade(기본 목록 정상). 별표 쓰기 UI는 admin에게만 노출+RLS 이중. var(--*)·Material Symbols(star/star_border). apiFetch·기존 card/badge/seg/chip 재사용.
+
+## 구현 기록 (developer) — 즐겨찾기 + 자동분류 프론트 [2026-07-07]
+
+📝 구현한 기능: 등록패턴을 **옷 종류 카테고리로 묶고 별표(즐겨찾기)** 를 달아 전 직원이 공유·열람. 저장=**Supabase pattern_meta 표에 프론트가 로그인 세션으로 직접 read/write**(백엔드 키리스 무변경). patterns.html=관리자 정리 화면(별표 토글·카테고리 변경·필터), work.html=직원 선택 화면(즐겨찾기 상단+카테고리 필터, 읽기 전용). 빌드0·var(--*)·Material Symbols(star/star_border).
+
+| 파일 | 변경 내용 | 신규/수정 |
+|------|----------|----------|
+| webapp/static/screens/patterns.html | PM CSS(+필터바/별표/select) · #pmFilterBar 마크업 · openDriveScanFolder path 캡처 · registerFromDrive 성공 시 카테고리 upsert · PM JS블록(유틸+렌더감싸기+admin쓰기) | 수정(추가 377/삭제 1) |
+| webapp/static/screens/work.html | PM CSS(필터바) · #pmWorkFilterBar 마크업 · PM JS블록(읽기전용 유틸+렌더/showPanel 감싸기) | 수정(추가 180/삭제 0) |
+
+🔑 재사용한 Supabase 클라 방식(계정메뉴 initAccount 그대로): `fetch('/api/public-config')`→`{auth_required, supabase_url, supabase_publishable_key}`→`window.supabase.createClient(url, publishable)`. 세션은 supabase-js SDK가 localStorage에 보관 → `.from('pattern_meta').select/upsert`가 로그인 JWT 자동 첨부(SELECT=전원, upsert=관리자만 RLS 통과). role 판정=`sb.auth.getUser()` → `user.app_metadata.role==='admin'`(auth.py와 정합). **SECRET 미사용·publishable만**. 클라는 pm 전용 캐시(pmSupaClient)로 1회 생성.
+
+🧩 공용 유틸(양 화면 인라인): `pmGetSb()`(캐시·실패/미설정=null degrade) · `pmLoadMeta()`(select→{pid:{is_favorite,category}} 맵, 실패=빈맵) · `pmIsAdmin()`(patterns만) · `pmUpsertMeta(pid,patch)`(patterns만, {ok}/{ok:false,error}) · `pmCatOf(p,map)`=**저장값 ?? 이름최선매칭 ?? 미분류** · `pmMatchKnownCategory`(PM_KNOWN_CATEGORIES 구체키 우선) · `pmCleanCategoryLabel`("숫자. " 접두 제거+공백정리) · `pmCategoryFromPath`(경로 "A › B › C"→최상위폴더→키워드정규화).
+
+🎯 카테고리 결정(드라이브 폴더 트리 기준): **캡처 지점=registerFromDrive 성공 시**. openDriveScanFolder에서 driveSelectedFolder에 `path` 추가 보존 → registerFromDrive 시작 시 지역변수 pmCapturedPath로 붙잡음(비동기 중 변경 방어) → 성공 dict의 body.pattern_id + pmCategoryFromPath(path)로 `upsertMeta(pattern_id,{category})`. 최상위폴더 "0.농구"→"농구"(숫자접두 제거+키워드매칭). **from-drive는 admin전용이라 호출자=관리자→RLS 통과**. 트리 탭 등록은 path 없음→카테고리 upsert 생략(이름파생 폴백). 기존 로컬 농구_U넥/V넥(path·저장값 없음)=이름에 "농구"→"농구"로 자동 커버.
+
+🔧 기존 렌더 '감싸기'(교체 금지 준수): `renderPatternGrid`/`reloadPatterns`(patterns), `renderPatterns`/`showPanel`(work)를 원본 캡처 후 `함수=function(){orig.apply(...); pm후처리();}`로 재대입. 원본 본문 0줄 수정. pm후처리=카드에 별표+카테고리 덧대기(.pm-added, 재렌더마다 제거 후 재부착=중복0)+필터바 빌드+표시/정렬(즐겨찾기 우선, 안정정렬). **pm후처리는 renderPatternGrid를 절대 재호출 안 함(무한루프 방지)**.
+
+🖼️ UI: (patterns) 목록 위 카테고리 칩(전체·<카테고리>·미분류 count)+즐겨찾기만 토글 / 카드 좌상단 별표(admin=클릭 upsert 토글·낙관적갱신+실패원복토스트, 비admin=fav일때만 표시) / 카드 하단 카테고리(admin=select[사용중∪알려진∪미분류∪현재+직접입력]→upsert, 비admin=badge). (work) 패턴선택 step0 위 카테고리 칩 + 카드에 별표(표시)+카테고리 배지, 즐겨찾기 상단 정렬. **선택흐름(patternId)·stepper·기존 카드/클릭이동/수정삭제 무변경(덧댐만)**.
+
+🛡️ degrade: pmGetSb=null이면 pmLoadMeta={}, pmIsAdmin=false → 별표 없음·카테고리는 이름파생/미분류·필터칩은 파생값으로 구성(직원도 스캔 없이 열람). upsert는 미설정 시 no-op. `.pm-filterbar.hidden{display:none}`은 `.hidden !important`와 중복(무해, 의도명시).
+
+💡 tester 참고:
+- **테스트 방법**: 배포/로컬 로그인 후 patterns/work 진입. Supabase pattern_meta 표+RLS가 사용자 SQL로 생성돼 있어야 쓰기 검증 가능(미생성 시 degrade만 확인).
+- **정상 동작**: (1) 카테고리 칩으로 그룹 필터·즐겨찾기만 토글. (2) 관리자=별표 클릭 시 즉시 채워짐+DB저장, 카테고리 select 변경 시 저장+토스트. (3) 비관리자=별표/카테고리 표시만(쓰기 UI 없음), 별표 없는 카드엔 빈별 미노출. (4) work step1=즐겨찾기 패턴 맨 위+카테고리 칩, 선택→다음 흐름 그대로. (5) 스캔카드로 등록→목록에 그 옷종류 카테고리 배지.
+- **꼭 볼 검증 포인트**: ①카테고리 그룹/필터(전체/특정/미분류·빈결과 안내) ②별표 admin쓰기/전원읽기 ③**RLS 이중**(비관리자가 콘솔로 upsert 시도→거부, UI엔 애초 버튼없음) ④**degrade**(Supabase 미설정/로컬→목록·선택·작업 안 깨짐, 이름파생 카테고리) ⑤**트리회귀0**(드라이브 트리 탐색·미리보기·등록 그대로) ⑥**work 선택흐름 무변경**(patternId·stepper·프리셀렉트·자동첫선택) ⑦**캡처**(스캔카드 등록→pattern_meta.category=최상위폴더, 트리등록은 이름파생) ⑧낙관적갱신 실패 시 원복+토스트.
+- **주의 입력**: 폴더명/카테고리에 `<>&"'`(esc/driveEsc 확인, select 옵션·배지). 카테고리 select "직접 입력…" 취소. 저장된 카테고리 사라진 뒤 필터(전체로 리셋). updated_by 컬럼(내가 안 채움=null 전송, NOT NULL 제약/트리거 있으면 upsert 실패 가능→실제 표 스키마 확인 요망).
+
+⚠️ reviewer 참고:
+- 봐줬으면 하는 부분: (1) **기존 렌더 감싸기(재대입)** 안전성 — renderPatternGrid/reloadPatterns/renderPatterns/showPanel 원본 본문 무수정, 초기 동기 호출(patterns 593줄=원본, 이후 async=감싼버전) 타이밍. (2) **캡처 정확성** — driveSelectedFolder.path 보존이 트리경로(path없음)·경쟁가드(id비교)에 무영향인지. (3) **RLS 이중방어** — 쓰기 UI가 pmAdmin에게만, upsert는 관리자만 성공, 등록캡처는 from-drive(admin전용)에서만. (4) **degrade 완전성** — 미설정/실패 전 경로에서 목록·선택·작업 무손상. (5) 카테고리 정규화(catOf 우선순위·드라이브캡처 vs 이름파생 일관성).
+- **결정한 것(리뷰 판단 요망)**: 카테고리 라벨=`pmCategoryFromPath`가 최상위폴더를 "숫자접두 제거+알려진키워드로 정규화"(예 "0.농구"→"농구"). 기획서 예시 "농구유니폼"과 달리 키워드로 수렴시켜 이름파생("농구_U넥"→"농구")과 **일관성** 확보를 우선함. 관리자가 select→직접입력으로 임의 라벨 교정 가능. PM_KNOWN_CATEGORIES 목록 조정으로 라벨 정밀도 변경 가능.
+
+🧪 developer 자체검증(정적): new Function 파싱 **문법0**(patterns 인라인1742줄·work 1377줄). 신규 pm함수 각 1회 정의·모든 pm참조 정의됨(MISSING=dataset속성/DOM id 오탐). **신규 하드코딩 색상 0건**(추가라인 hex/rgb/named 0, var(--*)·color-mix(var(--paper))만). 사용 CSS변수 11종 존재 확인. diff=추가556/삭제1(삭제1=openDriveScanFolder에 path필드 추가한 그 1줄). **런타임 브라우저/실 Supabase 왕복은 tester 몫**.
+
+### 테스트 결과 (tester) — 즐겨찾기+자동분류 프론트 [2026-07-07]
+검증 방식: **jsdom 실DOM 하니스**(patterns/work.html 통째 로드 + 인라인 스크립트 실제 실행, `window.supabase.createClient`·`/api/public-config`·`/api/patterns`·`/patternfiles`·`/from-drive`·`pattern_meta select/upsert` 전부 스텁, 네트워크0) + **정적 diff 회귀검증** + **실서버 스모크**(uvicorn 8231, 로컬 무인증). 6 하니스 = **113 assert**.
+
+| 테스트 항목 | 결과 | 비고 |
+|-----------|------|------|
+| 1. 인라인 문법0 (patterns/work) | ✅ 통과 | new Function 파싱 OK(1741·1376줄) + jsdom 4경로(degrade/admin/member) 런타임 JS에러0 |
+| 2. **degrade(핵심)** | ✅ 통과 | ①auth_required=false ②select 실패 ③CDN(window.supabase) 미로딩 ④빈목록 — 전 경로 목록·필터·선택·작업 정상(안깨짐)·별표없음·이름파생/미분류 카테고리·upsert no-op |
+| 3. 카테고리 그룹/필터 | ✅ 통과 | 전체/특정/미분류/빈결과 안내. distinct칩·카운트·override반영(야구_져지=커스텀A). 미분류 항상 마지막. category=metaMap.category ?? 이름파생 ?? 미분류 |
+| 4. 별표 읽기(전원) | ✅ 통과 | metaMap.is_favorite 반영(is-fav star). member/degrade도 fav 카드만 별 표시(비-fav readonly 숨김) |
+| 5. **별표 쓰기(admin만)** | ✅ 통과 | admin=토글+upsert{is_favorite}·onConflict=pattern_id·낙관적갱신·**실패시 원복+토스트**. **member/degrade=쓰기UI 미노출**(select0·별표 readonly·클릭시 upsert0). 카테고리 select변경·**직접입력(prompt)**·변경실패 원복도 확인 |
+| 6. 캡처(scan등록→분류) | ✅ 통과 | openDriveScanFolder path보존→registerFromDrive 성공시 upsertMeta(서버 pattern_id,{category:최상위폴더파생"농구"}). 트리경로(path없음)=upsert 생략 |
+| 7. **트리 회귀0(핵심)** | ✅ 통과 | 정적diff **삭제=patterns 1줄뿐**(openDriveScanFolder path필드 추가, work 삭제0). renderPatternGrid/reloadPatterns/renderDrivePreview/트리함수 **본문 0줄 변경**(hunk 미접촉)=감싸기(재대입)만. 등록카드 수정/삭제버튼·별표 stopPropagation·본문클릭→work네비 기존동작 유지 |
+| 8. **work 선택흐름 무변경(핵심)** | ✅ 통과 | 카드클릭→patternId 선택이동(is-selected/체크아이콘)·네비없음·stepper(goTo step1↔0 패널토글)·필터바 step0에서만·sessionStorage 프리셀렉트 1회성 소비·자동첫선택. 재렌더 후 별표/배지 데코 유지(중복0) |
+| 9. 하드코딩 색상0 | ✅ 통과 | 추가라인 hex/rgb/hsl/named 0건·var(--*)/color-mix만 |
+| E. XSS 이스케이프 | ✅ 통과 | 카테고리에 `"><img onerror>` 주입→img/onerror 요소0(select value·칩·배지 driveEsc/esc/textContent). 리터럴 보존 |
+| E. 실서버 스모크 | ✅ 통과 | health200·patterns200(125KB)·work200(90KB)·public-config auth_required:false·**서빙본==소스본 동일**·PM 식별자 서빙. 종료=포트8231 PID로만(node 미영향) |
+
+📊 **종합: 113 assert 전통과 / 0 실패** (문법6+patterns42+work24+색/esc/파생19+엣지18+카테고리원복4) + 정적diff회귀 + 서버스모크. **치명결함0·회귀0 → 커밋 가능.**
+
+🔒 특히 **degrade**(미설정/select실패/CDN미로딩/빈목록 전부 목록·선택·작업 무손상), **트리 회귀0**(삭제 1줄=path추가뿐·기존 렌더/트리 함수 본문 무수정=순수 감싸기), **work 선택흐름 무변경**(patternId·stepper·프리셀렉트·자동첫선택 그대로, 즐겨찾기 상단/카테고리 필터는 표시 껍데기만) 확실히 검증.
+
+🟡 관찰(차단 아님·라이브 전용 확인 요망):
+- **updated_by 컬럼**: pmUpsertMeta row=`{pattern_id,updated_at,...patch}`만 전송(updated_by 미포함=NULL). 아키텍트 스키마 nullable이라 정상 예상이나, 실배포 표 생성 후 **첫 별표/카테고리 저장 1회로 실확인 권장**(NOT NULL·트리거 있으면 실패 가능·dev도 플래그).
+- **RLS 실거부**는 표+정책 생성 후 라이브에서만 확정. 로컬은 UI 게이트+호출로직만 검증(task 명시).
+- (참고, 회귀 아님) "auth_required=true인데 supabase-js CDN 미로딩" 병리 조합에서 **기존 initAccount(diff 밖)**가 `window.supabase.createClient` 참조로 예외 — PM 무관(pmGetSb는 `!window.supabase` 가드로 정상 degrade). login/계정메뉴도 불가한 상태라 실사용 시나리오 아님.
+
+### 리뷰 결과 (reviewer) — 즐겨찾기+자동분류 프론트 [2026-07-07]
+📊 **종합 판정: 통과** (치명 0 · 회귀 0 · 제약위반 0). diff +556/−1(patterns 377/1·work 180/0). 정적 정독 검증(코드/식별자/DOM구조/호이스팅/이스케이프/CSS변수). **커밋 가능.** 런타임 실Supabase 왕복은 tester 몫.
+
+✅ 잘된 점:
+- **보안 이중게이트 정합**: 프론트는 `cfg.supabase_publishable_key`만 사용(SECRET/service_role 참조 0, grep 확인). isAdmin=`sb.auth.getUser()`의 app_metadata.role(서버만 쓰는 영역·JWT 위조는 Supabase 서명키 없이는 불가) → **UI 게이트는 UX용**, 실제 강제는 RLS. 비관리자는 pmAdmin=false→읽기전용 별표(쓰기 리스너 없음)·배지(select 없음). 콘솔로 upsert 시도해도 RLS 거부 + 낙관적 원복이 안전 처리. upsert는 supabase-js가 세션 JWT 자동첨부→RLS(admin) 통과/거부 구조 정합. work.html은 SELECT만(upsert 없음) 확인.
+- **트리/기존 회귀 0**: 삭제 1줄=`driveSelectedFolder={id,name}`→`{id,name,path}`(path 추가뿐). id 비교 경쟁가드·renderDrivePreview(id/name만 읽음)에 무영향, 트리 경로(selectDriveFolder)는 path 미설정→pmCapturedPath=null→카테고리 upsert 생략(이름파생 폴백)=설계대로. renderPatternGrid/reloadPatterns/renderPatterns/showPanel 전부 함수선언(재대입 합법)을 원본캡처 후 감싸기, 원본 본문 무수정. `.pm-added`는 매 후처리 시 remove 후 재부착→리스너/노드 누수·중복 0. 카드 기본 클릭리스너는 render 시 1회만 부착(pm은 안 건드림). work 선택흐름(patternId·update·stepper·프리셀렉트) 무변경(읽기전용 덧댐만).
+- **초기화 타이밍 안전**: 감싸기(patterns 2254·work 1510)는 동기 실행, 이후 모든 렌더 호출부(patterns 645/1187·초기 630은 원본으로 빈그리드, work 1341/1522/1527/1533 loadPatterns)는 전역 이름참조라 콜백(async) 시점엔 감싼 버전 해석. 메타/패턴 로드 순서 무관하게 최종 pmAfterRender 수렴. registerFromDrive(1647)가 뒤에 정의된 pmCategoryFromPath/pmUpsertMeta 호출=둘 다 함수선언(호이스팅)+런타임(클릭) 호출이라 TDZ/순서문제 없음.
+- **degrade 완비**: pmGetSb=미설정/실패/로컬(auth_required=false)→null→pmLoadMeta={}, pmIsAdmin=false. 별표 없음·카테고리는 이름파생/미분류·필터칩은 파생값 구성. 목록·필터·선택·작업 전부 생존. upsert=미설정 시 {ok:false} no-op.
+- **카테고리 로직 일관**: catOf=저장값 ?? pmMatchKnownCategory(이름) ?? 미분류. 캡처(scan path 최상위)·이름파생 **둘 다 pmMatchKnownCategory로 수렴**("0.농구"→접두제거→"농구", "농구_U넥"→"농구") = 라벨 일관. 관리자 select→직접입력으로 override(prompt 취소 시 재렌더 원복). 미분류 항상 맨 뒤·사라진 필터값은 전체로 리셋.
+- **이스케이프/제약**: patterns=driveEsc(&<>"' 전부), work=esc(&<>" — 작은따옴표 미포함이나 사용처가 전부 쌍따옴표 속성/textContent라 XSS 무해). 배지=textContent(자동), select 옵션 value/text·칩 data속성=esc 후 getAttribute 디코딩 왕복 정확. 하드코딩 색상 0(추가라인 grep 0, 전부 var(--*)/color-mix(var(--paper))). 사용 CSS변수(--brand=--stiz-red·--paper·--surface-active·--surface-card·--border-strong 등) 전부 tokens/colors.css 존재. Material Symbols(star/star_border). 빌드0·webapp/static 2파일·백엔드/엔진/기존기능 무변경. 낙관적 갱신=실패 시 원복+토스트 확인. 별표 카드 앵커=이미지영역(children[0]) `position:relative` 존재→absolute 별표 정위치.
+
+🔴 필수 수정: **없음**
+
+🟡 권장(선택, 차단 아님):
+- (updated_by 스키마) upsert row에 updated_by 미포함(null). planner 설계=nullable이라 정합이나, 사용자가 실행하는 SQL 표가 updated_by NOT NULL이면 쓰기 실패(단 원복+토스트로 안전 degrade, 데이터 손상 아님). SQL 문서와 nullable 일치 1회 확인 권장.
+- (이중클릭/경쟁) 별표·카테고리 낙관갱신에 처리중 disabled/debounce 없음. 빠른 연속 클릭 시 마지막 upsert 승리(idempotent)하나 응답 순서 역전 시 UI-DB 순간 불일치 가능(저위험). 여력 시 처리중 별표 disabled 가드.
+- (후처리 try/catch) 렌더 감싸기가 pmAfterRender를 try/catch 없이 이어붙임. 현 후처리는 방어적(grid/children/nameBlock 전부 존재가드)이라 예외경로 없음(무해). 완전 degrade를 원하면 후처리 try/catch로 감싸면 원본 render 성공을 pm 예외로부터 절연.
+- (work esc 작은따옴표) 현재 안전. 향후 작은따옴표 속성에 재사용 시 위험 — 지금은 무해(인지만).
 
 ### 기획설계 — 패턴 폴더 자동 스캔(카드 그리드) [2026-07-07 planner-architect]
 
@@ -310,6 +414,10 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 | 결과 |
 |------|---------|------|------|
+| 2026-07-07 | tester | 즐겨찾기+자동분류 프론트 검증 — jsdom 실DOM 하니스(patterns/work)+정적diff+서버스모크 | **113 assert 전통과·치명0·회귀0**. 문법0·**degrade4경로**(auth false/select실패/CDN미로딩/빈목록 무손상)·카테고리 그룹/필터/빈결과·별표읽기(전원)·**별표쓰기 admin만**(낙관적+실패원복+토스트, member/degrade 쓰기UI미노출·upsert0)·캡처(scan등록→category=최상위폴더파생, 트리 path없음=생략)·**트리회귀0**(삭제1줄=path추가·렌더/트리함수 본문0변경=감싸기만)·**work선택흐름 무변경**(patternId/stepper/프리셀렉트/자동첫선택)·XSS이스케이프·색상0·서빙본==소스본. 관찰3(updated_by nullable 라이브확인·RLS 라이브전용·기존 initAccount CDN미로딩 예외=PM무관). 커밋 가능 |
+| 2026-07-07 | reviewer | 즐겨찾기+자동분류 프론트 리뷰(patterns +377/−1·work +180) | **통과**·치명0·회귀0·제약위반0. 보안 이중게이트(publishable만·SECRET0·isAdmin=app_metadata.role·RLS강제·work SELECT전용) 정합·삭제1줄=path추가 회귀0·감싸기(함수선언 재대입·원본무수정·.pm-added 누수0)·초기화 호이스팅 안전·degrade완비·카테고리 pmMatchKnownCategory 수렴 일관·이스케이프/색상0/CSS변수 존재. 권고4(updated_by 스키마 nullable 확인·이중클릭 debounce·후처리 try/catch·work esc 작은따옴표) 전부 차단아님 |
+| 2026-07-07 | developer | 즐겨찾기+자동분류 프론트(patterns.html·work.html) — Supabase pattern_meta 직접 read/write | 계정메뉴 방식 재사용(public-config→createClient publishable·세션JWT·role=app_metadata.role) 공용유틸(getSb/loadMeta/isAdmin/upsertMeta/catOf) · 카테고리=드라이브 최상위폴더 캡처(registerFromDrive 성공 시 upsert)+이름파생 폴백 · 기존 렌더 '감싸기'(교체0·본문무수정) · patterns=별표토글/카테고리select/필터칩(admin쓰기+RLS이중) · work=즐겨찾기상단+카테고리칩(읽기전용·선택흐름무변경) · degrade완비 · 문법0·하드코딩색0·추가556/삭제1(트리회귀0). 커밋 대기(PM) |
+| 2026-07-07 | planner-architect | 신규기능 즐겨찾기+자동분류+메타저장 기획설계 | 프론트 직접 Supabase(publishable+세션 JWT)·RLS(SELECT 전체/쓰기 admin `auth.jwt()->app_metadata->>role`)·단일표 pattern_meta(pattern_id PK)·자동분류=키워드파생(override??파생, 기존2개 마이그0)·**등록파일 영속화는 별도 Phase B**(메타만 우선, preset 20~88KB 소형)·5단계 독립커밋·decisions 기록. 승인대기 |
 | 2026-07-07 | tester | 자동스캔 프론트 검증 — patterns.html jsdom 실DOM 하니스+실서버 스모크 | **69/69 통과**·치명0·회귀0. 문법0·탭상호배타·카드렌더(grid-3/배지/경로/이스케이프)·refresh1·카드→미리보기→등록왕복(folderId/name정확)·**트리회귀0**·**입력칸중복0(스캔A→트리B=B등록)**·4갈래(configured:false/403/500·502/빈folders)·색상0·캐시전이·버블단일호출·XSS속성방어. 메인 1건 "FAIL"=jsdom 텍스트노드 재직렬화 아티팩트로 기각(esc.js가 실제 이스케이프 별도입증). 실서버 configured:false 확인. 커밋 가능 |
 | 2026-07-07 | developer | 자동스캔 프론트(계획3·4) — patterns.html [자동찾기\|폴더트리] 탭+카드그리드+카드→미리보기 배선 | #driveMode 안 .seg 탭 2뷰 상호배타·자동찾기=GET /api/drive/scan→grid-3 카드(폴더명/N사이즈 배지/경로/[등록])·툴바 개수+최신성+새로고침·2단계 마법사(카드→미리보기). renderDrivePreview panel 인자화(기본#drivePanel=트리회귀0)+registerFromDrive activeDrivePanel 스코프(#driveName ID중복 이중방어). 트리 마크업 무변경(감싸기만). 파일1개. vm.Script 문법0·함수10 def1·신규id 중복0. 커밋 대기(PM) |
 | 2026-07-07 | reviewer | 자동스캔 프론트 리뷰(patterns.html +264/-20 탭+카드그리드+미리보기배선) | **통과**·치명0·회귀0·제약위반0. new Function 문법0. 트리회귀0(renderDrivePreview 기본#drivePanel·삭제20줄=트리블록 감싸기 재생성·기존함수 무변경)·입력칸중복 이중방어 유효(탭전환 상대패널 비우기+activeDrivePanel 스코프)·카드[등록] form없음 버블1회·리스너누수0. 권고3(트리탭 매전환 재로드·경로중복표시·a11y) 전부 차단아님 |
