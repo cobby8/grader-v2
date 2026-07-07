@@ -57,6 +57,76 @@
 - work 경고는 `p.has_number_area===false`(strict)만—undefined 구버전 응답 오경보 방지. pm 즐겨찾기 `.pm-added`/`card.children[0]` 로직과 충돌 없음(배너는 card.children[1]).
 - 엔진 diff 0(engine/ 무변경, git diff --stat 확인).
 
+## 구현 기록 (developer) — 번호·이름 위치 구멍 수정 [3·4단계]
+
+📝 구현한 기능: 스캔/트리로 드라이브 폴더를 등록할 때, 그 폴더 안의 **완성본·글리프셋 파일을 드롭다운에서 골라** 함께 등록 → 번호·이름 위치가 등록 즉시 채워지게. (서버 from-drive는 reference_file_id/glyph_file_id 이미 지원, UI만 미노출이던 것을 노출.) **엔진 무수정**(webapp/api.py·patterns.html만). 1·2단계(piece_id 자동부여·주문경고)와 결합하면: 완성본 선택→area 추출→piece_id 자동부여→주문 시 번호·이름 실제 출력.
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| webapp/api.py `_EXTRA_FILE_EXTS` 상수(≈1471) | 완성본/글리프셋 후보 확장자 `{.ai,.pdf}` 신규(사이즈파일 `_PATTERN_FILE_EXTS` 와 별개, .svg 제외) | 수정(+7줄) |
+| webapp/api.py `_scan_folder_pattern_files`(≈1503) | 반환을 `(files,warnings)`→`(files,warnings,others)` **3-tuple**. 사이즈 토큰 없는 .ai/.pdf(임시/보조 제외)를 `others=[{id,name,mimeType}]`로 **추가** 수집. **files/warnings/사이즈인식 로직 무변경**(그 파일은 여전히 warnings에도 남음=회귀0). id 포함(화면 드롭다운 선택용) | 수정(3단계) |
+| webapp/api.py patternfiles 응답(≈1570)·from-drive 호출부(≈1629) | patternfiles 응답에 `"others":others` 추가. from-drive는 `files,scan_warnings,_others=`로 언패킹(others 미사용—payload로 직접 받음) | 수정 |
+| webapp/static/screens/patterns.html `drivePickRecommend`(신규, ≈driveUniqueSizes 아래) | others 중 파일명 키워드 매칭 첫 파일 id 반환(대소문자무시), 없으면 ""(선택안함). 자동추천 헬퍼 | 신규(+13줄) |
+| webapp/static/screens/patterns.html `renderDrivePreviewBody`(≈1561) | others 읽기 + `driveSelectedFolder.others` 보관(안전망). 기준사이즈 아래(섹션5-2)에 **완성본 드롭다운(#driveReference)+글리프셋 드롭다운(#driveGlyph)** 추가. 옵션=`others`, 첫 옵션 "선택 안 함"(value=""), 자동추천(완성/샘플/final/본체포함→완성본, 글리프/glyph/번호/숫자→글리프셋) selected. **후보없음(others 비어있고 sizes>0)**=드롭다운 대신 alert--warn 안내("완성본 후보 없음→로컬 등록 권장", 등록은 계속 가능) | 수정(4단계) |
+| webapp/static/screens/patterns.html `registerFromDrive`(≈1648) | 활성패널에서 #driveReference/#driveGlyph 값 읽어 값 있으면 `payload.reference_file_id`/`glyph_file_id` 포함. **선택 안 함(value="")=미포함=기존 동작** | 수정(+11줄) |
+
+🔎 근거(코드 정독): 완성본/글리프셋 파일은 파일명에 사이즈 토큰 없음(예 `..._완성본_본체포함.ai`)→기존 `_scan_folder_pattern_files`에서 warnings("사이즈 인식 못함")로만 빠져 **id가 안 실려 화면에서 선택 불가**. 서버 from-drive(api.py:1650-1659)는 이미 reference_file_id/glyph_file_id→get_file_meta→다운로드→create_pattern(reference=/glyphset=) 완비. 드롭다운 option value=파일 id라 baseSize와 동일 방식으로 활성패널에서 `.value` 읽어 그대로 payload. 옵션 value/name은 driveEsc 이스케이프.
+
+💡 tester 참고:
+- **테스트 방법(3단계 백엔드)**: `/api/drive/folder/{id}/patternfiles` 응답에 `others` 키 존재·사이즈없는 .ai/.pdf가 `{id,name,mimeType}`로 담김·.svg는 others 제외(warnings만). 시뮬 검증 PASS(스크래치패드 스크립트): files=[XL,2XL]·others={R1완성본,G1글리프,P1pdf}·warnings 무변경.
+- **테스트 방법(4단계 프론트)**: 드라이브 모드→폴더/카드 선택→미리보기에서 (a)완성본·글리프셋 드롭다운 렌더 (b)완성본명에 "완성/본체포함" 있으면 자동선택·글리프명에 "글리프/숫자" 있으면 자동선택 (c)완성본 후보 없는 폴더면 드롭다운 대신 노란 안내(등록 버튼은 여전히 enabled).
+- **정상 동작**: 완성본 선택 후 등록→서버 payload에 reference_file_id 포함→preset의 number_area/name_area 생성(+1단계 piece_id 자동부여)→run_job 시 번호·이름 출력. "선택 안 함"이면 reference_file_id 미포함=기존과 동일(번호 없는 등록).
+- **주의 입력**: (1)completion 후보 다수인 폴더=자동추천은 첫 매칭만, 사용자가 바꿀 수 있음 (2)완성본이 사이즈있는 파일명이면(예 `완성본_XL.ai`) files로 분류돼 others에 안 뜸=드롭다운 후보 안 됨(현 설계 한계, 후보없음 안내로 로컬등록 유도) (3)같은 파일이 완성본·글리프셋 둘 다로 선택 가능(방어 안 함—서버가 각각 처리).
+- **회귀 확인**: 기존 스캔/트리/미리보기/등록·1·2단계 무변경(추가만). others 미지원 구버전 응답에도 `(body.others)||[]`로 안전(드롭다운 안 뜸=기존 동작). from-drive 3-tuple 언패킹으로 등록 정상.
+
+⚠️ reviewer 참고:
+- 3-tuple 반환 변경=내부 헬퍼 시그니처. 호출부 2곳(patternfiles·from-drive) 모두 갱신 확인(grep 3매치=정의1+호출2). 외부 API 응답은 키 추가만(others).
+- others는 warnings와 **중복 보유**(같은 파일이 양쪽에)=의도적("추가만"으로 warnings 무변경 회귀0 확보). warnings=사람이 보는 제외사유(id없음), others=선택용(id있음).
+- 드롭다운 value=파일 id, driveEsc 이스케이프. registerFromDrive는 activeDrivePanel 스코프로 읽어(baseSize와 동일) 자동찾기/트리 탭 id 충돌 방어. driveSelectedFolder.others 보관은 안전망(실제 선택은 dropdown value에서 직접).
+- 후보없음 안내는 sizes.length>0(등록가능)일 때만—사이즈파일도 없으면 기존 disabled+안내가 담당(중복 안내 방지).
+- 엔진 diff 0(git diff --stat engine/ = 빈 결과). py_compile OK. inline JS vm.Script 파싱 OK(81,970자).
+
+## 테스트 결과 (tester) — 번호·이름 위치 구멍 수정 [3·4단계]
+
+📊 종합: **43개 검증 전부 통과 / 실패 0** · 수정 요청 없음 · 커밋 가능
+
+| 테스트 항목 | 결과 | 비고 |
+|-----------|------|------|
+| py_compile(api.py) | ✅ 통과 | OK |
+| patterns.html inline JS 문법(vm.Script) | ✅ 통과 | 81,970자 컴파일 성공. 변경 조각 13/13 존재 |
+| **others 분류(핵심, 실함수 27검증)** | ✅ 통과 | 사이즈파일=files(정렬 M/XL/2XL 무변경)·사이즈없는 .ai/.pdf(비임시)=others(id 포함)·**.svg others 제외**·**임시(~)/.tmp others 제외**·.png 무시 |
+| files/warnings 회귀0 | ✅ 통과 | files 키={id,name,size,mimeType}·정렬 무변경. warnings 6건(임시2+사이즈미상4) 구조·reason 문구 무변경. 완성본은 others+warnings 중복보유(의도) |
+| patternfiles 응답 others 키 | ✅ 통과 | diff 확인: 응답에 `"others":others` 추가 |
+| **from-drive 3-tuple 언패킹** | ✅ 통과 | grep=정의1(1503)+호출2. patternfiles(1570 `files,warnings,others`)·from-drive(1629 `files,scan_warnings,_others`) 둘 다 3-tuple. **2-tuple 잔존 0(크래시 위험 0)** |
+| **드롭다운 렌더+drivePickRecommend(14검증)** | ✅ 통과 | "선택 안 함"(value="") 첫 옵션·완성/본체포함→완성본·글리프/숫자→글리프셋 자동추천·매칭없음/빈배열/undefined→""(구버전 `||[]` 방어)·대소문자 무시·첫매칭만·driveEsc 이스케이프 |
+| 후보없음 안내 | ✅ 통과 | sizes>0 && others 빈 → alert--warn 안내(등록 계속 가능). others 있으면 드롭다운 |
+| **payload(선택안함=기존동작)** | ✅ 통과 | refId/glyphId 있으면 `reference_file_id`/`glyph_file_id` 포함. value=""→미포함=서버 `if reference_file_id:` false→ref_upload None=기존 등록. panel(activeDrivePanel) 스코프로 읽음 |
+| CSS/클래스 | ✅ 통과 | select·field__hint·alert--warn 전부 기존 클래스 재사용(발명0). 하드코딩 색상 없음 |
+| **연결 완결성(코드 흐름)** | ✅ 통과 | 완성본선택→payload.reference_file_id→서버 다운로드→create_pattern(reference=)→build_area_preset(area추출)→**piece_id 자동부여(1349-64)**→run_job 번호·이름 출력. 이론상 경로 완결(1단계와 결합) |
+| 엔진 무수정 | ✅ 통과 | git diff engine/ = 0(api.py/patterns.html/scratchpad만) |
+
+🟡 비차단 관찰(주석 뉘앙스, 동작 문제 0): registerFromDrive 라인 ≈1736 주석 "선택 필드(glyph_file_id·reference_file_id 등)는 이번 UI 에선 생략"이 **바로 아래 3-2 블록이 실제로 추가**하므로 stale(주석-코드 불일치). 기능 영향 없음, 다음 손질 시 주석만 정리 권장.
+
+## 리뷰 결과 (reviewer) — 번호·이름 위치 구멍 수정 [3·4단계]
+
+📊 종합 판정: ✅ **통과** (치명 0 · 커밋 가능)
+
+✅ 잘된 점:
+- **3-tuple 호출부 전부 갱신(크래시 위험 0)**: grep `_scan_folder_pattern_files` = 정의1(api.py:1503)+호출2. patternfiles(:1570 `files,warnings,others`)·from-drive(:1629 `files,scan_warnings,_others`) **둘 다 3-tuple 언패킹**. 2-tuple 잔존 0. files/warnings/사이즈 정렬 로직 무변경(others는 `if not size` 블록 내 append만 추가).
+- **엔진 무수정**: `git diff --stat -- engine/` = 빈 결과. 변경=api.py(+30)·patterns.html(+71)·scratchpad뿐.
+- **others 분류 정확(선행 필터 순서 완벽)**: 폴더 skip → `_is_temp_or_aux_file` warnings+continue(others 제외) → `ext not in _PATTERN_FILE_EXTS` continue → `if not size`에서 `if ext in _EXTRA_FILE_EXTS(.ai/.pdf)`만 others. ⇒ (a)사이즈 있는 파일은 others로 **못 샘**(others가 `if not size` 안에만 존재) (b)사이즈 없는 파일은 files로 **못 감**(files.append 앞 continue) (c).svg 사이즈없음=warnings만·others 제외(_EXTRA_FILE_EXTS에 .svg 없음) — 스펙과 정확히 일치.
+- **payload/하위호환**: refSel/glyphSel을 `activeDrivePanel()` 스코프(:1720, baseSize·name과 동일 패턴)로 읽어 `.value` 있으면 payload.reference_file_id/glyph_file_id 포함. 선택안함(value="")=미포함=기존 동작(번호없는 등록). 서버(:1644·1674)는 `str(...or"").strip()`으로 빈값 방어, 완성본만 있으면 다운로드→create_pattern(reference=ref_upload, :1690).
+- **잘못된 id 안전**: 서버가 존재하지 않는 reference/glyph id 받으면 get_file_meta/download_file→`gdrive.DriveError`→502 한글 에러(finally에서 임시파일·핸들 정리). 크래시 없음.
+- **드롭다운 견고**: `(body.others)||[]`·`drivePickRecommend` 내 `others||[]`로 구버전/빈배열 방어. 자동추천은 첫 매칭만이고 첫 옵션 "선택 안 함"(value="")—미매칭 시 브라우저가 첫 옵션 선택=기존 동작. 옵션 value=파일 id·name 모두 `driveEsc` 이스케이프. 재렌더 시 `driveSelectedFolder.others` 보관(안전망, 실선택은 dropdown value 직접).
+- **UX/제약**: 후보없음 안내는 `sizes.length>0`(등록가능)에서만·등록 버튼 별도 enabled(등록 안 막음). CSS 전부 정의(app.css `.field__hint`:357·`.alert--warn`:382·`.alert__title/body`—var(--status-warn-*)/--amber-600·700)·Material Symbols·.select/.field 재사용. py_compile OK.
+- **연결 완결성**: 완성본 선택→reference_file_id→create_pattern reference→build_area_preset area 추출→(1단계 piece_id 자동부여)→번호·이름 출력. 이 경로는 1·2단계 run_job e2e(BROKEN 경고3→FIXED 앞"7"·뒤"홍길동+7" 실출력)로 이미 검증됨.
+
+🔴 필수 수정: 없음.
+
+🟡 권장(비차단, 참고만):
+- **중복 노출 UX**: 완성본/글리프셋 파일은 warnings("사이즈 인식 못함")와 완성본 드롭다운에 **동시** 노출. 사용자가 미리보기에서 같은 파일을 "제외 사유" 경고로 보면서 드롭다운 후보로도 봄=약간 혼란스러울 수 있으나 무해(회귀0 확보용 의도적 트레이드오프). 여유되면 others에 담긴 파일은 warnings 문구를 "완성본/글리프셋 후보(사이즈 없음)"처럼 톤 조정 여지.
+- **자동추천 키워드 중첩**: 완성본 추천에 "본체포함", 글리프셋 추천에 "번호/숫자". 완성본 파일명에 "번호"가 들어가면 글리프셋으로 오추천 가능(예 "…번호위치_완성본.ai"→ref와 glyph 둘 다 추천될 수 있음). **사용자가 드롭다운에서 변경 가능**하므로 비차단. 같은 파일이 ref·glyph 둘 다로 선택돼도 서버가 각각 처리(무해).
+
 ## 리뷰 결과 (reviewer) — 번호·이름 위치 구멍 수정 [1·2단계]
 
 📊 종합 판정: ✅ **통과** (치명 0 · 커밋 가능)
@@ -151,6 +221,8 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 | 결과 |
 |------|---------|------|------|
+| 2026-07-07 | tester | 번호·이름 위치 구멍 수정 3·4단계 검증 | **43검증 전부 통과·실패0·수정요청0**. others 분류 실함수 27검증(사이즈파일=files 정렬무변경·사이즈없는.ai/.pdf=others id포함·**.svg/임시/.tmp others제외**·회귀0)·from-drive 3-tuple 언패킹 2-tuple잔존0·drivePickRecommend+드롭다운 14검증(선택안함 첫옵션·자동추천·구버전 방어)·**선택안함=기존동작**·연결완결성 코드흐름(완성본선택→reference_file_id→area추출→piece_id자동부여) 확인·엔진diff0 |
+| 2026-07-07 | developer | 번호·이름 위치 구멍 수정 3·4단계(스캔등록 완성본·글리프셋 파일선택) | api.py `_scan_folder_pattern_files` others 버킷(사이즈없는 .ai/.pdf, id포함) 추가·patternfiles 응답+others / patterns.html 완성본·글리프셋 드롭다운(자동추천 완성/글리프·후보없음 안내)+payload reference_file_id/glyph_file_id. **선택안함=기존동작·warnings 무변경(회귀0)·엔진 diff 0·py_compile OK·inline JS 파싱 OK**. 시뮬검증(백엔드 분류·JS 추천) PASS |
 | 2026-07-07 | tester | 번호·이름 위치 구멍 수정 1·2단계 검증 | **8/8 통과·실패0·수정요청0**. 완성본 build_area_preset area=piece_id 없음(구멍확인)→부여 front/back/back가 엔진 _find_piece_index 매칭. **run_job GS실행 e2e: BROKEN preview 번호·이름 없음(경고3) vs FIXED preview 앞"7"·뒤"홍길동+7" 실출력(경고0)**. setdefault 회귀0·기존2패턴 무변경·엔진diff0·work배너 strict/즐겨찾기무충돌 |
 | 2026-07-07 | developer | 번호·이름 위치 구멍 수정 1·2단계(piece_id 자동부여 + 주문경고) | api.py create_pattern area에 piece_id setdefault 자동부여(pieces 실제 id, 앞→front·뒤번호/이름→back)+_scan has_number_area / work renderPatterns warn배너. **엔진 무수정**. py_compile OK. e2e run_job: BROKEN 경고3건→FIXED 0건 PASS. **reviewer 통과(치명0): 엔진무수정·piece_id 매칭정확·회귀0·제약충족)** |
 | 2026-07-07 | developer | 즐겨찾기 별 스타일: 빨강 아웃라인→골드 채움 | patterns/work.html 별 색 var(--brand)→var(--star-fav)+FILL 1(속채움). colors.css에 --star-fav(=amber-500 재사용) alias 1개 추가. 동작 무수정·OFF 회색빈별 유지 |
@@ -159,7 +231,3 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 | 2026-07-07 | dev/tester/rev | 패턴폴더 자동스캔 프론트([자동찾기]탭+카드그리드) | 25f490c·tester69/69·트리회귀0·입력칸중복0. 배포 실서버 74폴더 카드 확인 |
 | 2026-07-07 | dev/tester/rev | 패턴폴더 자동스캔 백엔드(GET /drive/scan 벌크2쿼리+캐시) | f3b3257·tester68/68·회귀0·추가만271 |
 | 2026-07-07 | planner-architect | 자동스캔 설계 | 벌크2쿼리 발견전용·등록은 기존 정확경로·name contains 금지 |
-| 2026-07-06 | debug/tester/rev | Drive SSL 동시성 수정(gdrive 스레드로컬+재시도) | 4783a12·tester15/15·rev치명0. 배포 실서버 5단계깊이 무재발. +키 gitignore ac785a5 |
-| 2026-07-06 | pm | Drive 연동 배포+admin권한(Supabase role=admin 사용자SQL) | 실서버 트리·미리보기·등록 동작. push 59d0417 |
-| 2026-07-06 | dev/tester/rev×4 | Drive Phase2 프론트 4단계(카드배지/트리/미리보기/등록) | tester 47건·rev치명0·커밋 322cea0~f69f937 |
-| 2026-07-06 | pm(workflow×8) | 의뢰서 대비 Drive 진척 코드대조 | 백엔드done·프론트미착수 확인→Phase2 착수 |
