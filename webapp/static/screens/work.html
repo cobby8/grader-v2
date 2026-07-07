@@ -57,6 +57,20 @@
   .helpmodal__body li { font: var(--text-sm); color: var(--text-body); margin-bottom: 4px; line-height: 1.5; }
   .helpmodal__body p { font: var(--text-sm); color: var(--text-body); margin: 0 0 4px; }
   .helpmodal__body strong { color: var(--text-strong); }
+
+  /* ===== 즐겨찾기 + 자동분류(카테고리) 필터 — 신규 (표시/정렬/필터 전용, 쓰기 없음) =====
+     색·간격은 전부 디자인 토큰(var(--*))만 사용(하드코딩 색 금지 규칙 준수). */
+  .pm-filterbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 16px; }
+  /* .hidden(app.css) 과 특정도가 같아 순서상 밀리므로, 확실히 숨기도록 특정도를 한 단계 올린다. */
+  .pm-filterbar.hidden { display: none; }
+  .pm-chip {
+    display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 12px;
+    border: 1px solid var(--border-default); background: var(--surface-card); color: var(--text-muted);
+    border-radius: 999px; cursor: pointer; font: var(--text-sm); white-space: nowrap;
+  }
+  .pm-chip:hover { border-color: var(--border-strong); }
+  .pm-chip.is-active { background: var(--surface-active); color: var(--text-strong); border-color: var(--accent); font: var(--text-sm-strong); }
+  .pm-chip .count { color: var(--text-subtle); font-family: var(--font-mono); font-size: 11px; }
 </style>
 </head>
 <body>
@@ -119,6 +133,10 @@
         <div>
           <h2 class="section-title" id="panelTitle">패턴을 선택하세요</h2>
           <p class="section-sub" id="panelSub" style="margin-bottom:18px;">등록된 패턴 프리셋 중 하나를 고릅니다.</p>
+
+          <!-- 즐겨찾기/카테고리 필터 바(신규) — 패턴 선택 단계(step 0)에서만 노출. JS(pmBuildFilterBarWork)가 채운다.
+               읽기 전용(pattern_meta SELECT). Supabase 미설정/로컬이면 이름 파생 카테고리로 degrade(별표 없음). -->
+          <div id="pmWorkFilterBar" class="pm-filterbar hidden"></div>
 
           <!-- Panel 0 · 패턴 선택 -->
           <section id="panel-0" class="grid-2"></section>
@@ -1342,6 +1360,168 @@ function loadSettings() {
     })
     .catch(() => { serverFmtDefault = "pdf"; });
 }
+
+// =====================================================================
+//  즐겨찾기 + 자동분류(카테고리) — 신규 기능 (작업 화면은 '읽기 전용': 표시·정렬·필터만)
+//   · pattern_meta 를 로그인 세션으로 SELECT(RLS: 로그인 전원 읽기 가능).
+//   · 즐겨찾기 패턴을 맨 위로 정렬 + 카테고리 필터 칩. 선택 흐름(patternId 선택→다음)·stepper 는 무변경.
+//   · 클라이언트는 계정 메뉴와 '똑같은 방식'(/api/public-config → createClient(publishable)).
+//   · degrade: Supabase 미설정/실패/로컬이면 별표 없음 + 이름 파생/미분류 카테고리로 정상 표시.
+//   · 기존 renderPatterns/showPanel 은 '감싸기만' 한다(교체 금지).
+// =====================================================================
+const PM_KNOWN_CATEGORIES = ["슈팅저지", "라운드반팔", "줄넘기", "농구", "야구", "배구", "축구", "피구", "반팔", "라운드", "하의", "연습복"];
+const PM_CATEGORY_UNCLASSIFIED = "미분류";
+const PM_ALL = "__all__";
+let pmSupaClient;                // undefined=미시도 · null=불가(degrade) · object=클라
+let pmMetaMap = {};              // { pattern_id: {is_favorite, category} }
+let pmWorkCat = PM_ALL;          // 선택된 카테고리 필터
+
+// 계정 메뉴와 동일 방식으로 supabase 클라(publishable) 확보 + 캐시. 실패/미설정=null(degrade).
+async function pmGetSb() {
+  if (pmSupaClient !== undefined) return pmSupaClient;
+  try {
+    const cfg = await (await fetch("/api/public-config")).json();
+    if (!cfg || !cfg.auth_required || !cfg.supabase_url || !cfg.supabase_publishable_key || !window.supabase) {
+      pmSupaClient = null;
+    } else {
+      pmSupaClient = window.supabase.createClient(cfg.supabase_url, cfg.supabase_publishable_key);
+    }
+  } catch (e) { pmSupaClient = null; }
+  return pmSupaClient;
+}
+// pattern_meta 전체를 맵으로 읽는다. 실패/미설정=빈 맵(degrade).
+async function pmLoadMeta() {
+  const sb = await pmGetSb();
+  if (!sb) return {};
+  try {
+    const res = await sb.from("pattern_meta").select("*");
+    if (res.error || !Array.isArray(res.data)) return {};
+    const map = {};
+    res.data.forEach((row) => {
+      if (row && row.pattern_id != null) {
+        map[row.pattern_id] = { is_favorite: !!row.is_favorite, category: row.category || null };
+      }
+    });
+    return map;
+  } catch (e) { return {}; }
+}
+// 이름에서 알려진 옷 종류 키워드 최선 매칭(없으면 null).
+function pmMatchKnownCategory(text) {
+  const s = String(text == null ? "" : text);
+  for (let i = 0; i < PM_KNOWN_CATEGORIES.length; i++) {
+    if (s.indexOf(PM_KNOWN_CATEGORIES[i]) >= 0) return PM_KNOWN_CATEGORIES[i];
+  }
+  return null;
+}
+// 카테고리 결정 = 저장값 ?? 이름 최선매칭 ?? 미분류.
+function pmCatOf(pattern, metaMap) {
+  const m = metaMap && metaMap[pattern.id];
+  if (m && m.category) return m.category;
+  const byName = pmMatchKnownCategory(pattern.name || pattern.id);
+  if (byName) return byName;
+  return PM_CATEGORY_UNCLASSIFIED;
+}
+function pmPatternById(id) { return PATTERNS.find((p) => p.id === id) || { id: id, name: id }; }
+function pmCatCompare(a, b) {
+  if (a === b) return 0;
+  if (a === PM_CATEGORY_UNCLASSIFIED) return 1;
+  if (b === PM_CATEGORY_UNCLASSIFIED) return -1;
+  return String(a).localeCompare(String(b), "ko");
+}
+function pmDistinctCategories() {
+  const set = {};
+  PATTERNS.forEach((p) => { set[pmCatOf(p, pmMetaMap)] = true; });
+  return Object.keys(set).sort(pmCatCompare);
+}
+
+// 카드에 [즐겨찾기 별표(표시 전용) + 카테고리 배지] 덧대기.
+function pmDecorateCardWork(card) {
+  const id = card.dataset.pattern;
+  const p = pmPatternById(id);
+  const meta = pmMetaMap[id] || {};
+  const fav = !!meta.is_favorite;
+  const cat = pmCatOf(p, pmMetaMap);
+  card.dataset.pmCat = cat;
+  card.dataset.pmFav = fav ? "1" : "0";
+  card.querySelectorAll(".pm-added").forEach((el) => el.remove());
+  const row = card.children[0];
+  const nameBlock = row && row.querySelector('div[style*="flex:1"]');
+  if (!nameBlock) return;
+  const line = document.createElement("div");
+  line.className = "pm-added";
+  line.style.marginTop = "8px";
+  line.style.display = "flex";
+  line.style.alignItems = "center";
+  line.style.gap = "6px";
+  let inner = "";
+  if (fav) inner += `<span class="material-symbols-outlined" title="즐겨찾기" style="font-size:18px; color:var(--brand);">star</span>`;
+  inner += `<span class="badge badge--neutral badge--sm">${esc(cat)}</span>`;
+  line.innerHTML = inner;
+  nameBlock.appendChild(line);
+}
+
+function pmWorkChipHtml(value, label, count) {
+  const active = value === pmWorkCat;
+  return `<button type="button" class="pm-chip${active ? " is-active" : ""}" data-pm-catchip="${esc(value)}">${esc(label)}<span class="count">${count}</span></button>`;
+}
+function pmBuildFilterBarWork() {
+  const bar = document.getElementById("pmWorkFilterBar");
+  if (!bar) return;
+  if (!PATTERNS.length) { bar.classList.add("hidden"); bar.innerHTML = ""; return; }
+  const cats = pmDistinctCategories();
+  if (pmWorkCat !== PM_ALL && cats.indexOf(pmWorkCat) < 0) pmWorkCat = PM_ALL;
+  const counts = {};
+  PATTERNS.forEach((p) => { const c = pmCatOf(p, pmMetaMap); counts[c] = (counts[c] || 0) + 1; });
+  let h = pmWorkChipHtml(PM_ALL, "전체", PATTERNS.length);
+  cats.forEach((c) => { h += pmWorkChipHtml(c, c, counts[c]); });
+  bar.innerHTML = h;
+  bar.classList.toggle("hidden", step !== 0);   // 패턴 선택 단계에서만 노출
+  bar.querySelectorAll("[data-pm-catchip]").forEach((ch) =>
+    ch.addEventListener("click", () => { pmWorkCat = ch.getAttribute("data-pm-catchip"); pmAfterRenderWork(); }));
+}
+// 카테고리 필터(표시/숨김) + 즐겨찾기 우선 정렬. (선택 흐름·patternId 는 건드리지 않음)
+function pmApplyFilterWork() {
+  const grid = document.getElementById("panel-0");
+  if (!grid) return;
+  const cards = Array.prototype.slice.call(grid.querySelectorAll("[data-pattern]"));
+  cards.forEach((card) => {
+    const show = (pmWorkCat === PM_ALL || card.dataset.pmCat === pmWorkCat);
+    card.style.display = show ? "" : "none";
+  });
+  const ordered = cards.slice().sort((a, b) => {
+    const av = a.style.display !== "none", bv = b.style.display !== "none";
+    if (av !== bv) return av ? -1 : 1;
+    const af = a.dataset.pmFav === "1", bf = b.dataset.pmFav === "1";
+    if (af !== bf) return af ? -1 : 1;
+    return 0;
+  });
+  ordered.forEach((c) => grid.appendChild(c));
+}
+function pmAfterRenderWork() {
+  const grid = document.getElementById("panel-0");
+  if (!grid) return;
+  grid.querySelectorAll("[data-pattern]").forEach(pmDecorateCardWork);
+  pmBuildFilterBarWork();
+  pmApplyFilterWork();
+}
+
+// ★기존 렌더 함수 '감싸기'(교체 아님)★
+const pmOrigRenderPatterns = renderPatterns;
+renderPatterns = function () { pmOrigRenderPatterns.apply(this, arguments); pmAfterRenderWork(); };
+// 단계 전환 시 필터 바를 step 0 에서만 보이게(기존 showPanel 뒤에 덧댐).
+const pmOrigShowPanel = showPanel;
+showPanel = function () {
+  pmOrigShowPanel.apply(this, arguments);
+  const bar = document.getElementById("pmWorkFilterBar");
+  if (bar) bar.classList.toggle("hidden", step !== 0 || !PATTERNS.length);
+};
+
+// 초기화: 메타 로드 → 재렌더(덧대기). 패턴 로드와 순서 무관하게 최종 일관.
+async function pmInitWork() {
+  try { pmMetaMap = await pmLoadMeta(); } catch (e) { pmMetaMap = {}; }
+  renderPatterns();
+}
+pmInitWork();
 
 // ====== Init ======
 renderPatterns();   // 처음엔 빈 화면(패턴 도착 전)
