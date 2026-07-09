@@ -2,6 +2,12 @@
 <!-- 담당: debugger, tester | 최대 30항목 -->
 <!-- 이 프로젝트에서 반복되는 에러 패턴, 함정, 주의사항을 기록 -->
 
+### [2026-07-09] 라우트 등록 검증 시 `app.routes` 를 순회하면 서브라우트가 안 보인다 — 이 FastAPI 버전은 include_router 를 `_IncludedRouter` 로 지연 마운트
+- **분류**: error
+- **발견자**: tester
+- **내용**: Phase B 3·4단계에서 `create_pattern` 에 `request: Request` 를 추가해 **라우팅이 안 깨졌는지** 검증하려고 `webapp.main.app.routes` 를 순회해 `/api/patterns` 를 찾았더니 **하나도 안 나오고**, 심지어 `r.path` 접근 시 `AttributeError: '_IncludedRouter' object has no attribute 'path'` 가 났다. 원인은 코드 버그가 아니라 **이 FastAPI/Starlette 버전이 `app.include_router(...)` 를 즉시 펼치지 않고 `_IncludedRouter` 라는 지연 마운트 객체로 담아둔다**는 것. `app.routes` 최상위엔 openapi/docs/Mount(static)/`_IncludedRouter`×2/@app.get 라우트만 보이고, 실제 `/api/*` 서브라우트는 그 안에 접혀 있다. **함정**: 이걸 모르면 "라우트가 사라졌다=시그니처가 깨졌다" 로 오판하거나, `getattr(r,'path')` KeyError 로 검증 스크립트가 죽는다. **올바른 검증법**: (1) 서브라우트 목록은 `webapp.api.router.routes` 를 **직접** 순회한다(여기엔 `/api/patterns` 등이 정상 노출·endpoint 함수명·methods 확인 가능). (2) **시그니처 무결성(dependant 분석)** 은 `TestClient(app)` 를 생성하면 그 시점에 전 라우트를 build 하므로, `Request`+`Form(...)` 공존이 깨졌다면 **TestClient 생성 자체가 예외** → 생성 성공 = 시그니처 정상. 추가로 빈 POST 로 422(FormData 필수검증 도달) 를 확인하면 라우트 실동작까지 증명된다. `getattr(r,'path',None)` 로 방어하는 건 필수.
+- **참조횟수**: 0
+
 ### [2026-06-29] 배포본 404 디버깅: 404 응답 본문이 "Cannot GET"이면 우리 앱이 아니다(Express=타인 앱·이름선점). 먼저 URL부터 의심
 - **분류**: error
 - **발견자**: pm

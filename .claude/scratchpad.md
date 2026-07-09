@@ -2,8 +2,8 @@
 
 ## 현재 작업
 - **요청**: **[Phase B] 등록 패턴 파일 영속화** — Render 임시디스크라 재배포 시 등록 preset 소실. Supabase Storage에 백업/복원.
-- **상태**: 🟢 1·2단계 완료·커밋(feat 82c3364, tester39/39·rev치명0). storage_backup.py 모듈+SQL가이드 완성. 3·4단계(백업훅+startup복원훅=api.py/main.py 결선) 대기. ⚠️사용자가 Supabase 대시보드에서 가이드대로 버킷+RLS 생성해야 실동작. ⚠️4단계 startup 복원은 백그라운드/타임아웃으로 부팅 안막게(reviewer 권고).
-- **현재 담당**: pm → (다음) developer 3·4단계
+- **상태**: 🟢 1·2단계 완료·커밋(feat 82c3364, tester39/39·rev치명0). 🟡 **3·4단계 구현 완료(미커밋)** — 백업훅(api.py create_pattern)+startup복원훅(main.py 백그라운드). py_compile OK·엔진diff0·스모크 통과. **이중백업 방지=create_pattern 1곳만 백업**(from-drive는 request 전달). tester+reviewer 검증 후 PM 커밋 대기. ⚠️사용자가 Supabase 대시보드에서 가이드대로 버킷+RLS 생성해야 실동작.
+- **현재 담당**: developer 3·4단계 완료 → tester+reviewer 검증 대기
 - **직전 완료**: 번호·이름 위치 구멍 수정 1~4단계 전부 커밋·푸시 완료(미푸시 0). Drive 트리/자동스캔/즐겨찾기·분류 전부 배포 완료.
 - **⏳ 별개 남은것**: 즐겨찾기 라이브 비관리자 쓰기막힘 확인은 사용자 계정 있을때.
 - **최근 완료(2026-07-06~07, 상세는 git+아래 작업로그)**: Drive Phase1(백엔드)+Phase2(프론트 트리/미리보기/등록)+배포+admin권한(Supabase role) → SSL동시성수정(스레드로컬) → **패턴폴더 자동스캔**(GET /drive/scan+카드그리드) → **즐겨찾기+자동분류**. 배포 URL grader-v2-47gd.onrender.com. 로컬 127.0.0.1:8000 병행.
@@ -91,6 +91,60 @@
 - **미사용 import 제거**: json(httpx의 json= 파라미터는 별개). py_compile OK.
 - **한계(3·4단계에서 결선)**: 이 모듈은 아직 어디서도 호출 안 됨(api.py/main.py 무수정). backup 훅(3단계)·startup 복원 훅(4단계) 붙여야 실동작.
 
+## 구현 기록 (developer) — [Phase B] 등록 패턴 파일 영속화 [3·4단계 백업훅+startup복원훅]
+
+📝 구현한 기능: 2단계에서 만든 `storage_backup.py`를 실제로 **결선(호출 연결)**. (3) 등록 성공 직후 자동 백업 훅(api.py) + (4) 앱 startup 자동 복원 훅(main.py, 백그라운드 스레드). 모듈 자체 무수정. 엔진 diff 0.
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| webapp/api.py import(≈22·26) | `Request`를 fastapi import에 추가 + `from . import storage_backup` | 수정 |
+| webapp/api.py `_extract_bearer_token`(신규, create_pattern 직전) | 요청 헤더 Authorization에서 Bearer 토큰만 추출(auth.py:178-183과 동일 방식, 대소문자 대응, 없으면 None). **토큰 값 로그 금지** | 신규(+18줄) |
+| webapp/api.py `create_pattern` 시그니처(≈1074) | `request: Request` 인자 **맨 앞** 추가(Python 문법: 기본값 없는 인자는 Form 기본값들보다 앞). FastAPI가 자동 주입 | 수정(+1줄) |
+| webapp/api.py `create_pattern` 성공 return 직전(≈1377) | **5) 자동 백업 훅**: `user_jwt=_extract_bearer_token(request)` → `storage_backup.backup_pattern(pattern_id, user_jwt)`. try/except로 감싸 **어떤 예외도 등록 성공을 안 막음**(degrade). 등록 본체 로직 무변경 | 수정(+13줄) |
+| webapp/api.py `create_pattern_from_drive` 시그니처(≈1599)+create_pattern 호출부(≈1684) | `request: Request` 추가 + `await create_pattern(request=request, ...)` 로 자기 request 전달. **from-drive는 별도 백업 안 함**(create_pattern이 백업=이중백업 0) | 수정(+2줄) |
+| webapp/main.py import(≈16·20) | `import threading` + `from . import storage_backup` | 수정 |
+| webapp/main.py `_restore_patterns_background`+`_on_startup`(신규, 정적마운트 뒤) | `@app.on_event("startup")`가 **daemon 백그라운드 스레드**로 `restore_missing()` 실행. 스레드 시작만 하고 즉시 반환→부팅/헬스체크 지연 0. 전체 try/except(복원·스레드생성 실패해도 부팅 계속). 미설정이면 모듈 no-op | 신규(+45줄) |
+
+🔎 근거(코드 흐름 정독 — 이번 핵심 함정):
+- **이중백업 방지**: `create_pattern_from_drive`(api.py:1684)가 `await create_pattern(...)`을 호출 = create_pattern이 **유일한 생성점**. 따라서 백업 훅을 create_pattern 한 곳에만 넣으면 from-drive 경로도 자동 1회 백업. from-drive는 자기 request를 넘기기만(추가 백업 호출 없음). → 이중백업 0 / 누락 0.
+- **토큰 확보**: admin_required 엔드포인트라 배포에선 헤더 Bearer=admin 토큰. `_extract_bearer_token`이 auth.py require_auth와 동일하게 추출. 로컬 무인증=헤더 없음→None→backup skip(로컬은 디스크 영속이라 불필요). 미설정 env→is_enabled False→skip.
+- **Python 문법 주의**: `request: Request`(기본값 없음)를 `name: str = Form(...)` 등 기본값 인자 뒤에 두면 SyntaxError → **맨 앞**에 배치(FastAPI는 Request를 위치 무관 특수 주입).
+- **startup 백그라운드(reviewer 권고 반영)**: restore_missing 동기(list 1회+미복원 N회 다운로드, 각 최대 15초)→최악 부팅 수십초 지연 위험. daemon Thread로 분리해 `_on_startup`은 즉시 반환. --workers 1이라 스레드 1개로 충분·중복복원 없음.
+
+💡 tester 참고:
+- **테스트 방법**: `python -m py_compile webapp/api.py webapp/main.py` ✅통과. 스모크: `_on_startup()` 직접호출→**0.000s 즉시반환**(부팅 안 막음)·미설정 env에서 restore no-op(예외0)·`_extract_bearer_token`: None/무헤더→None, `Bearer abc123`→abc123, 소문자 `bearer`→OK, `Bearer `(빈값)→None. ✅전부 확인.
+- **이중백업 없음(핵심)**: 코드상 backup_pattern 호출은 create_pattern 안 1곳뿐. from-drive는 `grep backup_pattern webapp/api.py`=1매치(create_pattern 내부)로 확인 가능. from-drive 등록해도 백업 1회.
+- **등록 실패 안 함**: backup 훅 전체 try/except. Storage 미설정/토큰없음/업로드403/네트워크장애 전부 삼키고 등록 성공 dict 그대로 반환. (backup_pattern 자체도 예외 안 던지지만 이중 방어)
+- **startup 부팅 안 막음**: `_on_startup`이 스레드 시작 후 즉시 반환(≈0s). 복원은 백그라운드. Storage 느려도 헬스체크 지연 0.
+- **미설정 skip(로컬 회귀0)**: SUPABASE env 없으면 백업·복원 전부 조용히 no-op → 로컬 개발 기존 동작 그대로.
+- **정상 동작(배포 e2e, 버킷 생성 후)**: 패턴 등록→Storage에 `{id}.zip` 생김 / 재배포(디스크 초기화)→startup 백그라운드 복원→로컬에 없던 등록패턴 폴더 재생성→GET /api/patterns 자동 인식. 로컬 커밋본 2개는 로컬 존재→복원 skip(회귀0).
+- **주의 입력**: from-drive 등록도 request 전달돼 백업됨(단, 로컬 무인증이면 토큰없어 skip). 실 Supabase 버킷+RLS는 사용자가 가이드대로 생성해야 실동작(미생성이면 업로드 403/목록 실패=degrade로 조용히 skip).
+
+⚠️ reviewer 참고:
+- **엔진 무수정**: `git diff --stat engine/`=빈 결과. 변경=webapp/api.py(+45)·main.py(+45)뿐.
+- **create_pattern 본체 무변경**: 성공 return 직전 훅 호출 1블록(+토큰추출)만 추가. 반환 dict·검증·preset조립 로직 불변. from-drive는 시그니처+호출 keyword arg 1개(request=) 추가만.
+- **비밀키 규칙**: backup에 넘기는 건 요청자 JWT(user_jwt)뿐, SERVICE_ROLE 미사용. `_extract_bearer_token`은 토큰 값을 로그에 안 남김(반환만). main/api 새 print는 status·개수·type명·"skip 사유"만(키/JWT 미출력).
+- **degrade 완결**: 3단계 훅 try/except + backup_pattern 내부 방어 = 이중. 4단계 _on_startup try/except + _restore_patterns_background try/except + restore_missing 내부 패턴별 try = 삼중. 어느 층에서 터져도 등록/부팅 정상.
+- **--workers 1 유지**: startup 스레드 daemon 1개(프로세스당). uvicorn --workers 변경 없음.
+
+## 테스트 결과 (tester) — [Phase B] 등록 패턴 파일 영속화 [3·4단계 백업훅+startup복원훅]
+
+📊 종합: **검증 항목 전부 통과 / 실패 0** · 수정 요청 없음 · **커밋 가능**. (실 네트워크는 Supabase 버킷 미생성이라 미검증 — 이번 검증대상=연결의 정확성·안전성)
+
+| 테스트 항목 | 결과 | 비고 |
+|-----------|------|------|
+| py_compile(api.py·main.py·storage_backup.py) | ✅ 통과 | 3파일 전부 OK |
+| **[2] FastAPI 라우팅 무결성(중요)** | ✅ 통과 | `request:Request`+Form 파라미터 공존해도 **TestClient build 성공**(전 라우트 dependant 분석 OK=시그니처 안 깨짐). api.router.routes에 POST /api/patterns(create_pattern)·POST /api/patterns/from-drive(create_pattern_from_drive) 정상 등록. create_pattern params=[request,name,base_size,...] request 맨앞. from_drive params=[request,payload]. 빈 POST /api/patterns→**422**(FormData name 필수 검증=라우트 도달)·from-drive 빈payload→200(drive미설정 degrade)·health 200 |
+| **[3] 이중백업 방지(핵심)** | ✅ 통과 | `grep backup_pattern webapp/` = **실호출 api.py:1410 딱 1곳**(나머지는 주석·정의·모듈내부). from-drive(1724)는 `await create_pattern(request=request,...)`로 request만 전달, 별도 backup 호출 0 → from-drive 경로도 1회만 백업(누락·이중 없음) |
+| **[4] 등록 실패 안 함(degrade)** | ✅ 통과 | backup_pattern을 **강제 예외 스텁**으로 교체해도 훅 try/except(api.py:1408-1413)가 삼킴 → 등록 성공 유지. **미설정 실 등록 e2e**: XL/M/S svg 3개 업로드→POST /api/patterns→**200 ok=True** pattern_id 정상, 로그 "skip 백업: 미설정"만 남고 등록 완료 |
+| **[5] startup 부팅 안 막음(중요)** | ✅ 통과 | restore_missing을 3초 sleep 스텁으로 교체 후 `_on_startup()` 호출→**0.001s 즉시반환**(복원은 백그라운드 미완=부팅과 분리 확인). restore가 RuntimeError 던지는 스텁→`_on_startup` 예외 전파 0, 백그라운드 스레드가 예외 삼킴(프로세스 생존). daemon Thread 격리 정상 |
+| **[6] 미설정 skip** | ✅ 통과 | SUPABASE env 제거 상태: is_enabled()=False·backup_pattern('x',None)=False·list_backups()=[]·restore_missing()=0. **예외 0**(등록·부팅 안 막음) |
+| **[7] 토큰 추출(_extract_bearer_token)** | ✅ 통과 | None request→None·무헤더→None·`Bearer abc123`→abc123·소문자 authorization키→OK·소문자 `bearer`스킴→OK·`Bearer `(빈값)→None·스킴없는 생토큰→None (7케이스) |
+| **[8] 엔진 무수정** | ✅ 통과 | `git diff --stat -- engine/` = 빈 결과(0). 변경=webapp/api.py·main.py만 |
+| **[9] 실 등록 e2e(미설정)** | ✅ 통과 | 위 [4]와 동일 — 미설정 로컬에서 패턴 등록 여전히 정상(백업 조용히 skip), 회귀 0. 서버 기동 없이 TestClient 함수레벨로 수행(포트 종료 불필요) |
+
+🟢 관찰(비차단): (a) 이 FastAPI 버전은 include_router를 `_IncludedRouter`로 지연 마운트해 app.routes에 서브라우트가 즉시 안 펼쳐짐 → 라우트 조사는 api.router.routes 직접 조회 또는 TestClient build로 해야 함(테스트 하니스 참고, 코드 문제 아님). (b) 실 Supabase 버킷+RLS 생성 후 배포 e2e(등록→zip 생성, 재배포→startup 복원)는 사용자가 가이드대로 버킷 만든 뒤 별도 확인 필요 — 현 단계 검증 한계는 여기까지(연결 정확성·안전성은 전부 통과).
+
 ## 테스트 결과 (tester) — [Phase B] 등록 패턴 파일 영속화 [2단계 storage_backup.py]
 
 📊 종합: **39개 검증 전부 통과 / 실패 0** · 수정 요청 없음 · **커밋 가능**(단위·스모크 수준, 실 네트워크는 3·4단계 결선 후 e2e)
@@ -131,6 +185,26 @@
 - **list_backups limit=1000 고정**(offset 페이지네이션 없음): 현재 패턴 수십개라 무해. 1000개 초과 시 초과분 복원 누락. 지금은 비차단.
 - **[3단계 결선 시 확인]** backup_pattern에 넘길 `pattern_id`는 create_pattern 반환값(=dirname)이어야 폴더조회 성공. from-drive도 동일 dirname 반환 확인 후 연결.
 - (신규 convention 후보, PM 승격 판단) "Supabase Storage 접근=쓰기는 apikey(PUBLISHABLE)+Authorization(요청자 admin JWT) 릴레이, 읽기는 publishable 양쪽(anon)—SERVICE_ROLE 금지. auth.py introspection·pattern_meta와 동일 규칙."
+
+## 리뷰 결과 (reviewer) — [Phase B] 등록 패턴 파일 영속화 [3·4단계 백업훅+startup복원훅]
+
+📊 종합 판정: ✅ **통과** (🔴치명 0 · 커밋 가능). 변경=webapp/api.py(+45)·main.py(+45)뿐(git diff --stat). engine/ diff 0. FastAPI 0.138.0.
+
+✅ 잘된 점:
+- **불변 제약 준수(치명 후보 클리어)**: `git diff --stat` = api.py(+45)·main.py(+45)·scratchpad뿐, **engine/ 무변경**. create_pattern 본체 로직 무변경—성공 return dict 직전에 백업 훅 1블록(+토큰추출 헬퍼)만 추가, 반환 dict·검증·preset 조립 불변. from-drive는 시그니처에 `request: Request` + 호출부 `request=request` 1개만 추가. 빌드0. --workers 1 유지(startup daemon 스레드 1개는 프로세스당 1개, uvicorn workers 변경 없음).
+- **이중백업 방지 견고(치명 후보 클리어)**: `grep backup_pattern webapp/` = 호출 **1곳뿐**(api.py:1410, create_pattern 내부). create_pattern 호출자 확인=from-drive(:1724, `request=request`)와 라우트 데코레이터뿐, **다른 Python 호출자 없음**. from-drive 성공 경로는 반드시 create_pattern을 경유(중복 구현 없음)하므로 create_pattern 1곳 백업=from-drive도 자동 정확히 1회. from-drive는 별도 backup 호출 안 함 → 이중백업 0.
+- **백업 위치가 성공 보장점(누락·오백업 0)**: 훅이 `_cleanup_dir(tmp_path_dir)` 직후·`return {ok:True,...}` 직전에 위치. create_pattern의 모든 실패/조기 return(409 등 JSONResponse)은 이 지점보다 **앞**에서 반환됨 → 백업은 등록이 실제 성공한 경우에만 실행(실패 시 미백업). 정확.
+- **degrade 견고(치명 후보 클리어)**: 3단계 훅 `try/except`는 **오직 2줄**(토큰추출+backup_pattern 호출)만 감쌈—등록 본체 완료 뒤라 등록 성공을 절대 못 막고, 광범위하게 다른 오류를 삼키지도 않음(스코프 최소). backup_pattern 자체도 모든 예외 내부 처리(예외 안 던짐)=이중 방어. except가 `type(e).__name__`을 로그로 남겨 디버깅 단서 보존(무음 삼킴 아님). 토큰/키 값은 로그에 없음.
+- **startup 부팅 안 막음(치명 후보 클리어·이전 4단계 권고 반영 확인)**: 내 [1·2단계] 리뷰 🟡 "restore_missing 동기(최악 15×(1+N)초)→백그라운드/타임아웃 필수" 권고가 **정확히 반영됨**. `_on_startup`은 daemon Thread를 start만 하고 즉시 반환(스모크 0.000s)=헬스체크/요청 지연 0. 복원은 백그라운드에서 진행. 3중 방어: `_on_startup` try/except(스레드 생성 실패해도 부팅 계속) + `_restore_patterns_background` try/except + restore_missing 내부 패턴별 try. --workers 1이라 스레드 1개=중복 복원 없음. httpx 전 호출 timeout=15.0.
+- **토큰 릴레이 보안·일관성(치명 후보 클리어)**: `_extract_bearer_token`이 auth.py:178-183 require_auth와 **동일 로직**(`headers.get("Authorization") or headers.get("authorization")` → `.lower().startswith("bearer ")` 검사 → `split(" ",1)[1].strip()` → 빈값 None). request=None·헤더없음·빈토큰 전부 None 안전. 토큰 값 로그 미출력(반환만). backup에 넘기는 건 요청자 JWT뿐, SERVICE_ROLE 미사용.
+- **Request 주입 정합(라우팅 안전)**: create_pattern은 `request: Request`(기본값 없음)를 **맨 앞**, Form(...) 기본값 인자들 뒤—Python 문법 정상(no-default 먼저). from-drive는 `request: Request, payload=Body(...)`. FastAPI는 Request를 위치 무관 특수 주입이라 두 라우트 정상 동작. py_compile OK(스크래치패드 기록·재확인).
+
+🔴 필수 수정: **없음.**
+
+🟡 권장(비차단, 참고만):
+- **`@app.on_event("startup")` deprecated(FastAPI 0.138)**: 현재 버전에서 **정상 동작**하나 FastAPI 공식은 lifespan(`@asynccontextmanager` + `app = FastAPI(lifespan=...)`)을 권장하며 on_event는 향후 제거 예정 경고 대상. 지금 기능·부팅에 영향 0(기존 코드에 startup 이벤트가 없던 신규 추가라 on_event가 가장 단순한 선택). 차후 FastAPI 메이저 업 시 lifespan 전환 여지—현 단계 비차단.
+- **list_backups limit=1000 고정**([1·2단계]에서도 지적, 미해결·비차단): offset 페이지네이션 없음. 패턴 수십 개라 무해, 1000개 초과 시 초과분 복원 누락. 지금 비차단.
+- **실 e2e 미검증(구조상 불가피)**: Supabase 버킷+RLS를 **사용자가 가이드대로 생성해야** 실 백업/복원 동작. 미생성 시 업로드 403·목록 실패=degrade로 조용히 skip(부팅·등록 정상). 코드 경로는 단위/스모크/모킹까지 검증됨, 실 네트워크 왕복은 버킷 생성 후 배포 e2e 필요.
 
 ## 구현 기록 (developer) — 번호·이름 위치 구멍 수정 [1·2단계]
 
@@ -321,6 +395,8 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 | 결과 |
 |------|---------|------|------|
+| 2026-07-09 | tester | [Phase B] 3·4단계 백업훅+startup복원훅 검증 | **전항목 통과·실패0·수정요청0·커밋가능**. py_compile3파일OK·**라우팅무결성(TestClient build OK=시그니처안깨짐, POST patterns/from-drive 등록, 빈POST 422)**·**이중백업방지(backup_pattern 실호출 1곳뿐)**·degrade(예외스텁 삼킴+미설정 실등록e2e 200)·**startup 0.001s즉시반환+복원예외 스레드격리**·미설정skip(예외0)·토큰추출7케이스·엔진diff0. 실네트워크는 버킷생성 후 배포e2e |
+| 2026-07-09 | developer | [Phase B] 3·4단계 백업훅(api.py)+startup복원훅(main.py) 결선 | 3단계: create_pattern 성공 return 직전 backup_pattern 호출(request 주입+_extract_bearer_token JWT릴레이·try/except degrade). **이중백업 방지=from-drive가 create_pattern 재사용→백업은 create_pattern 1곳뿐**(from-drive는 request만 전달). 4단계: main.py @on_event startup→daemon 백그라운드 스레드로 restore_missing(즉시반환=부팅안막음). **py_compile OK·엔진diff0·스모크(startup 0.000s즉시반환·미설정no-op·토큰추출 5케이스) 통과**. 미커밋(tester+reviewer 후 PM 커밋) |
 | 2026-07-09 | tester | [Phase B] 2단계 storage_backup.py 검증 | **39/39 통과·실패0·수정요청0·커밋가능**. 미설정degrade(예외0)·jwt없음skip·zip왕복내용보존·zip-slip 3종 방어(밖에파일0)·손상zip skip·restore 로컬우선(회귀0)·httpx모킹 200/403/타임아웃·헤더규칙(apikey=publishable+Bearer user_jwt+x-upsert)·비밀키하드코딩0/로그노출0·env변수명 auth.py일치. 실호출 e2e는 3·4단계 결선 후 |
 | 2026-07-09 | developer | [Phase B] 등록패턴 파일영속화 1·2단계(Storage 설정가이드 md + storage_backup.py) | 가이드 md(버킷 pattern-presets+RLS 3정책 SQL 복붙) / storage_backup.py(backup_pattern JWT릴레이·list_backups·restore_missing·zip-slip방어·미설정/no-jwt skip degrade). **api.py/main.py 무수정(훅은 3·4단계)**. py_compile OK·엔진diff0·스모크(미설정skip/zip왕복/zip-slip차단/손상skip) 통과. httpx 기존존재 |
 | 2026-07-07 | tester | 번호·이름 위치 구멍 수정 3·4단계 검증 | **43검증 전부 통과·실패0·수정요청0**. others 분류 실함수 27검증(사이즈파일=files 정렬무변경·사이즈없는.ai/.pdf=others id포함·**.svg/임시/.tmp others제외**·회귀0)·from-drive 3-tuple 언패킹 2-tuple잔존0·drivePickRecommend+드롭다운 14검증(선택안함 첫옵션·자동추천·구버전 방어)·**선택안함=기존동작**·연결완결성 코드흐름(완성본선택→reference_file_id→area추출→piece_id자동부여) 확인·엔진diff0 |
