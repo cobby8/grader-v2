@@ -2,6 +2,12 @@
 <!-- 담당: debugger, tester | 최대 30항목 -->
 <!-- 이 프로젝트에서 반복되는 에러 패턴, 함정, 주의사항을 기록 -->
 
+### [2026-07-09] Supabase Storage 는 오브젝트 키에 **비ASCII(한글)·`%` 를 거부(400 InvalidKey)** — httpx가 퍼센트인코딩해도 서버가 디코딩 후 재검증. degrade가 실패를 숨겨 "조용히 백업 안 됨"
+- **분류**: error
+- **발견자**: debugger
+- **내용**: Phase B 백업이 실서버에서 **조용히 실패**(등록은 성공·패턴목록 늘어남, 그런데 Storage 버킷 `pattern-presets` 에 zip 안 생김). 인프라(버킷·RLS admin쓰기·anon읽기·publishable·JWT릴레이)는 직접 upload 200 으로 전부 정상 확정. **근본원인**: `storage_backup.backup_pattern` 이 업로드 URL `.../object/pattern-presets/{pattern_id}.zip` 을 만들 때 pattern_id 가 한글(예 `V넥_상의_슬림(암홀O)`)인데, **Supabase Storage 의 오브젝트 키 검증이 비ASCII 문자를 거부**한다 → HTTP 400 `{"error":"InvalidKey"}`. `backup_pattern` 은 200/201 만 성공으로 보고 그 외 status 는 `백업 실패(status 400)` 로그만 남기고 `return False`(degrade) → 등록은 정상, 백업만 조용히 skip. **실측 격리(anon 키로 키검증만 관찰: 유효키=403 RLS 도달, 무효키=400 InvalidKey)**: `abc.zip`·`abc(def).zip`·`abc def.zip`=키OK(**괄호·공백은 무해**), `농구.zip`·`농구_U넥.zip`·`V넥.zip`=전부 **400 InvalidKey**(=한글만 원인). **중요 함정**: (1) httpx 는 URL path 의 한글을 이미 `%EB%84%A5…` 로 퍼센트인코딩해서 보낸다 — 그런데 Supabase 가 **디코딩한 뒤 원래 키(한글)를 검증**하므로 `urllib.parse.quote` 를 코드에 더 넣어도 소용없다(오히려 `%` 자체도 InvalidKey 로 거부됨=실측). (2) 이 프로젝트는 **모든 패턴명이 한글**이라 백업이 사실상 100% 실패였는데, 로컬 커밋본 2개(농구_U넥/농구_V넥)는 git 으로 들어와 업로드를 한 번도 안 탔고, 단위/모킹 테스트도 실 Supabase 키검증을 안 거쳐서 여태 안 드러났다. (3) degrade(예외 안 던지고 False)가 "있으면 좋은 부가기능" 을 위해 설계됐지만, **정상 경로가 항상 실패하는 상황까지 조용히 숨겨** 버렸다. **해결(developer 예정)**: 오브젝트 키를 ASCII-only 가역 인코딩으로 바꾼다 — **실측 통과+가역 확인**: `hex`(`name.encode('utf-8').hex()+'.zip'`, `bytes.fromhex` 로 복원)·`base64.urlsafe`(패딩 제거/복원 시 재부착) 둘 다 키검증 통과. 로컬 폴더명은 한글 그대로 두고(파일시스템 무관), **Storage 오브젝트 키만** 인코딩. `backup_pattern`(인코딩)·`restore_missing`(디코딩)·필요시 `list_backups` 를 같은 스킴으로 일치시켜야 함(list_backups 는 restore 내부에서만 쓰이므로 restore 에서 디코딩하면 됨). 기존 백업 0개라 마이그레이션 불필요. **예방규칙**: (1) 외부 저장소(S3/Storage) 키에 사용자 유래 문자열(한글 패턴명 등)을 그대로 쓰지 말고 ASCII-safe 인코딩/해시로 변환. (2) "실패해도 진행"(degrade)하는 부가기능은 **정상 경로가 성공하는지 실측 e2e 한 번은 반드시** 거친다 — degrade 는 예외 상황을 숨기라고 있는 것이지 정상 경로 실패를 숨기라고 있는 게 아니다. 실패 status 를 로그로 남기는 것만으론 부족(아무도 안 봄) → 최소 1회 실 업로드 검증. (3) httpx 등 클라이언트가 URL 을 자동 인코딩하는지와, **서버가 디코딩 후 무엇을 검증하는지**는 별개다 — "인코딩 안 해서 실패" 라고 단정 말고 실제 요청/응답으로 확인.
+- **참조횟수**: 0
+
 ### [2026-07-09] 라우트 등록 검증 시 `app.routes` 를 순회하면 서브라우트가 안 보인다 — 이 FastAPI 버전은 include_router 를 `_IncludedRouter` 로 지연 마운트
 - **분류**: error
 - **발견자**: tester

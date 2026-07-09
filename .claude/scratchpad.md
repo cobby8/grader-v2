@@ -2,8 +2,8 @@
 
 ## 현재 작업
 - **요청**: **[Phase B] 등록 패턴 파일 영속화** — Render 임시디스크라 재배포 시 등록 preset 소실. Supabase Storage에 백업/복원.
-- **상태**: ✅ **1~4단계 전부 완료·커밋**(feat 82c3364·21051bb·4946fb9 + docs). tester+rev 전부 통과·치명0. 백업훅(api.py create_pattern 1곳=이중백업0)+startup 백그라운드 복원훅(main.py). **미푸시 5**. **남은 것**: (a)⚠️사용자가 Supabase 대시보드에서 가이드대로 버킷 `pattern-presets`+RLS 생성(안하면 degrade로 조용히 skip=무해) (b)버킷 생성+배포 후 실동작 e2e(등록→zip업로드, 재배포→복원) 최종확인 (c)5단계=관리자 수동 백업/복원 버튼(옵션·후속).
-- **현재 담당**: pm (사용자 Supabase 설정 + 푸시 판단 대기)
+- **상태**: 🟡 **한글키 백업버그 수정 완료·커밋**(fix, storage_backup.py 한글→hex 인코딩, tester6/6·rev치명0). 원인=Supabase Storage 오브젝트 키 비ASCII(한글) 거부(400 InvalidKey)→프로젝트 패턴명 전부 한글=백업100%실패(로컬2개는 git유입이라 미노출). 수정=키만 hex(로컬 폴더명 한글 유지)·복원 시 디코딩·외부파일 skip·기존백업0=마이그레이션불필요. **다음=푸시→재배포→PM 실서버 e2e 최종확인**(admin 등록→버킷 {hex}.zip 생성→재배포 후 startup 복원). 1~4단계 커밋은 이미 푸시됨.
+- **현재 담당**: pm (푸시→재배포→실서버 e2e)
 - **직전 완료**: 번호·이름 위치 구멍 수정 1~4단계 전부 커밋·푸시 완료(미푸시 0). Drive 트리/자동스캔/즐겨찾기·분류 전부 배포 완료.
 - **⏳ 별개 남은것**: 즐겨찾기 라이브 비관리자 쓰기막힘 확인은 사용자 계정 있을때.
 - **최근 완료(2026-07-06~07, 상세는 git+아래 작업로그)**: Drive Phase1(백엔드)+Phase2(프론트 트리/미리보기/등록)+배포+admin권한(Supabase role) → SSL동시성수정(스레드로컬) → **패턴폴더 자동스캔**(GET /drive/scan+카드그리드) → **즐겨찾기+자동분류**. 배포 URL grader-v2-47gd.onrender.com. 로컬 127.0.0.1:8000 병행.
@@ -127,6 +127,47 @@
 - **degrade 완결**: 3단계 훅 try/except + backup_pattern 내부 방어 = 이중. 4단계 _on_startup try/except + _restore_patterns_background try/except + restore_missing 내부 패턴별 try = 삼중. 어느 층에서 터져도 등록/부팅 정상.
 - **--workers 1 유지**: startup 스레드 daemon 1개(프로세스당). uvicorn --workers 변경 없음.
 
+## 구현 기록 (developer) — [Phase B 백업 한글키 수정]
+
+📝 구현한 기능: 백업이 **실서버에서 조용히 실패**하던 근본원인(Supabase Storage 가 오브젝트 키의 한글=비ASCII 를 400 InvalidKey 로 거부, degrade 가 숨김)을 수정. **storage_backup.py 한 파일만** 수정(api.py/main.py/engine 무수정). 로컬 폴더명은 한글 유지, **창고 오브젝트 키만 hex(ASCII 가역) 인코딩**.
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| webapp/storage_backup.py `_object_url` 아래 | 헬퍼 2개 신규: `_encode_object_name(safe_id)`=`utf-8 bytes.hex()+".zip"`(한글→ASCII 가역) / `_decode_object_name(obj_name)`=`bytes.fromhex().decode("utf-8")`, hex 아니면 `(ValueError,UnicodeDecodeError)`→None(외부 파일 복원 skip) | 신규(+30줄) |
+| webapp/storage_backup.py `backup_pattern`(≈166) | 업로드 URL `f"{safe_id}.zip"` → `_encode_object_name(safe_id)`. **로그 메시지는 원래 한글 safe_id 유지**(URL만 hex) | 수정(+2줄) |
+| webapp/storage_backup.py `restore_missing`(≈350) | 창고 `obj_name`(hex.zip)을 **먼저 `_decode_object_name`** → None(외부 파일)이면 `continue` → `_sanitize_pattern_id` 적용해 pid. **다운로드는 원본 obj_name(hex 키)**, 압축은 디코딩한 한글 폴더(local_dir)에 해제 | 수정(+7줄) |
+
+🔎 근거(debugger 확정 원인·errors.md 2026-07-09): Supabase 는 키의 한글만 400(괄호·공백 무해), httpx 퍼센트인코딩·quote() 무효(서버가 디코딩 후 재검증). 모든 패턴명이 한글이라 백업 100% 실패였음. 기존 백업 0개→마이그레이션 불필요.
+
+💡 tester 참고:
+- **라운드트립 단위(검증 완료)**: `_encode_object_name('V넥_상의_슬림(암홀O)')`→`56eb...4f29.zip`(전부 ASCII)→`_decode_object_name`→원래 한글 복구. `농구_U넥_양면`·`농구_V넥_양면`도 PASS. hex 아닌 이름(`abc.zip`/`__test.txt`/`abc(def).zip`/`abc def.zip`)→decode=None(복원 skip) 확인.
+- **py_compile**: ✅ 통과.
+- **실 Supabase e2e(미수행)**: 로컬 env(SUPABASE_URL/PUBLISHABLE) 미설정+admin JWT 없어 생략. **실서버 검증 필요**: admin 로그인 상태로 패턴 등록→Storage `pattern-presets` 버킷에 `{hex}.zip` 생성 확인→재배포(또는 로컬 폴더 삭제 후 restore)→startup 복원으로 한글 폴더 재생성 라운드트립. ⚠️ 테스트 파일 만들면 삭제 정리.
+- **정상 동작**: 등록 시 백업 로그 "백업 성공: {한글}.zip"(사람이 읽는 한글, 실제 창고 키는 hex). 복원 시 로컬에 없던 한글 폴더 재생성.
+- **회귀0**: 로컬 커밋본 2개(농구_U넥/농구_V넥)는 로컬 존재→복원 skip 그대로. 미설정/no-jwt degrade 무변경.
+
+⚠️ reviewer 참고:
+- **인코딩/디코딩 대칭**: backup=encode(한글→hex), restore=decode(hex→한글) 완전 대칭·가역. 다운로드는 창고 실제 키(hex obj_name)로, 로컬 저장은 디코딩 한글 폴더로 — 대응 정확.
+- **외부 파일 안전 skip**: `_decode_object_name`이 hex 아니면 None→restore 에서 continue(창고에 우리 백업 아닌 파일 섞여도 무시).
+- **비밀키/로그 규칙 유지**: 로그에 hex 키 아닌 사람이 읽는 한글 safe_id, JWT/키 미노출(기존 규칙 그대로).
+- storage_backup.py 한 파일만 수정, 다른 파일 diff 0.
+
+## 테스트 결과 (tester) — [Phase B 백업 한글키 수정]
+
+📊 종합: **검증 항목 전부 통과 / 실패 0** · 수정 요청 없음 · **커밋 가능**. (실 Supabase e2e는 로컬 env 미설정이라 생략 → PM이 실서버 확인 필요). storage_backup.py 한 파일만 수정, 다른 파일 diff 0.
+
+| 테스트 항목 | 결과 | 비고 |
+|-----------|------|------|
+| [1] py_compile(storage_backup.py) | ✅ 통과 | OK |
+| **[2] hex 라운드트립(핵심)** | ✅ 통과 | `_encode_object_name`이 `V넥_상의_슬림(암홀O)`·`농구_U넥_양면`·`농구_V넥_양면`·공백/괄호 섞인 이름 전부 **순수 ASCII `[0-9a-f]+\.zip`** 로 변환(예 농구V넥→`eb86...a9b4.zip`), `_decode_object_name(그결과)` == 원래 한글 완전 복구. encode↔decode 대칭 7케이스 전원 PASS |
+| **[3] 외부 파일 안전 skip** | ✅ 통과 | `abc.zip`(홀수길이 hex)·`__test.txt`·`hello.zip`·`xyz.zip`·`abc(def).zip`·`abc def.zip`·`ff.zip`(짝수hex지만 비UTF8)·`zz.zip`(비hex)·`plainname`(.zip없음) 전부 `_decode`=None → restore에서 `continue`. e2e에서 창고에 외부파일 섞어도 우리 백업(hex)만 복원(다운로드 호출 0) |
+| **[4] backup↔restore 키 대응(중요)** | ✅ 통과 | httpx/state 모킹 full e2e: 한글 pid `농구_V넥_양면` 백업→업로드 키=`_encode_object_name(pid)`(hex.zip, ASCII). 로컬 폴더 삭제(재배포 시뮬)→restore_missing()=1. **다운로드에 쓴 키 == 업로드한 원본 hex 키**(완전 일치), 압축해제 폴더는 디코딩한 **한글** pid. 백업↔복원 왕복 정확(반쪽버그 없음) |
+| **[5] 미설정 degrade 회귀** | ✅ 통과 | env 없을 때 is_enabled()=False·backup('x',None)=False·backup('x','jwt')=False·list_backups()=[]·restore_missing()=0. **예외 0**(등록·부팅 안 막음). 기존 동작 유지 |
+| **[6] 기존 함수 회귀0** | ✅ 통과 | zip 왕복(preset.json+XL.svg 내용 완전 보존)·zip-slip(`../evil.txt`) 차단+부모폴더에 파일 안 생김·preset.json 없는 손상zip skip·정상zip 해제·로컬 우선(이미 있으면 복원 0, 로컬파일 안 덮어씀, 다운로드 호출 0) 전부 통과 |
+| [7] 실 Supabase e2e | ⏭️ 생략 | 로컬 SUPABASE_URL/PUBLISHABLE 미설정+admin JWT 없어 실호출 불가. **실서버 e2e는 PM이 확인**(admin 로그인→등록→버킷에 `{hex}.zip` 생성→재배포/폴더삭제 후 startup 복원으로 한글 폴더 재생성 라운드트립). 테스트 파일은 격리 scratchpad에서만 생성·정리 완료(프로젝트 파일 무변경) |
+
+🟢 관찰(비차단): 콘솔에 한글이 cp949로 깨져 보이나 Python 문자열 비교는 정상(전 케이스 PASS). encode=UTF-8 bytes.hex()라 이론상 항상 가역이며, decode의 (ValueError,UnicodeDecodeError) 이중 방어로 외부 파일 안전 skip 확인. list_backups limit=1000 고정(이전 리뷰서 지적, 패턴 수십개라 비차단).
+
 ## 테스트 결과 (tester) — [Phase B] 등록 패턴 파일 영속화 [3·4단계 백업훅+startup복원훅]
 
 📊 종합: **검증 항목 전부 통과 / 실패 0** · 수정 요청 없음 · **커밋 가능**. (실 네트워크는 Supabase 버킷 미생성이라 미검증 — 이번 검증대상=연결의 정확성·안전성)
@@ -205,6 +246,25 @@
 - **`@app.on_event("startup")` deprecated(FastAPI 0.138)**: 현재 버전에서 **정상 동작**하나 FastAPI 공식은 lifespan(`@asynccontextmanager` + `app = FastAPI(lifespan=...)`)을 권장하며 on_event는 향후 제거 예정 경고 대상. 지금 기능·부팅에 영향 0(기존 코드에 startup 이벤트가 없던 신규 추가라 on_event가 가장 단순한 선택). 차후 FastAPI 메이저 업 시 lifespan 전환 여지—현 단계 비차단.
 - **list_backups limit=1000 고정**([1·2단계]에서도 지적, 미해결·비차단): offset 페이지네이션 없음. 패턴 수십 개라 무해, 1000개 초과 시 초과분 복원 누락. 지금 비차단.
 - **실 e2e 미검증(구조상 불가피)**: Supabase 버킷+RLS를 **사용자가 가이드대로 생성해야** 실 백업/복원 동작. 미생성 시 업로드 403·목록 실패=degrade로 조용히 skip(부팅·등록 정상). 코드 경로는 단위/스모크/모킹까지 검증됨, 실 네트워크 왕복은 버킷 생성 후 배포 e2e 필요.
+
+## 리뷰 결과 (reviewer) — [Phase B 백업 한글키 수정]
+
+📊 종합 판정: ✅ **통과** (🔴치명 0 · 커밋 가능). 변경=webapp/storage_backup.py(+46/-3)뿐(git diff --stat). api.py·main.py·engine/ diff 0 확인.
+
+✅ 잘된 점:
+- **불변 제약 준수(치명 후보 클리어)**: `git diff --stat` = storage_backup.py(+46) + 문서(errors/scratchpad)뿐. `git diff --stat -- engine/ webapp/api.py webapp/main.py` = 전부 빈 결과. 소스 1파일만 최소 수정(신규 헬퍼 2개 + backup URL 1줄 + restore 루프 디코딩 블록). 나머지 함수(_zip_pattern_folder·_safe_extract·_sanitize·list_backups·_download_zip) 무변경.
+- **3자 대응 정확(치명 후보 #1 클리어)**: 백업 올리는 키 ↔ 복원 받는 키 ↔ 로컬 폴더명 완전 일치. backup: 로컬 `patterns_dir/safe_id`(한글) → 업로드 키 `_encode_object_name(safe_id)`=`hex(safe_id).zip`. restore: list_backups가 준 `obj_name`(hex.zip) → `_decode_object_name`으로 `safe_id` 복구 → `pid=_sanitize(safe_id)`(idempotent=safe_id) → `local_dir=patterns_dir/pid`(백업 원본 폴더와 동일 한글) → **다운로드는 원본 obj_name(hex 키=업로드한 바로 그 키)** → 한글 폴더에 해제. "백업했는데 복원이 못 찾는 반쪽버그" 없음. list_backups는 디코딩 안 하고 raw hex.zip 반환(.zip 필터), 디코딩은 restore가 전담 = 소비 경로 일관.
+- **hex 인코딩/디코딩 견고(치명 후보 #2 클리어)**: 실측 검증 — (a)라운드트립: 'V넥_상의_슬림(암홀O)'·'농구_U넥_양면'·'농구_V넥_양면'·영문·공백 전부 encode→전부 ASCII(ord<128)→decode 원복 OK. (b)외부/손상 이름: `_decode_object_name`이 홀수길이·비hex→ValueError, hex지만 유효 UTF-8 아님(deadbeef/ff)→UnicodeDecodeError, **둘 다 잡아 None**(예외 밖으로 안 던짐). abc.zip·__test.txt·abc(def).zip·placeholder·README.zip 전부 None→restore에서 continue. (c).zip 대소문자: `.lower().endswith('.zip')`이라 .ZIP/.Zip도 stem 정확 분리, list_backups 필터도 `.lower()`로 일치.
+- **회귀0**: restore 로컬 우선(`os.path.isdir(local_dir)` True면 skip)·zip-slip 방어(_safe_extract)·degrade(미설정/no-jwt/네트워크 예외 삼킴)·user_jwt 없으면 backup skip — 전부 무변경. backup_pattern의 zip 묶기·헤더(apikey=publishable+Bearer user_jwt+x-upsert)·status 분기도 그대로.
+- **로그 안전(관점 4 클리어)**: backup 로그 `{safe_id}.zip`(사람이 읽는 한글, 실제 창고 키 hex는 url 변수에만·미출력), restore 로그 `pid`(디코딩 한글). hex 키·JWT·apikey 로그 노출 0. degrade 사유는 status 코드·type명만.
+- **단순성(관점 5 클리어)**: hex 선택 적절 — 가역(bytes.fromhex)·ASCII-only·패딩 재부착 불필요(base64보다 단순)·표준 라이브러리만. 불필요한 복잡성 없음. debugger errors.md(2026-07-09) 확정 원인과 정확히 정합.
+
+🔴 필수 수정: **없음.**
+
+🟡 권장(비차단, 참고만):
+- **이론적 hex 충돌(무해)**: 외부 파일이 우연히 '짝수길이+전부 0-9a-f+유효 UTF-8 디코딩'이면 우리 백업으로 오인될 수 있으나, `_safe_extract`가 preset.json 없는 zip을 통째 skip하므로 실제 피해 0. 발생 확률 극히 낮음.
+- **실 Supabase e2e 미검증(구조상)**: 로컬 env 미설정이라 실 업로드/복원 왕복은 미수행. **실서버 검증 권장**: admin 로그인→한글 패턴 등록→Storage `pattern-presets`에 `{hex}.zip` 생성 확인→로컬 폴더 삭제 후 재배포/restore→한글 폴더 재생성 라운드트립. 이번 수정 목적=바로 이 실패를 고치는 것이라 실측 1회가 최종 확인점(errors.md 예방규칙 "degrade 부가기능은 정상경로 실측 e2e 1회 필수"와 동일 취지).
+- list_backups limit=1000 고정(이전 단계에서도 지적, 비차단): 패턴 수십 개라 무해.
 
 ## 구현 기록 (developer) — 번호·이름 위치 구멍 수정 [1·2단계]
 
@@ -391,10 +451,12 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 |--------|------|------|------|
 | reviewer/tester | 3XL.ai | 원본이 5XL과 동일(자산결함) | 비활성·재확보 대기 |
 | tester | stiz-*.json 키 | gitignore 누락(유출위험) | ✅해결 07-06: .gitignore stiz-*.json 추가 |
+| debugger | webapp/storage_backup.py | **[Phase B 백업 조용히 실패=근본원인 확정]** Supabase Storage 가 오브젝트 키의 **한글(비ASCII)을 400 InvalidKey 로 거부**(괄호·공백은 무해, 한글만 원인·실측). httpx 퍼센트인코딩해도 서버가 디코딩 후 재검증→소용없음(`%`도 거부). 모든 패턴명이 한글이라 백업 100% 실패, degrade 가 조용히 숨김. **수정안**: 오브젝트 키를 ASCII 가역 인코딩(hex 또는 base64url, 둘 다 실측 통과+가역)으로 — backup_pattern 인코딩/restore_missing 디코딩 일치. 로컬 폴더명은 한글 유지. 기존 백업0=마이그레이션 불필요. errors.md 상세 기록. | ✅ developer 수정완료 07-09(hex 인코딩·py_compile OK·라운드트립 단위검증 PASS) — tester+reviewer 검증 후 PM 커밋 |
 
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 | 결과 |
 |------|---------|------|------|
+| 2026-07-09 | developer | [Phase B 백업 한글키 수정] Storage 오브젝트 키 hex 인코딩 | storage_backup.py 한 파일만: `_encode_object_name`/`_decode_object_name`(hex 가역) 신규 + backup_pattern URL 인코딩(로그는 한글 유지) + restore_missing 디코딩 먼저(외부파일 None skip)·다운로드는 hex키·로컬은 한글폴더. **py_compile OK·라운드트립 단위검증 PASS**(V넥_상의_슬림(암홀O)/농구_U넥/농구_V넥 왕복복구·외부파일4종 None). 실 e2e는 env/JWT 없어 생략(실서버 확인 필요). 미커밋(tester+reviewer 후 PM) |
 | 2026-07-09 | tester | [Phase B] 3·4단계 백업훅+startup복원훅 검증 | **전항목 통과·실패0·수정요청0·커밋가능**. py_compile3파일OK·**라우팅무결성(TestClient build OK=시그니처안깨짐, POST patterns/from-drive 등록, 빈POST 422)**·**이중백업방지(backup_pattern 실호출 1곳뿐)**·degrade(예외스텁 삼킴+미설정 실등록e2e 200)·**startup 0.001s즉시반환+복원예외 스레드격리**·미설정skip(예외0)·토큰추출7케이스·엔진diff0. 실네트워크는 버킷생성 후 배포e2e |
 | 2026-07-09 | developer | [Phase B] 3·4단계 백업훅(api.py)+startup복원훅(main.py) 결선 | 3단계: create_pattern 성공 return 직전 backup_pattern 호출(request 주입+_extract_bearer_token JWT릴레이·try/except degrade). **이중백업 방지=from-drive가 create_pattern 재사용→백업은 create_pattern 1곳뿐**(from-drive는 request만 전달). 4단계: main.py @on_event startup→daemon 백그라운드 스레드로 restore_missing(즉시반환=부팅안막음). **py_compile OK·엔진diff0·스모크(startup 0.000s즉시반환·미설정no-op·토큰추출 5케이스) 통과**. 미커밋(tester+reviewer 후 PM 커밋) |
 | 2026-07-09 | tester | [Phase B] 2단계 storage_backup.py 검증 | **39/39 통과·실패0·수정요청0·커밋가능**. 미설정degrade(예외0)·jwt없음skip·zip왕복내용보존·zip-slip 3종 방어(밖에파일0)·손상zip skip·restore 로컬우선(회귀0)·httpx모킹 200/403/타임아웃·헤더규칙(apikey=publishable+Bearer user_jwt+x-upsert)·비밀키하드코딩0/로그노출0·env변수명 auth.py일치. 실호출 e2e는 3·4단계 결선 후 |
