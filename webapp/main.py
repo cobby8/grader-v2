@@ -11,12 +11,14 @@
 from __future__ import annotations
 
 import os
+import threading
 
 from fastapi import FastAPI, Depends
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import state
+from . import storage_backup  # 등록 패턴 파일 영속화(Phase B): startup 자동 복원.
 from .api import router as api_router, public_router
 from .auth import require_auth
 
@@ -40,6 +42,49 @@ app.include_router(api_router, dependencies=[Depends(require_auth)])
 # html=True 면 디렉터리 접근 시 index.html 을 자동으로 찾아 준다.
 STATIC_DIR = state.get_static_dir()
 app.mount("/static", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+
+
+# ── 등록 패턴 파일 자동 복원(Phase B: 파일 영속화) ────────────────────────────
+#   왜: Render 는 재배포하면 디스크가 새것으로 바뀌어 그동안 등록한 패턴 폴더가
+#   사라진다. 그래서 서버가 켜질 때(startup) Supabase Storage 에 백업해 둔 zip 중
+#   '로컬에 없는 것만' 내려받아 복원한다(로컬 우선 — 커밋본·기존 등록은 안 건드림).
+#
+#   ⚠️ 부팅/헬스체크를 막지 않는다(reviewer 권고 필수 반영):
+#     restore_missing() 은 동기(네트워크 대기)라, Storage 가 느리거나 장애면 최악의
+#     경우 부팅이 수십 초 매달릴 수 있다(각 다운로드 최대 15초). Render 헬스체크가
+#     그 사이 실패하면 배포가 통째로 막힌다. 그래서 '별도 백그라운드 스레드'
+#     (daemon)로 돌려, 앱은 즉시 요청을 받기 시작하고 복원은 뒤에서 진행되게 한다.
+#     (--workers 1 유지 — 프로세스 1개라 스레드 1개면 충분하고 중복 복원도 없다.)
+#
+#   ⚠️ degrade: 복원 실패가 부팅을 절대 막지 않는다(전체를 try 로 감싼다). 미설정
+#     (env 없음)이면 storage_backup 이 알아서 no-op = 로컬 개발도 기존 동작 그대로.
+def _restore_patterns_background() -> None:
+    """백그라운드에서 등록 패턴을 Storage 에서 복원한다(부팅과 분리)."""
+    try:
+        print("[startup] 등록 패턴 복원 시작(백그라운드)")
+        restored = storage_backup.restore_missing()  # 로컬에 없는 것만 복원, 개수 반환
+        print(f"[startup] 등록 패턴 복원 완료: {restored}개")
+    except Exception as e:
+        # 복원 실패는 앱 동작에 영향을 주지 않는다(백업본이 없거나 네트워크 문제일 뿐).
+        print(f"[startup] 등록 패턴 복원 건너뜀(부팅에는 영향 없음): {type(e).__name__}")
+
+
+@app.on_event("startup")
+def _on_startup() -> None:
+    """앱 시작 시 패턴 복원을 '백그라운드 스레드' 로 띄운다(부팅을 막지 않게).
+
+    여기서는 스레드를 시작만 하고 곧바로 반환한다 → 헬스체크/요청 처리는 지연 0.
+    복원 자체는 storage_backup.restore_missing() 이 뒤에서 조용히 진행한다.
+    """
+    try:
+        threading.Thread(
+            target=_restore_patterns_background,
+            name="pattern-restore",
+            daemon=True,  # 데몬 = 앱 종료 시 이 스레드가 종료를 붙잡지 않는다.
+        ).start()
+    except Exception as e:
+        # 스레드 생성 자체가 실패해도 부팅은 계속(복원만 생략).
+        print(f"[startup] 복원 스레드 시작 실패(부팅은 계속): {type(e).__name__}")
 
 
 @app.get("/login")
