@@ -2,8 +2,8 @@
 
 ## 현재 작업
 - **요청**: **[Phase B] 등록 패턴 파일 영속화** — Render 임시디스크라 재배포 시 등록 preset 소실. Supabase Storage에 백업/복원.
-- **상태**: 🟢 1·2단계 완료·커밋(feat 82c3364, tester39/39·rev치명0). 🟡 **3·4단계 구현 완료(미커밋)** — 백업훅(api.py create_pattern)+startup복원훅(main.py 백그라운드). py_compile OK·엔진diff0·스모크 통과. **이중백업 방지=create_pattern 1곳만 백업**(from-drive는 request 전달). tester+reviewer 검증 후 PM 커밋 대기. ⚠️사용자가 Supabase 대시보드에서 가이드대로 버킷+RLS 생성해야 실동작.
-- **현재 담당**: developer 3·4단계 완료 → tester+reviewer 검증 대기
+- **상태**: ✅ **1~4단계 전부 완료·커밋**(feat 82c3364·21051bb·4946fb9 + docs). tester+rev 전부 통과·치명0. 백업훅(api.py create_pattern 1곳=이중백업0)+startup 백그라운드 복원훅(main.py). **미푸시 5**. **남은 것**: (a)⚠️사용자가 Supabase 대시보드에서 가이드대로 버킷 `pattern-presets`+RLS 생성(안하면 degrade로 조용히 skip=무해) (b)버킷 생성+배포 후 실동작 e2e(등록→zip업로드, 재배포→복원) 최종확인 (c)5단계=관리자 수동 백업/복원 버튼(옵션·후속).
+- **현재 담당**: pm (사용자 Supabase 설정 + 푸시 판단 대기)
 - **직전 완료**: 번호·이름 위치 구멍 수정 1~4단계 전부 커밋·푸시 완료(미푸시 0). Drive 트리/자동스캔/즐겨찾기·분류 전부 배포 완료.
 - **⏳ 별개 남은것**: 즐겨찾기 라이브 비관리자 쓰기막힘 확인은 사용자 계정 있을때.
 - **최근 완료(2026-07-06~07, 상세는 git+아래 작업로그)**: Drive Phase1(백엔드)+Phase2(프론트 트리/미리보기/등록)+배포+admin권한(Supabase role) → SSL동시성수정(스레드로컬) → **패턴폴더 자동스캔**(GET /drive/scan+카드그리드) → **즐겨찾기+자동분류**. 배포 URL grader-v2-47gd.onrender.com. 로컬 127.0.0.1:8000 병행.
