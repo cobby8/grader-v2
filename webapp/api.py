@@ -19,11 +19,14 @@ import traceback
 import zipfile
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, UploadFile, File, Body, Form, Depends
+from fastapi import APIRouter, UploadFile, File, Body, Form, Depends, Request
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 
 from . import state
 from . import gdrive  # Google Drive 연동(서비스계정 읽기전용). 미설정이면 이 기능만 비활성.
+# 등록 패턴 파일 영속화(Phase B): 등록 성공 직후 Supabase Storage 에 zip 백업.
+#   미설정/토큰없음이면 모듈이 알아서 조용히 skip(degrade) — 등록을 절대 막지 않는다.
+from . import storage_backup
 from .state import DEFAULT_PORT
 # 관리자 전용 게이트(Dependency). 패턴 등록·설정 저장처럼 '쓰기' 작업에만 건다.
 # (로컬 무인증이면 admin_required 도 통과 — 회귀 0. 배포는 role=='admin' 만.)
@@ -1071,8 +1074,27 @@ def _build_pieces(svg_index_count: int, page_w: float, page_h: float,
     return pieces
 
 
+def _extract_bearer_token(request: Optional[Request]) -> Optional[str]:
+    """요청 헤더 Authorization 에서 Bearer 토큰만 꺼낸다(없으면 None).
+
+    왜: 등록 성공 직후 Supabase Storage 백업(storage_backup.backup_pattern)에
+    '요청자(admin) 토큰' 을 릴레이하기 위해서다(SERVICE_ROLE 같은 비밀키 대신).
+    auth.py 의 require_auth 가 헤더를 읽는 방식과 동일하게 맞춘다(대소문자 모두 대응).
+    토큰이 없으면(로컬 무인증 등) None → backup_pattern 이 알아서 skip 한다.
+    ⚠️ 토큰 값 자체는 절대 로그에 남기지 않는다.
+    """
+    if request is None:
+        return None
+    authz = request.headers.get("Authorization") or request.headers.get("authorization")
+    if not authz or not authz.lower().startswith("bearer "):
+        return None
+    token = authz.split(" ", 1)[1].strip()
+    return token or None
+
+
 @router.post("/patterns", dependencies=[Depends(admin_required)])
 async def create_pattern(
+    request: Request,
     name: str = Form(...),
     base_size: Optional[str] = Form(None),
     glyph_artbox: Optional[str] = Form(None),
@@ -1374,6 +1396,22 @@ async def create_pattern(
     # 중간 path SVG 폴더는 정리(결과물은 polyline SVG·json·preset 만 남긴다).
     _cleanup_dir(tmp_path_dir)
 
+    # ── 5) 등록 성공 직후 자동 백업(Phase B: 파일 영속화) ────────────────────
+    #   왜: Render 임시디스크라 재배포하면 방금 만든 패턴 폴더가 통째로 사라진다.
+    #   등록=진실의 순간이므로 여기서 Supabase Storage 에 zip 으로 백업해 둔다
+    #   (다음 부팅 때 main.py 의 startup 훅이 로컬에 없는 것만 복원).
+    #   ⚠️ 이중백업 방지(핵심): from-drive 도 이 create_pattern 을 호출하므로,
+    #      백업은 '여기 한 곳' 에서만 한다. from-drive 는 추가 백업하지 않는다.
+    #   ⚠️ degrade: 미설정·토큰없음·업로드실패 등 어떤 경우에도 등록을 막지 않는다
+    #      (backup_pattern 은 예외를 안 던지지만, 만일에 대비해 try 로 한 번 더 감싼다).
+    #   비밀키 규칙: 요청자(admin) JWT 를 릴레이(SERVICE_ROLE 미사용). 토큰 로그 금지.
+    try:
+        user_jwt = _extract_bearer_token(request)  # 없으면 None → backup 이 알아서 skip
+        storage_backup.backup_pattern(pattern_id, user_jwt)
+    except Exception as e:
+        # 백업은 '있으면 좋은' 부가기능 — 실패해도 등록 성공은 그대로 반환한다.
+        print(f"[create_pattern] 백업 훅 경고(등록은 정상 처리됨): {type(e).__name__}")
+
     return {
         "ok": True,
         "pattern_id": pattern_id,
@@ -1597,7 +1635,7 @@ class _DriveUpload:
 
 
 @router.post("/patterns/from-drive", dependencies=[Depends(admin_required)])
-async def create_pattern_from_drive(payload: Dict[str, Any] = Body(...)) -> Any:
+async def create_pattern_from_drive(request: Request, payload: Dict[str, Any] = Body(...)) -> Any:
     """Google Drive 폴더 하나를 골라 패턴으로 등록한다(기존 create_pattern 재사용).
 
     payload:
@@ -1681,7 +1719,10 @@ async def create_pattern_from_drive(payload: Dict[str, Any] = Body(...)) -> Any:
             ref_upload = _DriveUpload(f"reference{rext}", rfh)
 
         # 3) 기존 등록 로직 재사용(중복 구현 금지). create_pattern 은 async.
+        #    ⚠️ 백업은 create_pattern 안에서 '한 번만' 일어난다(이중백업 방지). 그래서
+        #       여기 request 를 그대로 넘겨(요청자 admin JWT 릴레이용) 별도 백업은 안 한다.
         result = await create_pattern(
+            request=request,
             name=name,
             base_size=base_size,
             glyph_artbox=glyph_artbox,
