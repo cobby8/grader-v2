@@ -97,6 +97,37 @@ def _object_url(base: str, path: str) -> str:
     return f"{base}/storage/v1/object/{BUCKET}/{path}"
 
 
+# ── 오브젝트 키(파일명) 인코딩 ─────────────────────────────────────────────
+# 왜 필요한가(핵심 버그 수정):
+#   Supabase Storage 는 오브젝트 키(창고 안의 파일 이름)에 한글 같은 비ASCII 문자가
+#   들어가면 400 InvalidKey 로 거부한다(괄호·공백은 무해). 우리 패턴명은 전부 한글이라
+#   `{한글}.zip` 으로 올리면 무조건 실패했다. httpx 가 URL 을 퍼센트인코딩해도 서버가
+#   디코딩 후 원래 키(한글)를 재검증하므로 소용없다(`%` 자체도 거부).
+#   → 그래서 '창고 안 파일 이름' 만 ASCII 로만 이뤄진 가역 코드(hex)로 바꾼다.
+#     로컬 폴더명(data/patterns/{한글}/)은 그대로 한글을 유지한다(파일시스템은 한글 OK).
+def _encode_object_name(safe_id: str) -> str:
+    """한글 pattern_id 를 창고에 올릴 ASCII-only 오브젝트 키로 바꾼다.
+
+    UTF-8 바이트를 16진수 문자열(0-9a-f, 전부 ASCII)로 변환해 `.zip` 을 붙인다.
+    예) '농구' → 'eb8da9eab5ac.zip'. (bytes.fromhex 로 정확히 되돌릴 수 있음=가역.)
+    """
+    return safe_id.encode("utf-8").hex() + ".zip"
+
+
+def _decode_object_name(obj_name: str) -> Optional[str]:
+    """창고 오브젝트 키(hex.zip)를 원래 한글 pattern_id 로 되돌린다.
+
+    복원(restore) 때 창고 목록에서 받은 이름을 사람이 읽는(=로컬 폴더로 쓸) 한글로
+    바꾼다. hex 로 만든 우리 백업이 아닌 '외부 파일'(예: abc.zip, __test.txt)은
+    hex 디코딩에 실패하므로 None 을 돌려 복원에서 건너뛰게 한다.
+    """
+    stem = obj_name[:-4] if obj_name.lower().endswith(".zip") else obj_name
+    try:
+        return bytes.fromhex(stem).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return None  # hex 아닌 외부 파일은 복원에서 건너뜀
+
+
 # ══════════════════════════════════════════════════════════════════════════
 #  1) 백업(업로드) - 폴더 → 메모리 zip → 창고
 # ══════════════════════════════════════════════════════════════════════════
@@ -163,7 +194,9 @@ def backup_pattern(pattern_id: str, user_jwt: Optional[str]) -> bool:
         print(f"[storage_backup] skip 백업: 폴더 없음/비어있음 ({safe_id})")
         return False
 
-    url = _object_url(base, f"{safe_id}.zip")
+    # 창고 오브젝트 키는 ASCII 로만(hex 인코딩) — 한글 키는 Supabase 가 거부(400 InvalidKey).
+    # 로그/사람이 보는 값은 원래 한글 safe_id 로 유지하고, URL 에만 인코딩한 키를 쓴다.
+    url = _object_url(base, _encode_object_name(safe_id))
     try:
         resp = httpx.post(
             url,
@@ -346,14 +379,21 @@ def restore_missing() -> int:
     restored = 0
     for obj_name in names:
         try:
-            # 파일명에서 pattern_id 복원('농구_V넥.zip' → '농구_V넥') + 안전화.
-            pid = _sanitize_pattern_id(obj_name[:-4] if obj_name.lower().endswith(".zip") else obj_name)
+            # 창고 키(hex.zip)를 먼저 원래 한글 이름으로 되돌린다.
+            # 우리 백업(hex)이 아닌 외부 파일이면 None → 안전하게 건너뜀.
+            decoded = _decode_object_name(obj_name)
+            if decoded is None:
+                continue
+            # 디코딩한 한글 이름을 한 번 더 안전화(경로조작 방어).
+            pid = _sanitize_pattern_id(decoded)
             if not pid:
                 continue
             local_dir = os.path.join(patterns_dir, pid)
             # 로컬에 이미 있으면 skip(로컬 우선 - 덮어쓰기 금지).
             if os.path.isdir(local_dir):
                 continue
+            # 다운로드는 창고에 저장된 실제 키(원본 obj_name = hex.zip)로 하고,
+            # 압축은 디코딩한 한글 폴더(local_dir)에 푼다.
             data = _download_zip(base, publishable, obj_name)
             if not data:
                 continue
