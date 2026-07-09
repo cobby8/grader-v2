@@ -2,8 +2,8 @@
 
 ## 현재 작업
 - **요청**: **[Phase B] 등록 패턴 파일 영속화** — Render 임시디스크라 재배포 시 등록 preset 소실. Supabase Storage에 백업/복원.
-- **상태**: 🟡 **한글키 백업버그 수정 완료·커밋**(fix, storage_backup.py 한글→hex 인코딩, tester6/6·rev치명0). 원인=Supabase Storage 오브젝트 키 비ASCII(한글) 거부(400 InvalidKey)→프로젝트 패턴명 전부 한글=백업100%실패(로컬2개는 git유입이라 미노출). 수정=키만 hex(로컬 폴더명 한글 유지)·복원 시 디코딩·외부파일 skip·기존백업0=마이그레이션불필요. **다음=푸시→재배포→PM 실서버 e2e 최종확인**(admin 등록→버킷 {hex}.zip 생성→재배포 후 startup 복원). 1~4단계 커밋은 이미 푸시됨.
-- **현재 담당**: pm (푸시→재배포→실서버 e2e)
+- **상태**: ✅✅ **[Phase B] 완전 완료·실서버 e2e 검증 통과**. 1~4단계+한글키 hex수정 전부 커밋·푸시(미푸시0). **PM 실서버 e2e 최종확인 완료**: (백업)admin 등록→버킷에 hex.zip 27KB 생성 확인 / (복원)Render 재배포로 디스크 초기화 후 startup 자동복원→목록 3개 유지(U넥_스탠다드-A(암홀X) 복원됨=재배포에도 살아남음, 이전 버그땐 2개로 소실). 백업↔복원 라운드트립 실서버 동작 확정. **잔여(옵션)**: 5단계 관리자 수동 백업/복원 버튼(미구현·후속). 실서버에 테스트패턴 U넥_스탠다드-A(암홀X) 1개 + Storage hex.zip 1개 남음(정리 여부 사용자 판단).
+- **현재 담당**: pm (완료 보고)
 - **직전 완료**: 번호·이름 위치 구멍 수정 1~4단계 전부 커밋·푸시 완료(미푸시 0). Drive 트리/자동스캔/즐겨찾기·분류 전부 배포 완료.
 - **⏳ 별개 남은것**: 즐겨찾기 라이브 비관리자 쓰기막힘 확인은 사용자 계정 있을때.
 - **최근 완료(2026-07-06~07, 상세는 git+아래 작업로그)**: Drive Phase1(백엔드)+Phase2(프론트 트리/미리보기/등록)+배포+admin권한(Supabase role) → SSL동시성수정(스레드로컬) → **패턴폴더 자동스캔**(GET /drive/scan+카드그리드) → **즐겨찾기+자동분류**. 배포 URL grader-v2-47gd.onrender.com. 로컬 127.0.0.1:8000 병행.
@@ -456,18 +456,10 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 | 결과 |
 |------|---------|------|------|
-| 2026-07-09 | developer | [Phase B 백업 한글키 수정] Storage 오브젝트 키 hex 인코딩 | storage_backup.py 한 파일만: `_encode_object_name`/`_decode_object_name`(hex 가역) 신규 + backup_pattern URL 인코딩(로그는 한글 유지) + restore_missing 디코딩 먼저(외부파일 None skip)·다운로드는 hex키·로컬은 한글폴더. **py_compile OK·라운드트립 단위검증 PASS**(V넥_상의_슬림(암홀O)/농구_U넥/농구_V넥 왕복복구·외부파일4종 None). 실 e2e는 env/JWT 없어 생략(실서버 확인 필요). 미커밋(tester+reviewer 후 PM) |
-| 2026-07-09 | tester | [Phase B] 3·4단계 백업훅+startup복원훅 검증 | **전항목 통과·실패0·수정요청0·커밋가능**. py_compile3파일OK·**라우팅무결성(TestClient build OK=시그니처안깨짐, POST patterns/from-drive 등록, 빈POST 422)**·**이중백업방지(backup_pattern 실호출 1곳뿐)**·degrade(예외스텁 삼킴+미설정 실등록e2e 200)·**startup 0.001s즉시반환+복원예외 스레드격리**·미설정skip(예외0)·토큰추출7케이스·엔진diff0. 실네트워크는 버킷생성 후 배포e2e |
-| 2026-07-09 | developer | [Phase B] 3·4단계 백업훅(api.py)+startup복원훅(main.py) 결선 | 3단계: create_pattern 성공 return 직전 backup_pattern 호출(request 주입+_extract_bearer_token JWT릴레이·try/except degrade). **이중백업 방지=from-drive가 create_pattern 재사용→백업은 create_pattern 1곳뿐**(from-drive는 request만 전달). 4단계: main.py @on_event startup→daemon 백그라운드 스레드로 restore_missing(즉시반환=부팅안막음). **py_compile OK·엔진diff0·스모크(startup 0.000s즉시반환·미설정no-op·토큰추출 5케이스) 통과**. 미커밋(tester+reviewer 후 PM 커밋) |
-| 2026-07-09 | tester | [Phase B] 2단계 storage_backup.py 검증 | **39/39 통과·실패0·수정요청0·커밋가능**. 미설정degrade(예외0)·jwt없음skip·zip왕복내용보존·zip-slip 3종 방어(밖에파일0)·손상zip skip·restore 로컬우선(회귀0)·httpx모킹 200/403/타임아웃·헤더규칙(apikey=publishable+Bearer user_jwt+x-upsert)·비밀키하드코딩0/로그노출0·env변수명 auth.py일치. 실호출 e2e는 3·4단계 결선 후 |
-| 2026-07-09 | developer | [Phase B] 등록패턴 파일영속화 1·2단계(Storage 설정가이드 md + storage_backup.py) | 가이드 md(버킷 pattern-presets+RLS 3정책 SQL 복붙) / storage_backup.py(backup_pattern JWT릴레이·list_backups·restore_missing·zip-slip방어·미설정/no-jwt skip degrade). **api.py/main.py 무수정(훅은 3·4단계)**. py_compile OK·엔진diff0·스모크(미설정skip/zip왕복/zip-slip차단/손상skip) 통과. httpx 기존존재 |
-| 2026-07-07 | tester | 번호·이름 위치 구멍 수정 3·4단계 검증 | **43검증 전부 통과·실패0·수정요청0**. others 분류 실함수 27검증(사이즈파일=files 정렬무변경·사이즈없는.ai/.pdf=others id포함·**.svg/임시/.tmp others제외**·회귀0)·from-drive 3-tuple 언패킹 2-tuple잔존0·drivePickRecommend+드롭다운 14검증(선택안함 첫옵션·자동추천·구버전 방어)·**선택안함=기존동작**·연결완결성 코드흐름(완성본선택→reference_file_id→area추출→piece_id자동부여) 확인·엔진diff0 |
-| 2026-07-07 | developer | 번호·이름 위치 구멍 수정 3·4단계(스캔등록 완성본·글리프셋 파일선택) | api.py `_scan_folder_pattern_files` others 버킷(사이즈없는 .ai/.pdf, id포함) 추가·patternfiles 응답+others / patterns.html 완성본·글리프셋 드롭다운(자동추천 완성/글리프·후보없음 안내)+payload reference_file_id/glyph_file_id. **선택안함=기존동작·warnings 무변경(회귀0)·엔진 diff 0·py_compile OK·inline JS 파싱 OK**. 시뮬검증(백엔드 분류·JS 추천) PASS |
-| 2026-07-07 | tester | 번호·이름 위치 구멍 수정 1·2단계 검증 | **8/8 통과·실패0·수정요청0**. 완성본 build_area_preset area=piece_id 없음(구멍확인)→부여 front/back/back가 엔진 _find_piece_index 매칭. **run_job GS실행 e2e: BROKEN preview 번호·이름 없음(경고3) vs FIXED preview 앞"7"·뒤"홍길동+7" 실출력(경고0)**. setdefault 회귀0·기존2패턴 무변경·엔진diff0·work배너 strict/즐겨찾기무충돌 |
-| 2026-07-07 | developer | 번호·이름 위치 구멍 수정 1·2단계(piece_id 자동부여 + 주문경고) | api.py create_pattern area에 piece_id setdefault 자동부여(pieces 실제 id, 앞→front·뒤번호/이름→back)+_scan has_number_area / work renderPatterns warn배너. **엔진 무수정**. py_compile OK. e2e run_job: BROKEN 경고3건→FIXED 0건 PASS. **reviewer 통과(치명0): 엔진무수정·piece_id 매칭정확·회귀0·제약충족)** |
-| 2026-07-07 | developer | 즐겨찾기 별 스타일: 빨강 아웃라인→골드 채움 | patterns/work.html 별 색 var(--brand)→var(--star-fav)+FILL 1(속채움). colors.css에 --star-fav(=amber-500 재사용) alias 1개 추가. 동작 무수정·OFF 회색빈별 유지 |
+| 2026-07-09 | pm+arch+dev+tester+rev+debugger | **[Phase B] 등록패턴 파일영속화 완료·실서버 e2e 통과** | 5단계(설계→storage_backup.py 모듈+SQL가이드→백업훅→startup 복원훅→한글키 버그수정). 커밋 82c3364·b1e2156·21051bb·4946fb9·7e47bf1·fix·docs(전부 푸시). **debugger 발견**: Supabase Storage는 오브젝트 키 비ASCII(한글) 거부(400 InvalidKey)→패턴명 전부 한글=백업 100%실패(degrade가 삼킴)→**키만 hex 인코딩**(로컬 폴더명 한글 유지)으로 수정. **PM 실서버 e2e 최종확인**: 백업(등록→버킷 hex.zip 27KB 생성)+복원(재배포로 디스크초기화 후 startup 자동복원→U넥_스탠다드-A(암홀X) 목록 유지=재배포에도 살아남음). 이중백업방지·부팅안막음(daemon)·엔진diff0 |
+| 2026-07-07 | dev+tester | 번호·이름 위치 구멍 수정 3·4단계(스캔등록 완성본·글리프셋 파일선택) | api.py others 버킷+patternfiles·patterns.html 드롭다운(자동추천·후보없음안내)+payload reference/glyph_file_id. 선택안함=기존동작·회귀0·엔진diff0. **tester 43검증 전부통과** |
+| 2026-07-07 | dev+tester | 번호·이름 위치 구멍 수정 1·2단계(piece_id 자동부여 + 주문경고) | create_pattern area piece_id setdefault 자동부여(_find_piece_index 매칭)+work has_number_area 경고배너. 엔진무수정. **run_job e2e: BROKEN 번호·이름 미출력→FIXED 앞"7"·뒤"홍길동+7" 실출력. tester 8/8·rev치명0** |
+| 2026-07-07 | developer | 즐겨찾기 별 스타일: 빨강 아웃라인→골드 채움 | 별 색 var(--star-fav)+FILL 1(속채움). colors.css alias 1개. 동작무수정 (e27ac16) |
 | 2026-07-07 | dev/tester/rev | 즐겨찾기+자동분류 프론트(patterns/work, Supabase pattern_meta 직접) | feat 27b96db·tester113assert/0·rev치명0. degrade·트리회귀0·work선택흐름무변경·별표 admin쓰기/전원읽기·카테고리=폴더트리최상위 |
 | 2026-07-07 | planner-architect | 즐겨찾기+자동분류 설계 | 프론트direct Supabase+RLS·단일표 pattern_meta·카테고리 폴더트리·파일영속화 Phase B 분리 |
-| 2026-07-07 | dev/tester/rev | 패턴폴더 자동스캔 프론트([자동찾기]탭+카드그리드) | 25f490c·tester69/69·트리회귀0·입력칸중복0. 배포 실서버 74폴더 카드 확인 |
-| 2026-07-07 | dev/tester/rev | 패턴폴더 자동스캔 백엔드(GET /drive/scan 벌크2쿼리+캐시) | f3b3257·tester68/68·회귀0·추가만271 |
-| 2026-07-07 | planner-architect | 자동스캔 설계 | 벌크2쿼리 발견전용·등록은 기존 정확경로·name contains 금지 |
+| 2026-07-07 | dev/tester/rev | 패턴폴더 자동스캔(백엔드 GET /drive/scan 벌크2쿼리+캐시 / 프론트 [자동찾기]탭+카드그리드) | f3b3257·25f490c·tester68+69·회귀0. 배포 실서버 74폴더 카드 확인 |
