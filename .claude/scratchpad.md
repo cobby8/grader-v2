@@ -1,36 +1,136 @@
 # 작업 스크래치패드
 
 ## 현재 작업
-- **상태**: ✅ **즐겨찾기 + 자동분류(폴더 트리 기준) 완성·커밋**(feat 27b96db·docs 685b745, tester 113assert/0·rev 치명0). Supabase pattern_meta에 프론트 직접 read/write(백엔드 키리스). 미푸시 2.
-- **현재 담당**: pm → planner-architect (**신규기능: 번호위치 구멍 수정**). ✅즐겨찾기+자동분류 배포·SQL실행·별표저장 확인·별표 골드채움 e27ac16. **발견된 구멍(조사 완료)**: from-drive(스캔) 등록 패턴은 완성본 미지정→preset에 number_area/name_area 없음→주문 시 번호·이름 조용히 미출력(에러없음, 몸판+재단선만). 2차구멍: build_area_preset가 만든 area에 piece_id 없음(_inject가 piece_id로 조각찾기→None이면 건너뜀). 현정상 2개(농구V넥/U넥)는 preset 수작업 piece_id 박힘. 근거: job.py:604-607/763-814/596-601, grade.py:235-240, reference.py:290-306/355-376, api.py:1276-1345/1564-1636. **사용자 선택=제대로 고치기**: (1)스캔등록에 완성본·글리프셋 파일선택 노출(서버 reference_file_id/glyph_file_id 이미지원) (2)piece_id 자동부여(웹계층·엔진무수정) (3)주문화면 번호위치없음 안전경고(has_number_area 플래그). architect 설계중.
+- **요청**: **[Phase B] 등록 패턴 파일 영속화** — Render 임시디스크라 재배포 시 등록 preset 소실. Supabase Storage에 백업/복원.
+- **상태**: 🟢 1·2단계 완료·커밋(feat 82c3364, tester39/39·rev치명0). storage_backup.py 모듈+SQL가이드 완성. 3·4단계(백업훅+startup복원훅=api.py/main.py 결선) 대기. ⚠️사용자가 Supabase 대시보드에서 가이드대로 버킷+RLS 생성해야 실동작. ⚠️4단계 startup 복원은 백그라운드/타임아웃으로 부팅 안막게(reviewer 권고).
+- **현재 담당**: pm → (다음) developer 3·4단계
+- **직전 완료**: 번호·이름 위치 구멍 수정 1~4단계 전부 커밋·푸시 완료(미푸시 0). Drive 트리/자동스캔/즐겨찾기·분류 전부 배포 완료.
 - **⏳ 별개 남은것**: 즐겨찾기 라이브 비관리자 쓰기막힘 확인은 사용자 계정 있을때.
 - **최근 완료(2026-07-06~07, 상세는 git+아래 작업로그)**: Drive Phase1(백엔드)+Phase2(프론트 트리/미리보기/등록)+배포+admin권한(Supabase role) → SSL동시성수정(스레드로컬) → **패턴폴더 자동스캔**(GET /drive/scan+카드그리드) → **즐겨찾기+자동분류**. 배포 URL grader-v2-47gd.onrender.com. 로컬 127.0.0.1:8000 병행.
 - **카테고리 라벨 정책(사용자 확인 여지)**: 최상위폴더/이름을 pmMatchKnownCategory로 "0.농구→농구" 정규화. 원하는 라벨 다르면 PM_KNOWN_CATEGORIES 조정. 관리자 override 가능.
 
-## 기획설계 (planner-architect) — 번호·이름 위치 구멍 수정 [승인 대기]
+## 기획설계 (planner-architect) — [Phase B] 등록 패턴 파일 영속화 [승인 대기]
 
-🎯 목표: 스캔/로컬 등록 패턴에서 번호·이름이 조용히 안 찍히는 구멍을, 엔진 무수정으로 웹계층에서 제대로 고친다.
+🎯 목표: Render 재배포 시 소실되는 등록 패턴 폴더(preset.json+SVG들)를 **Supabase Storage에 zip으로 자동 백업**하고 **앱 시작 시 로컬에 없는 것만 자동 복원**해 등록 패턴이 재배포 후에도 유지되게 한다. 엔진·인증·등록로직·비밀키 규칙 전부 무변경.
+
+📌 핵심 사실(코드 정독으로 확정):
+- 패턴은 `data/patterns/{id}/` 폴더에 저장 = `preset.json`(필수) + `{사이즈}.svg`들(~4KB) + `number_glyphs.json`(글리프셋 있으면 ~18KB). 총 20~88KB 소형. **파일은 백엔드 디스크에만 존재**(브라우저는 못 봄).
+- 목록/조회 GET /api/patterns → `data/patterns/*/preset.json` 온디맨드 스캔(캐시 없음). 폴더만 있으면 자동 인식.
+- 등록 성공부 2곳: `create_pattern`(api.py:1377 return dict) / `create_pattern_from_drive`(1707 return, 내부에서 create_pattern await 재사용). 둘 다 성공 시 `{ok,pattern_id,...}` dict 반환·admin_required.
+- **백엔드가 요청자 admin JWT 확보 가능**: auth.py는 `request.headers["Authorization"]`에서 Bearer 토큰을 읽음(admin_required 엔드포인트라 그 토큰=admin). → SERVICE_ROLE 없이도 이 JWT를 Storage REST에 릴레이하면 admin RLS 통과(pattern_meta의 "세션JWT+RLS admin"과 동일 철학).
+- 앱 startup 훅: 현재 main.py에 startup 이벤트 없음(신규 추가 자리). --workers 1.
+- zip 패턴은 job_zip(api.py:926 `zipfile.ZipFile(io.BytesIO())`) 방식 재사용 가능(폴더→메모리 zip).
 
 📍 만들/고칠 위치:
-| 파일 | 역할 | 신규/수정 |
-|------|------|----------|
-| webapp/api.py create_pattern area 후처리(1327-1345, glyph_source 붙이는 그 자리) | piece_id 자동주입(front→pieces[0].id, back번호/이름→pieces[1].id) | 수정(추가 ~8줄) |
-| webapp/api.py _scan_one_pattern(137-155) | has_number_area 플래그 반환 | 수정(2줄) |
-| webapp/api.py _scan_folder_pattern_files(1489-1507)+patternfiles 응답 | 사이즈없는 .ai/.pdf "기타 파일" 버킷(id 포함) 반환 | 수정(추가 ~10줄) |
-| webapp/static/screens/patterns.html renderDrivePreviewBody(1561)+registerFromDrive(1648) | 완성본·글리프셋 드롭다운(기타파일 기반, 선택안함=기존동작)→payload reference_file_id/glyph_file_id | 수정 |
-| webapp/static/screens/work.html renderPatterns(542) | has_number_area=false면 "번호·이름 안 찍힘" 경고(허용+경고) | 수정 |
+| 파일 경로 | 역할 | 신규/수정 |
+|----------|------|----------|
+| Supabase Storage 버킷 `pattern-presets` + storage.objects RLS | 읽기=전원(anon 포함) / 쓰기=admin JWT만. 인프라(SQL) | 신규(설정) |
+| `webapp/storage_backup.py` | Storage 백업/복원 헬퍼 모듈: 폴더→zip 업로드(admin JWT 릴레이), Storage 목록·다운로드(publishable), zip 해제. Supabase Storage REST 호출(httpx). | 신규 |
+| webapp/api.py `create_pattern` 성공 return 직전(≈1377) | 등록 성공 후 자동 백업 호출(요청 헤더의 JWT 전달, 실패해도 등록 성공 유지=경고만) | 수정(+소량) |
+| webapp/api.py `create_pattern_from_drive`(≈1707) | 동일 자동 백업 호출(payload 방식이라 Request 주입 필요) | 수정(+소량) |
+| webapp/main.py | `@app.on_event("startup")` 복원 훅(로컬에 없는 패턴만 Storage에서 다운로드·해제, 부팅 막지 않게 방어) | 수정(+소량) |
+| (옵션 후속) webapp/api.py + patterns.html | 관리자 수동 "전체 재백업/복원" 버튼·엔드포인트 | 신규(후속) |
 
-🔗 기존 코드 연결: from-drive는 이미 create_pattern 재사용 → piece_id 고침 1개로 로컬+드라이브 동시 해결. server가 reference_file_id/glyph_file_id 이미 지원(1599-1636), UI만 미노출.
+🔗 기존 코드 연결:
+- create_pattern이 진실의 단일 생성점 → from-drive도 이걸 await(api.py:1684). 백업 훅은 두 엔드포인트 return 직전에 각각(토큰은 각자 헤더에서). from-drive는 payload 방식이라 함수 시그니처에 `request: Request` 추가.
+- 복원된 폴더는 GET /api/patterns가 자동 인식(코드 0). pattern_meta(즐겨찾기/분류)는 pattern_id 키라 복원 즉시 재부착(추가 작업 0).
+- 로컬 커밋본 2개(농구_U넥/농구_V넥)는 로컬에 이미 존재 → 복원이 건너뜀(회귀 0).
+
+📋 8개 설계 결정 요약:
+1. **백업 주체 = 백엔드 경유(사용자 JWT 릴레이).** 파일이 백엔드 디스크에만 있어 프론트 직접 업로드 불가(파일 못 가져옴). 백엔드가 요청자 admin JWT를 Storage REST `POST /storage/v1/object/{bucket}/{path}`에 Authorization으로 릴레이 → SERVICE_ROLE 불필요, RLS가 admin 강제. (pattern_meta=프론트직접이었던 건 데이터가 프론트에서 생성됐기 때문. 파일은 백엔드 생성이라 백엔드 경유가 자연스럽고 일관.)
+2. **저장 형식 = zip 1개** (`{pattern_id}.zip`). 개별 파일이면 12+회 호출, zip이면 1회. 소형이라 부담0. job_zip의 io.BytesIO+ZipFile 패턴 재사용.
+3. **백업 타이밍 = 등록 성공 직후 자동.** 등록=진실의 순간. 수동버튼은 잊음 위험. 백업 실패는 등록 막지 않음(degrade, 경고만).
+4. **복원 타이밍 = startup 자동.** 로컬에 없는 것만 다운로드·해제. --workers 1이라 1회. 콜드스타트 지연 방지 위해 try/except+타임아웃(부팅·헬스체크 안 막음). 20~88KB라 각<1초. (+옵션: 관리자 수동 복원 버튼)
+5. **버킷/RLS.** 버킷 `pattern-presets`(private). storage.objects RLS: SELECT `to anon,authenticated using(bucket_id='pattern-presets')`(복원이 startup=JWT없음이라 읽기 개방), INSERT/UPDATE/DELETE `(auth.jwt()->'app_metadata'->>'role')='admin' and bucket_id='pattern-presets'`.
+6. **충돌 처리.** 복원은 **로컬에 폴더 없을 때만**(로컬 우선, 커밋본·기존 등록 덮어쓰기 안 함). 재등록은 create_pattern이 이미 409 차단, Storage는 같은 경로 upsert=최신본. 진실 순서: 로컬 디스크 > Storage(공백만 채움).
+7. **실행 계획**(아래 표).
+8. **주의사항**(아래).
 
 📋 실행 계획(각 독립 커밋, 단계 후 tester+reviewer 병렬):
 | 순서 | 작업 | 담당 | 선행 |
 |------|------|------|------|
-| 1 | piece_id 자동부여(백엔드, create_pattern) — 로컬+드라이브 즉효 | developer | 없음 |
-| 2 | has_number_area 플래그 + work 주문경고(사고예방) | developer | 없음(1과 병행가능) |
-| 3 | patternfiles 기타파일 버킷(백엔드) | developer | 없음 |
-| 4 | 스캔등록 완성본/글리프셋 드롭다운(patterns.html) + payload 연결 | developer | 3 |
+| 1 | Supabase Storage 버킷 `pattern-presets` + RLS 3정책 생성(SQL/대시보드) — 검증: admin 쓰기O·비admin 쓰기X·anon 읽기O | 사용자/developer(MCP) | 없음 |
+| 2 | `webapp/storage_backup.py` 신규(업로드=JWT릴레이·목록·다운로드=publishable·zip 묶기/풀기·zip-slip 방어·미설정 skip) | developer | 1 |
+| 3 | 등록 직후 자동 백업 훅(create_pattern + from-drive, Request 주입, 실패 degrade) | developer | 2 |
+| 4 | startup 자동 복원 훅(main.py, 로컬 없는 것만, 부팅 안막는 방어) | developer | 2 |
+| 5 | (후속·옵션) 관리자 수동 백업/복원 버튼 UI | developer | 3,4 |
 
-⚠️ developer 주의: 엔진(reference.py/job.py) 무수정. piece_id는 기존 있으면 유지(2패턴 회귀0). area 키 있을때만 주입. 완성본 파일이 폴더에 없을 수 있음(드롭다운 "후보없음"+로컬등록 대안). 프론트 사이즈정렬=순서표 인덱스.
+⚠️ developer 주의사항(빠지기 쉬운 함정):
+- **비밀키**: SERVICE_ROLE·SECRET 절대 사용/로깅 금지. Storage 헤더 `apikey=PUBLISHABLE` + `Authorization=Bearer <요청자 JWT>`만(auth.py introspection과 동일 규칙).
+- **토큰 확보 경로**: create_pattern은 FormData 파라미터라 Request가 없음 → 시그니처에 `request: Request` 추가하되 **from-drive가 create_pattern을 직접 await 호출**하므로 request 전달 일관성 주의(각 엔드포인트가 자기 request의 헤더 토큰을 백업 훅에 넘기는 게 단순). 헤더 없거나 로컬 무인증(토큰 없음)이면 백업 skip(로컬은 디스크 영속이라 불필요).
+- **degrade 필수**: Storage 미설정(env 없음)·업로드 실패·Supabase 장애 시 등록/부팅은 정상 진행(pattern_meta degrade와 동일). 백업은 "있으면 좋은" 부가기능.
+- **startup blocking 금지**: 복원이 Storage 네트워크를 동기 대기하면 첫 헬스체크 지연 → try/except+httpx timeout, 다수면 최악의 경우도 유한. (필요 시 백그라운드 스레드 검토, 단 --workers 1·_JOBS 패턴 참고.)
+- **zip-slip**: 해제 시 pattern_id/엔트리 경로 sanitize(../ 차단). preset.json 없는 손상 zip은 skip.
+- **회귀0**: 로컬 커밋본 2개는 복원이 건드리지 않음(로컬 존재→skip). 로컬 개발(GRADER_REQUIRE_AUTH off)은 토큰·env 없어 백업/복원 자동 skip=기존 동작 그대로.
+- **엔진/인증/등록로직 무수정**: create_pattern 본체 로직 불변(성공 return 직전 훅 호출만 추가). engine/ diff 0.
+
+## 구현 기록 (developer) — [Phase B] 등록 패턴 파일 영속화 [1·2단계]
+
+📝 구현한 기능: (1) Supabase Storage 버킷+RLS **설정 가이드 문서**(사용자가 대시보드에서 직접 실행), (2) `webapp/storage_backup.py` **백업/복원 헬퍼 모듈**. api.py/main.py 무수정(백업·복원 훅은 3·4단계). 엔진 diff 0.
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| `Phase-B-Supabase-Storage-설정가이드.md` (프로젝트 루트) | 비개발자용 가이드: 버킷 `pattern-presets`(private) 생성 클릭순서 + storage.objects RLS SQL(읽기=anon+authenticated 개방 / INSERT·UPDATE·DELETE=admin JWT `auth.jwt()->'app_metadata'->>'role'='admin'`) 복붙실행 + 검증법(admin쓰기O·비admin쓰기X·anon읽기O). ⚠️버킷명=코드 상수 정확일치 명시. **작업산출물 아닌 가이드**(PM이 커밋포함 판단) | 신규 |
+| `webapp/storage_backup.py` | Storage 백업/복원 헬퍼. `BUCKET="pattern-presets"`, `_config()`(SUPABASE_URL+PUBLISHABLE env→없으면 미설정), `is_enabled()`, `backup_pattern(pattern_id,user_jwt)`(폴더→io.BytesIO+ZipFile zip→REST POST /object/{bucket}/{id}.zip, apikey=PUBLISHABLE+Authorization=Bearer user_jwt+x-upsert:true, **user_jwt없으면 skip**, 실패 삼키고 False), `list_backups()`(POST /object/list/{bucket}, publishable 읽기), `restore_missing()`(목록→로컬 없는 것만 GET 다운로드→`_safe_extract`, 복원개수 반환), `_safe_extract`(**zip-slip 방어**: 절대/`..`경로 차단+commonpath 경계검사, preset.json 없는 손상 zip skip). **키·JWT 로그 금지**. httpx(이미 requirements.txt:18) | 신규 |
+
+🔎 근거(코드 정독): env 변수명=auth.py의 `SUPABASE_URL`·`SUPABASE_PUBLISHABLE_KEY` 동일. 패턴 저장경로=state.get_patterns_dir()=`data/patterns/{id}/`(preset.json+{사이즈}.svg+number_glyphs.json). zip=job_zip(api.py:926) io.BytesIO+ZipFile 재사용. RLS JWT경로=decisions.md pattern_meta 방식과 동일.
+
+💡 tester 참고:
+- **미설정 skip(핵심 degrade)**: env 없이 `is_enabled()`=False / `backup_pattern('x',None)`=False / `list_backups()`=[] / `restore_missing()`=0. **예외 안 던짐**(등록·부팅 안 막음). ✅스모크 통과.
+- **user_jwt 없을 때 skip**: env 있어도 user_jwt=None이면 backup skip(False). (로컬 무인증=디스크 영속이라 불필요)
+- **zip 묶기/풀기 왕복**: `_zip_pattern_folder`(폴더→bytes)→`_safe_extract`(bytes→폴더) 왕복 후 preset.json·XL.svg 그대로 복원. ✅
+- **zip-slip 방어**: `../evil.txt` 엔트리 든 zip→`_safe_extract` False 반환+**목표폴더 밖에 파일 안 생김**(escaped? False). 절대경로/`..`/commonpath 경계이탈 전부 차단. ✅
+- **손상 zip skip**: preset.json 없는 zip→`_safe_extract` False(복원 안 함). ✅
+- **sanitize**: `../../etc/passwd`→`passwd`, `a/b/c`→`c`, `..`→`''`(빈값=skip). 경로조작 무력화. ✅
+- **네트워크 검증(tester가 실 Supabase/httpx 모킹 권장)**: 200/201 업로드 성공 True·403(비admin)/기타 status False·타임아웃 예외삼킴 False. list=POST list엔드포인트 200 파싱·.zip만 필터. 아직 실호출 미검증(3·4단계 훅 붙인 뒤 e2e 가능).
+
+⚠️ reviewer 참고:
+- **비밀키 규칙**: 쓰기=apikey(PUBLISHABLE)+Authorization(요청자 user_jwt) 릴레이만, SERVICE_ROLE 미사용. 읽기=publishable을 apikey·Authorization 양쪽(anon 역할). **print에 키/JWT 절대 안 남김**(status 코드·pattern_id·예외 타입명만).
+- **degrade 완결성**: 모든 공개함수가 예외를 안 던지도록 try/except로 감쌈. restore는 패턴별 개별 try(하나 실패해도 계속). 단 print의 em-dash(—)가 Windows cp949 콘솔에서 인코딩 크래시→**전부 하이픈(-)으로 교체**(배포 Linux UTF-8 무관하나 안전).
+- **로컬 우선(회귀0)**: restore_missing은 `os.path.isdir(local_dir)` True면 skip=커밋본 2개·기존등록 덮어쓰기 안 함.
+- **미사용 import 제거**: json(httpx의 json= 파라미터는 별개). py_compile OK.
+- **한계(3·4단계에서 결선)**: 이 모듈은 아직 어디서도 호출 안 됨(api.py/main.py 무수정). backup 훅(3단계)·startup 복원 훅(4단계) 붙여야 실동작.
+
+## 테스트 결과 (tester) — [Phase B] 등록 패턴 파일 영속화 [2단계 storage_backup.py]
+
+📊 종합: **39개 검증 전부 통과 / 실패 0** · 수정 요청 없음 · **커밋 가능**(단위·스모크 수준, 실 네트워크는 3·4단계 결선 후 e2e)
+
+| 테스트 항목 | 결과 | 비고 |
+|-----------|------|------|
+| py_compile(storage_backup.py) | ✅ 통과 | OK |
+| **[2] 미설정 degrade(핵심)** | ✅ 통과 | env 없을 때 is_enabled()=False·backup(,None)=False·backup(,jwt)=False(네트워크 도달 전 skip)·list_backups()=[]·restore_missing()=0. **예외 0**(등록·부팅 안 막음) |
+| **[3] user_jwt 없을 때 skip** | ✅ 통과 | env 있어도 jwt=None/''(빈값)이면 backup skip=False. 네트워크 도달 전 차단(is_enabled=True 확인 후) |
+| **[4] zip 묶기/풀기 왕복** | ✅ 통과 | preset.json+XL.svg+하위폴더(sub/number_glyphs.json) → _zip_pattern_folder → _safe_extract 후 내용 완전 보존. 빈/없는 폴더→None |
+| **[5] zip-slip 방어(보안)** | ✅ 통과 | (5a)../evil.txt (5b)/tmp 절대경로 (5c)../../etc/passwd 전부 _safe_extract False + **목표 폴더 밖에 파일 안 생김**. sanitize: ../../etc/passwd→'passwd'·a/b/c→'c'·'..'→''(skip)·백슬래시 ..\\..\\x→'x'·한글 정상유지 |
+| **[6] 손상 zip skip** | ✅ 통과 | preset.json 없는 zip→False+아무것도 안 풂. 잘못된 바이트(BadZipFile)→False(예외 삼킴) |
+| **[7] restore_missing 로컬 우선(회귀0)** | ✅ 통과 | 모킹: 창고에 [이미있음.zip,새패턴.zip]→로컬 존재 '이미있음' **안 덮어씀**(original 보존)·'새패턴'만 복원=1. 커밋본 2개 안전 |
+| **[부가] backup 네트워크 경로(httpx 모킹)** | ✅ 통과 | 200→True·403→False(예외0)·타임아웃 예외→False(삼킴). **헤더 규칙 검증: apikey=publishable(공개키)·Authorization=Bearer user_jwt(릴레이)·x-upsert=true·URL에 버킷 pattern-presets 포함** |
+| **[7] 비밀키 안전** | ✅ 통과 | 소스에 SERVICE_ROLE/SECRET 하드코딩·실제 키값(eyJ) 0(주석/문서 언급만). **로그 출력에 JWT/키 문자열 미노출**(status·pattern_id·type명만) 실행 로그로 확인 |
+| **[8] env 변수명 auth.py 일치** | ✅ 통과 | storage_backup `SUPABASE_URL`·`SUPABASE_PUBLISHABLE_KEY` = auth.py:106-107 동일. SECRET 미사용(auth.py도 introspection에 SECRET 안 씀) |
+
+🟢 관찰(비차단): _safe_extract는 `..` split 검사 + `os.path.commonpath` 경계검사 이중 방어라 형제폴더 접두어 우회(slip_target vs slip_target_evil)도 컴포넌트 단위로 안전. 3·4단계(api.py 백업 훅·main.py startup 복원 훅)에서 실 Supabase 버킷 연결 후 실호출 e2e 필요(현재 버킷 미생성이라 단위/모킹까지가 검증 한계).
+
+## 리뷰 결과 (reviewer) — [Phase B] 등록 패턴 파일 영속화 [1·2단계]
+
+📊 종합 판정: ✅ **통과** (🔴치명 0 · 커밋 가능). storage_backup.py 신규 + 설정가이드 md. api.py/main.py/engine diff 0(git 확인), py_compile OK.
+
+✅ 잘된 점:
+- **불변 제약 준수**: `git status/diff --stat -- engine/ webapp/api.py webapp/main.py` = 전부 빈 결과. 이번 단계는 신규 모듈 1개 + 가이드 md뿐(어디서도 import 안 됨=3·4단계 결선 예정). 빌드0.
+- **비밀키 규칙 완벽(치명 후보 클리어)**: 쓰기(backup)=`apikey=PUBLISHABLE`+`Authorization=Bearer {user_jwt}` 릴레이만. 읽기(list/download)=publishable을 apikey·Authorization 양쪽(anon 역할)=supabase-js 무세션 기본동작과 동일. SERVICE_ROLE·SECRET 미사용. auth.py `_introspect`(apikey=PUBLISHABLE+Bearer user token)와 동일 철학. **로그에 키/JWT 절대 안 남김**: 모든 print가 status_code·pattern_id·byte수·`type(e).__name__`만(resp.text/헤더/토큰 미출력).
+- **env 변수명 정합(치명 후보 클리어)**: `_config()`가 `SUPABASE_URL`·`SUPABASE_PUBLISHABLE_KEY`—auth.py:106-107·api.py:108-109·render.yaml:18/21·.env.example:21-22와 **글자단위 일치**. 오타로 항상 미설정死 되는 버그 없음.
+- **zip-slip 방어 견고(보안 치명 후보 클리어)**: `_safe_extract` 3중 방어—①preset.json 없으면 통째 skip ②엔트리별 절대경로(`/`·`\` 시작)+`..` 컴포넌트(`split('/')` 후 멤버검사, `foo/../../bar`도 차단) 선차단 ③`os.path.commonpath([dest_abs, target]) != dest_abs` 경계검사. **전부 통과해야 실제 해제(all-or-nothing)**. 윈도 드라이브문자(`C:\evil`)는 Linux(배포)선 단일 파일명이라 dest 안쪽, 로컬 윈도선 commonpath가 다른드라이브→ValueError→outer except→False(안전死). 우회경로 못 찾음.
+- **degrade 완결(부팅·등록 안 막음)**: 모든 공개함수(backup_pattern/list_backups/restore_missing)가 예외를 밖으로 안 던짐. httpx 전 호출 `timeout=15.0` 명시. backup=httpx try/except+status분기, list/download=try/except+status!=200 방어, restore=**패턴별 개별 try**(하나 실패해도 continue). 미설정/no-jwt/폴더없음/손상zip 전부 조용히 skip.
+- **폴더명 정합(silent-skip 없음)**: 등록 `_safe_pattern_dirname`(api.py:1021, 금지문자·공백→`_`치환, 양끝 점제거, 선행`_`보존)이 만든 dirname에 `_sanitize_pattern_id`를 적용하면 **idempotent**(제거할 위험문자 이미 없음, `_`·한글·선행`_` 보존). backup 폴더조회·restore pid복원이 왕복 일치→유효 등록패턴을 조용히 놓치지 않음. object명=`{safe_id}.zip` 왕복 대칭.
+- **RLS SQL 정확**: SELECT `to anon,authenticated using(bucket_id='pattern-presets')`=startup(JWT없는 anon) 복원 읽기와 정합. INSERT/UPDATE/DELETE `auth.jwt()->'app_metadata'->>'role'='admin'`=pattern_meta·decisions.md 방식과 동일. upsert(x-upsert:true)에 INSERT+UPDATE 둘 다 제공(신규=INSERT/덮어쓰기=UPDATE). 버킷명 `pattern-presets`=코드 `BUCKET` 상수 일치, 가이드가 오타주의 명시. drop-if-exists로 재실행 안전.
+- **zip 패턴 일관성**: `_zip_pattern_folder`=job_zip(api.py:926) `io.BytesIO`+`ZipFile(...,ZIP_DEFLATED)`+arcname 상대경로(`\`→`/`) 동일 관례. state.get_patterns_dir()(state.py:56) 정확 사용.
+
+🔴 필수 수정: **없음.**
+
+🟡 권장(비차단, 대부분 3·4단계 결선 시 반영):
+- **[4단계 결선 주의·중요] startup blocking**: `restore_missing`은 동기(list 1회 + 미복원 패턴 N회 다운로드, 각 최대 15초). Storage 느림/장애 시 최악 `15*(1+N)`초 부팅 지연→첫 헬스체크 위협. 4단계 main.py 훅에서 **백그라운드 스레드**(또는 총 예산 타임아웃)로 감싸 부팅·헬스체크를 안 막게 할 것(설계 §4·주의사항과 동일 취지). 이 모듈 자체는 함수로선 정상.
+- **list_backups limit=1000 고정**(offset 페이지네이션 없음): 현재 패턴 수십개라 무해. 1000개 초과 시 초과분 복원 누락. 지금은 비차단.
+- **[3단계 결선 시 확인]** backup_pattern에 넘길 `pattern_id`는 create_pattern 반환값(=dirname)이어야 폴더조회 성공. from-drive도 동일 dirname 반환 확인 후 연결.
+- (신규 convention 후보, PM 승격 판단) "Supabase Storage 접근=쓰기는 apikey(PUBLISHABLE)+Authorization(요청자 admin JWT) 릴레이, 읽기는 publishable 양쪽(anon)—SERVICE_ROLE 금지. auth.py introspection·pattern_meta와 동일 규칙."
 
 ## 구현 기록 (developer) — 번호·이름 위치 구멍 수정 [1·2단계]
 
@@ -221,6 +321,8 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 | 결과 |
 |------|---------|------|------|
+| 2026-07-09 | tester | [Phase B] 2단계 storage_backup.py 검증 | **39/39 통과·실패0·수정요청0·커밋가능**. 미설정degrade(예외0)·jwt없음skip·zip왕복내용보존·zip-slip 3종 방어(밖에파일0)·손상zip skip·restore 로컬우선(회귀0)·httpx모킹 200/403/타임아웃·헤더규칙(apikey=publishable+Bearer user_jwt+x-upsert)·비밀키하드코딩0/로그노출0·env변수명 auth.py일치. 실호출 e2e는 3·4단계 결선 후 |
+| 2026-07-09 | developer | [Phase B] 등록패턴 파일영속화 1·2단계(Storage 설정가이드 md + storage_backup.py) | 가이드 md(버킷 pattern-presets+RLS 3정책 SQL 복붙) / storage_backup.py(backup_pattern JWT릴레이·list_backups·restore_missing·zip-slip방어·미설정/no-jwt skip degrade). **api.py/main.py 무수정(훅은 3·4단계)**. py_compile OK·엔진diff0·스모크(미설정skip/zip왕복/zip-slip차단/손상skip) 통과. httpx 기존존재 |
 | 2026-07-07 | tester | 번호·이름 위치 구멍 수정 3·4단계 검증 | **43검증 전부 통과·실패0·수정요청0**. others 분류 실함수 27검증(사이즈파일=files 정렬무변경·사이즈없는.ai/.pdf=others id포함·**.svg/임시/.tmp others제외**·회귀0)·from-drive 3-tuple 언패킹 2-tuple잔존0·drivePickRecommend+드롭다운 14검증(선택안함 첫옵션·자동추천·구버전 방어)·**선택안함=기존동작**·연결완결성 코드흐름(완성본선택→reference_file_id→area추출→piece_id자동부여) 확인·엔진diff0 |
 | 2026-07-07 | developer | 번호·이름 위치 구멍 수정 3·4단계(스캔등록 완성본·글리프셋 파일선택) | api.py `_scan_folder_pattern_files` others 버킷(사이즈없는 .ai/.pdf, id포함) 추가·patternfiles 응답+others / patterns.html 완성본·글리프셋 드롭다운(자동추천 완성/글리프·후보없음 안내)+payload reference_file_id/glyph_file_id. **선택안함=기존동작·warnings 무변경(회귀0)·엔진 diff 0·py_compile OK·inline JS 파싱 OK**. 시뮬검증(백엔드 분류·JS 추천) PASS |
 | 2026-07-07 | tester | 번호·이름 위치 구멍 수정 1·2단계 검증 | **8/8 통과·실패0·수정요청0**. 완성본 build_area_preset area=piece_id 없음(구멍확인)→부여 front/back/back가 엔진 _find_piece_index 매칭. **run_job GS실행 e2e: BROKEN preview 번호·이름 없음(경고3) vs FIXED preview 앞"7"·뒤"홍길동+7" 실출력(경고0)**. setdefault 회귀0·기존2패턴 무변경·엔진diff0·work배너 strict/즐겨찾기무충돌 |

@@ -2,6 +2,12 @@
 <!-- 담당: planner-architect, developer | 최대 30항목 -->
 <!-- 프로젝트의 폴더 구조, 파일 역할, 핵심 패턴을 기록 -->
 
+### [2026-07-09] [Phase B 설계·미구현] 등록패턴 파일 영속화 경로 (webapp/storage_backup.py 신규 + 등록훅 + startup 복원훅)
+- **분류**: architecture
+- **발견자**: planner-architect
+- **내용**: (⚠️설계만 완료, 구현 전) Render 임시디스크 재배포 시 소실되는 `data/patterns/{id}/` 폴더를 Supabase Storage로 백업/복원. **신규 모듈 `webapp/storage_backup.py`**: (a)`backup_pattern(pattern_id, user_jwt)`=폴더→메모리 zip(io.BytesIO+ZipFile, job_zip:926 패턴 재사용)→Storage REST `POST /storage/v1/object/pattern-presets/{id}.zip`(headers apikey=PUBLISHABLE + Authorization=Bearer <요청자 admin JWT>, upsert) (b)`list_backups()`/`restore_missing()`=publishable로 `GET /storage/v1/object/list/...` 목록→로컬 없는 zip만 download→zip-slip 방어 해제 (c)httpx 사용, Supabase env(SUPABASE_URL/PUBLISHABLE) 없으면 no-op. **끼움점 2곳**: ①api.py `create_pattern`(1377 return 직전)·`create_pattern_from_drive`(1707) 성공 시 백업 호출(요청 헤더 JWT 전달, 실패=경고만 degrade, 등록 성공 유지). ②main.py `@app.on_event("startup")` 신규(현재 없음)—복원 훅, 부팅 안 막게 try/except+timeout. **핵심 권한 설계**: SERVICE_ROLE 없이 **요청자 admin JWT를 백엔드가 Storage REST에 릴레이**(등록=admin_required라 헤더에 admin 토큰 있음)→쓰기 RLS admin 강제. 읽기(복원)는 startup=JWT없음이라 anon 읽기 개방(private 버킷+RLS). **복원 후 자동 인식**: GET /api/patterns가 폴더만 있으면 스캔(코드0), pattern_meta(pattern_id 키)도 재부착(작업0). **로컬 우선**: 복원은 로컬에 폴더 없을 때만(커밋본2·기존등록 무변경, 회귀0). 로컬 개발(auth off)은 토큰/env 없어 자동 skip. **불변**: 엔진/인증/등록본체 무수정(훅만 추가)·비밀키 금지·빌드0·--workers 1. Storage 버킷 `pattern-presets`(private)+RLS(SELECT anon+authenticated / 쓰기 admin JWT).
+- **참조횟수**: 0
+
 ### [2026-07-06] Google Drive 패턴 연동 경로 (webapp/gdrive.py + api.py Drive섹션 + patterns.html #driveMode)
 - **분류**: architecture
 - **발견자**: planner-architect
