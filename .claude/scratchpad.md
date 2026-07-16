@@ -1,68 +1,121 @@
 # 작업 스크래치패드
 
 ## 현재 작업
-- **요청**: **[Phase B] 등록 패턴 파일 영속화** — Render 임시디스크라 재배포 시 등록 preset 소실. Supabase Storage에 백업/복원.
-- **상태**: ✅✅ **[Phase B] 완전 완료·실서버 e2e 검증 통과**. 1~4단계+한글키 hex수정 전부 커밋·푸시(미푸시0). **PM 실서버 e2e 최종확인 완료**: (백업)admin 등록→버킷에 hex.zip 27KB 생성 확인 / (복원)Render 재배포로 디스크 초기화 후 startup 자동복원→목록 3개 유지(U넥_스탠다드-A(암홀X) 복원됨=재배포에도 살아남음, 이전 버그땐 2개로 소실). 백업↔복원 라운드트립 실서버 동작 확정. **잔여(옵션)**: 5단계 관리자 수동 백업/복원 버튼(미구현·후속). 실서버에 테스트패턴 U넥_스탠다드-A(암홀X) 1개 + Storage hex.zip 1개 남음(정리 여부 사용자 판단).
-- **현재 담당**: pm (완료 보고)
+- **요청**: **[실사용 고도화] 전체 진단 → 오류수정·기능고도화** — 3축(안정성·오류제거 / 사용편의성 UI/UX / 성능·속도)으로 실서비스 개선. 사용자가 "전체 진단부터" 선택.
+- **상태**: ✅ planner-architect 전체진단 완료 — 문제목록+우선순위 TOP7 도출(위 "기획설계" 섹션). **다음=사용자가 착수 항목 승인 후 developer 수정.** 코드수정 아직 0.
+- **현재 담당**: 사용자 승인 대기(어떤 항목부터 고칠지)
+- **직전 완료**: Phase B 파일영속화 완전완료·실서버 e2e통과·전부 푸시(미푸시0).
 - **직전 완료**: 번호·이름 위치 구멍 수정 1~4단계 전부 커밋·푸시 완료(미푸시 0). Drive 트리/자동스캔/즐겨찾기·분류 전부 배포 완료.
 - **⏳ 별개 남은것**: 즐겨찾기 라이브 비관리자 쓰기막힘 확인은 사용자 계정 있을때.
 - **최근 완료(2026-07-06~07, 상세는 git+아래 작업로그)**: Drive Phase1(백엔드)+Phase2(프론트 트리/미리보기/등록)+배포+admin권한(Supabase role) → SSL동시성수정(스레드로컬) → **패턴폴더 자동스캔**(GET /drive/scan+카드그리드) → **즐겨찾기+자동분류**. 배포 URL grader-v2-47gd.onrender.com. 로컬 127.0.0.1:8000 병행.
 - **카테고리 라벨 정책(사용자 확인 여지)**: 최상위폴더/이름을 pmMatchKnownCategory로 "0.농구→농구" 정규화. 원하는 라벨 다르면 PM_KNOWN_CATEGORIES 조정. 관리자 override 가능.
 
-## 기획설계 (planner-architect) — [Phase B] 등록 패턴 파일 영속화 [승인 대기]
+## 기획설계 (planner-architect) — [실사용 전체진단] 오류·개선점 목록 + 우선순위 (2026-07-16)
 
-🎯 목표: Render 재배포 시 소실되는 등록 패턴 폴더(preset.json+SVG들)를 **Supabase Storage에 zip으로 자동 백업**하고 **앱 시작 시 로컬에 없는 것만 자동 복원**해 등록 패턴이 재배포 후에도 유지되게 한다. 엔진·인증·등록로직·비밀키 규칙 전부 무변경.
+🎯 목표: 실서비스(grader-v2-47gd.onrender.com) 기준으로 안정성·편의성·성능 3축의 실사용 문제를 코드 정독으로 도출. **코드 수정 없음(진단만).** 대상=webapp 전체(main/auth/state/api/gdrive/storage_backup + login/work/patterns.html). 근거는 전부 파일:줄번호.
 
-📌 핵심 사실(코드 정독으로 확정):
-- 패턴은 `data/patterns/{id}/` 폴더에 저장 = `preset.json`(필수) + `{사이즈}.svg`들(~4KB) + `number_glyphs.json`(글리프셋 있으면 ~18KB). 총 20~88KB 소형. **파일은 백엔드 디스크에만 존재**(브라우저는 못 봄).
-- 목록/조회 GET /api/patterns → `data/patterns/*/preset.json` 온디맨드 스캔(캐시 없음). 폴더만 있으면 자동 인식.
-- 등록 성공부 2곳: `create_pattern`(api.py:1377 return dict) / `create_pattern_from_drive`(1707 return, 내부에서 create_pattern await 재사용). 둘 다 성공 시 `{ok,pattern_id,...}` dict 반환·admin_required.
-- **백엔드가 요청자 admin JWT 확보 가능**: auth.py는 `request.headers["Authorization"]`에서 Bearer 토큰을 읽음(admin_required 엔드포인트라 그 토큰=admin). → SERVICE_ROLE 없이도 이 JWT를 Storage REST에 릴레이하면 admin RLS 통과(pattern_meta의 "세션JWT+RLS admin"과 동일 철학).
-- 앱 startup 훅: 현재 main.py에 startup 이벤트 없음(신규 추가 자리). --workers 1.
-- zip 패턴은 job_zip(api.py:926 `zipfile.ZipFile(io.BytesIO())`) 방식 재사용 가능(폴더→메모리 zip).
+### 🟥 안전지대(검증됨 — 이번 수정에서 건드리지 말 것)
+- **engine/ 전부**(compose·verify·grade·job·flatten·eps·text·number_glyphs·reference·svg_normalize): 무손실·device CMYK 검증완료. diff 0 유지.
+- **auth.py**(introspection + admin_required, 60초캐시): 배포 게이트 정상 동작. 로컬 무인증 토글도 정상.
+- **gdrive.py**(스레드로컬 서비스 + 전송에러 재시도): SSL record layer 버그 해결·실서버 무재발.
+- **비밀키 규칙**(publishable-only 릴레이, SERVICE_ROLE/SECRET/SA_JSON 미노출): 전 파일 준수 확인.
+- **storage_backup.py hex 인코딩**(한글키→hex): 실서버 e2e 왕복 검증완료. zip-slip 방어 견고.
+→ 이 영역은 "동작하는 코드 함부로 리팩터 금지" 원칙 적용. 개선은 이 밖에서.
 
-📍 만들/고칠 위치:
-| 파일 경로 | 역할 | 신규/수정 |
-|----------|------|----------|
-| Supabase Storage 버킷 `pattern-presets` + storage.objects RLS | 읽기=전원(anon 포함) / 쓰기=admin JWT만. 인프라(SQL) | 신규(설정) |
-| `webapp/storage_backup.py` | Storage 백업/복원 헬퍼 모듈: 폴더→zip 업로드(admin JWT 릴레이), Storage 목록·다운로드(publishable), zip 해제. Supabase Storage REST 호출(httpx). | 신규 |
-| webapp/api.py `create_pattern` 성공 return 직전(≈1377) | 등록 성공 후 자동 백업 호출(요청 헤더의 JWT 전달, 실패해도 등록 성공 유지=경고만) | 수정(+소량) |
-| webapp/api.py `create_pattern_from_drive`(≈1707) | 동일 자동 백업 호출(payload 방식이라 Request 주입 필요) | 수정(+소량) |
-| webapp/main.py | `@app.on_event("startup")` 복원 훅(로컬에 없는 패턴만 Storage에서 다운로드·해제, 부팅 막지 않게 방어) | 수정(+소량) |
-| (옵션 후속) webapp/api.py + patterns.html | 관리자 수동 "전체 재백업/복원" 버튼·엔드포인트 | 신규(후속) |
+### 📋 발견 문제 전체 목록 (심각도·축·위치·증상·개선안)
 
-🔗 기존 코드 연결:
-- create_pattern이 진실의 단일 생성점 → from-drive도 이걸 await(api.py:1684). 백업 훅은 두 엔드포인트 return 직전에 각각(토큰은 각자 헤더에서). from-drive는 payload 방식이라 함수 시그니처에 `request: Request` 추가.
-- 복원된 폴더는 GET /api/patterns가 자동 인식(코드 0). pattern_meta(즐겨찾기/분류)는 pattern_id 키라 복원 즉시 재부착(추가 작업 0).
-- 로컬 커밋본 2개(농구_U넥/농구_V넥)는 로컬에 이미 존재 → 복원이 건너뜀(회귀 0).
+**A. 안정성 / 조용한 실패**
+- **[높음·안정성] work.html:325 `let ORDER = buildRoster(48)`** — 데모용 가짜 선수 48명이 초기 로드됨. step2 진행조건이 `ORDER.length>0`(1261)이라 **주문서를 안 올려도 "다음"이 켜지고**, 요약레일엔 "48행" 표시(1245). 그대로 생성하면 가짜 이름(김민준 등)으로 출력됨(startGenerate가 ORDER 사용 911). 증상=직원이 주문 업로드 전 넘어가면 쓰레기 출력. 개선: 초기 `ORDER=[]` + step2 게이트를 `orderUploaded && ORDER.length>0`로.
+- **[높음·안정성] patterns.html:335~344,1128~1137** — **Substep B(디자인↔조각 매핑)·C(배번/이름 영역) 편집기가 서버로 전혀 전송 안 됨.** savePattern FormData는 name/base_size/files/glyphset/reference만 보냄. 캔버스에서 그린 pieceRegions·relBbox는 어디서도 참조 안 됨. 그런데 344줄은 "pt로 환산되어 저장됩니다", 1041줄은 "preset에 저장했습니다"라고 **거짓 고지**. 결과=UI로 등록한 모든 패턴의 design_region_pt는 서버 균등분할 추정치(api.py:1041 _build_pieces)이고 verify는 위치를 안 봐서 통과(errors.md 기록과 동일 함정)→합성 어긋남이 조용히 발생. 개선: (a)좌표를 실제 전송하거나 (b)B/C 상단에 "미리보기이며 실제값은 자동추정(preset.json 보정 필요)" 경고 배너.
+- **[높음·안정성] work.html:1354 & patterns.html:599~648** — **GET /api/patterns 실패가 "빈 목록"과 구분 불가.** work은 catch에서 안내문구는 있으나(1357), patterns는 `.catch(()=>{PATTERNS=[];render})`로 콜드스타트/500을 "등록된 패턴이 없습니다"로 위장. 개선: 실패↔진짜빈목록 분리 + 다시시도 버튼(drive 스캔의 retry 패턴 재사용).
+- **[높음·안정성·시스템] degrade가 실패를 콘솔로만 남김** — storage_backup(백업/복원)·pattern_meta(즐겨찾기)가 실패해도 예외 안 던지고 `print`만 함(Render 콘솔=아무도 안 봄). 이미 한글키 버그가 이 방식으로 수주간 은폐됨(lessons.md). 현재는 정상이나 **미래 실패(RLS변경·토큰문제·버킷삭제) 시 패턴 소실을 아무도 모름.** 패턴=핵심자산이라 손실 치명. 개선: 관리자용 "백업 상태" 표시 + 수동 재백업/복원 버튼(백로그 5단계와 연결).
+- **[중간·안정성] patterns.html:1147 savePattern `r.json().then()` 비안전 파싱** — 콜드스타트/프록시 502·504 HTML 응답 시 json() throw→사용자에게 "Unexpected token <" 암호 메시지. registerFromDrive(1771)는 `.catch(()=>({}))`로 안전 파싱+상태코드별 한글메시지라 **두 경로 비일관**. 개선: savePattern도 안전파싱 + 403/409/5xx 한글 메시지.
+- **[중간·안정성] savePattern 403/409 전용 메시지 없음(patterns.html:1150)** — 비관리자(403)·중복이름(409·api.py:1132) 모두 `body.error||"등록 실패"`에만 의존. 개선: 409("같은 이름 존재")·403("관리자 권한") 명시.
+- **[낮음·안정성] data/uploads·data/jobs 영구 미정리** — save_upload(state.py:87)는 업로드마다 파일 적재, 삭제 로직 0(grep: uploads에 os.remove/rmtree 없음). data/jobs 출력물도 누적. 장기 가동 인스턴스에서 디스크 증가(재배포 시 초기화라 폭주 전 리셋되나 사용 많으면 위험). 개선: 오래된 uploads/jobs TTL 정리(주의: jobs는 history.html이 읽음).
+- **[낮음·안정성] state._JOBS·auth 토큰캐시 무한증가** — 메모리 딕셔너리 정리 없음(auth는 접근시에만 만료정리). --workers1 재시작으로 완화되나 장기 누수. 개선: 완료 job/만료토큰 주기 정리.
 
-📋 8개 설계 결정 요약:
-1. **백업 주체 = 백엔드 경유(사용자 JWT 릴레이).** 파일이 백엔드 디스크에만 있어 프론트 직접 업로드 불가(파일 못 가져옴). 백엔드가 요청자 admin JWT를 Storage REST `POST /storage/v1/object/{bucket}/{path}`에 Authorization으로 릴레이 → SERVICE_ROLE 불필요, RLS가 admin 강제. (pattern_meta=프론트직접이었던 건 데이터가 프론트에서 생성됐기 때문. 파일은 백엔드 생성이라 백엔드 경유가 자연스럽고 일관.)
-2. **저장 형식 = zip 1개** (`{pattern_id}.zip`). 개별 파일이면 12+회 호출, zip이면 1회. 소형이라 부담0. job_zip의 io.BytesIO+ZipFile 패턴 재사용.
-3. **백업 타이밍 = 등록 성공 직후 자동.** 등록=진실의 순간. 수동버튼은 잊음 위험. 백업 실패는 등록 막지 않음(degrade, 경고만).
-4. **복원 타이밍 = startup 자동.** 로컬에 없는 것만 다운로드·해제. --workers 1이라 1회. 콜드스타트 지연 방지 위해 try/except+타임아웃(부팅·헬스체크 안 막음). 20~88KB라 각<1초. (+옵션: 관리자 수동 복원 버튼)
-5. **버킷/RLS.** 버킷 `pattern-presets`(private). storage.objects RLS: SELECT `to anon,authenticated using(bucket_id='pattern-presets')`(복원이 startup=JWT없음이라 읽기 개방), INSERT/UPDATE/DELETE `(auth.jwt()->'app_metadata'->>'role')='admin' and bucket_id='pattern-presets'`.
-6. **충돌 처리.** 복원은 **로컬에 폴더 없을 때만**(로컬 우선, 커밋본·기존 등록 덮어쓰기 안 함). 재등록은 create_pattern이 이미 409 차단, Storage는 같은 경로 upsert=최신본. 진실 순서: 로컬 디스크 > Storage(공백만 채움).
-7. **실행 계획**(아래 표).
-8. **주의사항**(아래).
+**B. 사용 편의성 (UI/UX)**
+- **[높음·편의성] patterns.html:612~630 수정·삭제 버튼이 무동작** — 카드의 수정/삭제 아이콘 핸들러가 `stopPropagation`뿐. 클릭해도 무반응·무피드백. **UI로 패턴을 고치거나 지울 방법이 전혀 없음**(바이브코더는 Render 서버 파일 직접수정 불가). 개선: DELETE 엔드포인트+삭제흐름 연결, 최소한 버튼 숨김/disabled+"준비중".
+- **[높음/중간·편의성] 콜드스타트 중 "서버 연결됨" 거짓표시** — 사이드바 핀이 HTML에 `서버 연결됨·:8000` 하드코딩(work.html:92, patterns.html:235). health가 콜드스타트로 매달리는 ~30초간 실제 미연결인데 "연결됨"으로 보임. 목록 그리드엔 로딩 스피너도 없어 "패턴 0개"만 노출(drive 스캔엔 스피너 있음). 개선: 초기값 "연결 확인 중…"+목록 스켈레톤/"서버 깨우는 중(최대30초)".
+- **[중간·편의성/안정성] 이중 제출 race(patterns.html:1178~1182,1826~1831)** — 성공 후 목록복귀는 setTimeout 1.4초인데 `.finally`가 즉시 saving=false+버튼 재활성. 그 1.4초간 재클릭 시 **중복 등록** 가능(savePattern·registerFromDrive 둘 다). 개선: 성공 시 리다이렉트까지 버튼 disabled 유지.
+- **[중간·편의성] 등록 버튼이 비관리자에게도 노출(patterns.html:271)** — 3단계 다 거친 뒤 마지막 POST에서야 403. 개선: pmAdmin 판정으로 등록/드라이브 버튼 사전 숨김/안내.
+- **[중간·편의성] 하드코딩 더미문구 "SVG 또는 DXF·4/7 업로드됨"(patterns.html:296)** — 실제 업로드 개수와 무관하게 항상 동일 표시→잘못된 진행정보. 개선: REG.sizeFiles 실개수로 동적 갱신.
+- **[중간·편의성] 어떤 fetch에도 타임아웃 없음(patterns.html:1754 주석이 명시)** — 콜드스타트/프록시가 응답 끊으면 "등록 중…"이 무한 매달림. 개선: AbortController로 60~90초 상한 후 "다시 시도".
+- **[낮음·편의성] work.html:1035 "이 파일 다운로드"가 실제로는 ZIP 전체 다운로드** — 단건 서빙 안 하므로 ZIP 폴백(주석 1038). 라벨과 동작 불일치. 개선: 라벨 "전체 ZIP 받기"로 정정 or 단건 서빙.
+- **[낮음·편의성] readonly 별표 hover 시 골드로 변해 눌러도 무반응(patterns.html:209~210)** — 비관리자 혼란. 개선: readonly 별 pointer-events:none/hover 강조 제거.
+- **[낮음·편의성] 파일 크기·확장자 사전검증 없음(work·patterns 업로드)** — accept 필터만 의존. 대용량+콜드스타트 겹치면 장시간 매달림. 개선: 선택 즉시 상한/확장자 체크.
 
-📋 실행 계획(각 독립 커밋, 단계 후 tester+reviewer 병렬):
-| 순서 | 작업 | 담당 | 선행 |
-|------|------|------|------|
-| 1 | Supabase Storage 버킷 `pattern-presets` + RLS 3정책 생성(SQL/대시보드) — 검증: admin 쓰기O·비admin 쓰기X·anon 읽기O | 사용자/developer(MCP) | 없음 |
-| 2 | `webapp/storage_backup.py` 신규(업로드=JWT릴레이·목록·다운로드=publishable·zip 묶기/풀기·zip-slip 방어·미설정 skip) | developer | 1 |
-| 3 | 등록 직후 자동 백업 훅(create_pattern + from-drive, Request 주입, 실패 degrade) | developer | 2 |
-| 4 | startup 자동 복원 훅(main.py, 로컬 없는 것만, 부팅 안막는 방어) | developer | 2 |
-| 5 | (후속·옵션) 관리자 수동 백업/복원 버튼 UI | developer | 3,4 |
+**C. 성능 / 속도**
+- **[중간·성능] Render 무료 콜드스타트(~30~50초)** — 전 화면 첫 로드가 이 지연에 노출. 앱차원 "깨우는 중" UX 부재(A/B 항목과 연동). 인프라 특성이라 근본해소는 유료전환, 완화는 로딩 안내.
+- **[낮음·성능] /api/public-config 중복 fetch** — work: initAccount+pmGetSb / patterns: initAccount(1928)+pmGetSb(2041) 각각 별도 호출. 개선: 1회 받아 공유.
+- **[낮음·성능] work.html:988 loadJobResult가 미리보기 전량 Promise.all 동시 요청** — 100명 주문 시 preview PNG 100개 동시 fetch. 개선: 동시성 제한(배치)·지연로딩.
+- **[낮음·성능] patterns.html:2280~2295 필터/별표 토글마다 전 카드 재decorate+appendChild 재정렬** — 카드 많으면 매 토글 O(n) reflow. 개선: 변경분만 갱신.
+- **[낮음·성능] preview blob URL 미해제(work.html:992)** — createObjectURL 후 revoke 없음(다운로드분만 revoke). 대량주문 반복 시 누수. 개선: 재렌더/이탈 시 revoke.
 
-⚠️ developer 주의사항(빠지기 쉬운 함정):
-- **비밀키**: SERVICE_ROLE·SECRET 절대 사용/로깅 금지. Storage 헤더 `apikey=PUBLISHABLE` + `Authorization=Bearer <요청자 JWT>`만(auth.py introspection과 동일 규칙).
-- **토큰 확보 경로**: create_pattern은 FormData 파라미터라 Request가 없음 → 시그니처에 `request: Request` 추가하되 **from-drive가 create_pattern을 직접 await 호출**하므로 request 전달 일관성 주의(각 엔드포인트가 자기 request의 헤더 토큰을 백업 훅에 넘기는 게 단순). 헤더 없거나 로컬 무인증(토큰 없음)이면 백업 skip(로컬은 디스크 영속이라 불필요).
-- **degrade 필수**: Storage 미설정(env 없음)·업로드 실패·Supabase 장애 시 등록/부팅은 정상 진행(pattern_meta degrade와 동일). 백업은 "있으면 좋은" 부가기능.
-- **startup blocking 금지**: 복원이 Storage 네트워크를 동기 대기하면 첫 헬스체크 지연 → try/except+httpx timeout, 다수면 최악의 경우도 유한. (필요 시 백그라운드 스레드 검토, 단 --workers 1·_JOBS 패턴 참고.)
-- **zip-slip**: 해제 시 pattern_id/엔트리 경로 sanitize(../ 차단). preset.json 없는 손상 zip은 skip.
-- **회귀0**: 로컬 커밋본 2개는 복원이 건드리지 않음(로컬 존재→skip). 로컬 개발(GRADER_REQUIRE_AUTH off)은 토큰·env 없어 백업/복원 자동 skip=기존 동작 그대로.
-- **엔진/인증/등록로직 무수정**: create_pattern 본체 로직 불변(성공 return 직전 훅 호출만 추가). engine/ diff 0.
+### 🏆 우선순위 TOP 7 (심각도 × 사용빈도 × 수정난이도)
+
+| # | 문제 | 축 | 위치 | 심각도 | 빈도 | 난이도 | 쉬운말 한줄 |
+|---|------|----|------|--------|------|--------|-----------|
+| 1 | 데모 가짜주문 48명이 초기 ORDER에 남아 미업로드 상태로 생성 가능 | 안정성 | work.html:325,1261 | 높음 | 매 작업 | 쉬움 | "주문서 안 올려도 넘어가져서 가짜 선수로 출력될 수 있어요" |
+| 2 | GET /api/patterns 실패가 "패턴 0개"로 위장(콜드스타트 포함) | 안정성 | work:1354 / patterns:648 | 높음 | 매 첫로드 | 쉬움 | "서버가 느리거나 죽었을 때 '패턴 없음'처럼 보여 오해해요" |
+| 3 | 패턴 수정·삭제 버튼이 눌러도 무반응(실기능 없음) | 편의성 | patterns:612~630 | 높음 | 잦음 | 중간 | "잘못 등록해도 화면에서 고치거나 지울 수가 없어요" |
+| 4 | B/C 매핑·번호영역 편집이 저장 안 되는데 "저장됩니다"로 거짓안내 | 안정성 | patterns:344,1128 | 높음 | 매 등록 | 중간 | "화면에서 위치를 맞춰도 실제론 안 쓰이고 자동추정돼요(어긋남 위험)" |
+| 5 | 콜드스타트 중 "서버 연결됨" 거짓표시+로딩안내 부재 | 편의성 | work:92 / patterns:235 | 중간 | 매 첫로드 | 쉬움 | "서버 깨는 30초 동안 연결된 척 보이고 빈 화면만 떠요" |
+| 6 | 등록 실패 메시지 비일관/암호문(403·409·502 처리 누락) | 안정성 | patterns:1147~1150 | 중간 | 실패 시 | 쉬움 | "등록 실패해도 왜 실패했는지 알 수 없는 영어에러가 떠요" |
+| 7 | 백업/복원 실패가 콘솔에만 남아 패턴 소실이 조용히 진행 | 안정성 | storage_backup 전반 | 중간 | 드묾·치명 | 중간 | "백업이 몰래 실패하면 재배포 때 패턴이 통째로 사라져도 몰라요" |
+
+보조 후속(TOP 밖, 낮은 우선순위): 이중제출 race, 더미문구 "4/7", 비관리자 버튼 노출, fetch 타임아웃, uploads/jobs 정리, public-config 중복fetch, blob 미해제, "이 파일 다운로드"=ZIP 라벨.
+
+### 🔗 기존 백로그와의 관계
+- 3XL.ai 자산결함=엔진 안전지대(disabled_sizes로 이미 격리). **우선순위 낮음**(재확보는 자산작업).
+- 5단계 수동 백업버튼=위 #7과 동일 사안(관리자 가시성). #7로 승격 권장.
+- 즐겨찾기 비관리자 쓰기막힘=의도된 degrade(안전). readonly 별 hover만 낮은 개선.
+
+### ⚠️ 다음 단계(수정 착수 시) 주의
+- 전부 **webapp 계층/프론트만** 수정으로 해결 가능(엔진·인증·gdrive·비밀키 무수정). #4만 서버 payload 추가 시 create_pattern 시그니처 확장 필요(기본값 인자로, from-drive 호환 주의).
+- #1·#2·#5·#6은 프론트 소규모(파일1~2개)=경량. #3은 DELETE 엔드포인트 신설(admin_required)=중간. #7은 관리자 UI+상태엔드포인트=중간.
+- 착수 순서 권장: #1(즉시·치명·쉬움) → #2·#5·#6(콜드스타트 3종 묶음) → #4(정직안내 먼저, 좌표전송은 후속) → #3 → #7.
+
+## 구현 기록 (developer) — [TOP7 #1] work.html 데모 가짜주문 48명 제거 + 게이트 강화 (2026-07-16)
+
+📝 구현한 기능: `work.html`(실경로 `webapp/static/screens/work.html`)에서 화면 로드 즉시 생성되던 **데모용 가짜 주문 48명(김민준 등)을 제거**. 이제 직원이 주문서(.xlsx)를 실제로 업로드해야만 생성 단계로 넘어갈 수 있음. **이 파일 1개만 수정**(엔진·서버·인증·API 패칭 로직 전부 무수정).
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| webapp/static/screens/work.html (≈312) | 더미 명단 생성기(`FIRST/GIVEN/SZ/buildRoster/failRows`) 블록 전부 삭제 → `let ORDER = [];`(빈 배열 시작). 실데이터는 `uploadOrder()`(≈515)가 서버 파싱 결과로 교체 | 수정 |
+| webapp/static/screens/work.html (≈321) | 데모용 검수 헬퍼(`CHECK_NAMES/buildChecks/FAIL_RESULT`)+가짜 RESULTS 파생 블록 전부 삭제 → `let RESULTS = [];`. 실데이터는 `loadJobResult()`(≈975)가 서버 `job.outputs`로 교체, checks도 서버 `o.checks`(≈983)로 채움 | 수정 |
+| webapp/static/screens/work.html `canAdvance()`(≈1261) | step2 진행 게이트를 `ORDER.length>0` → **`orderUploaded && ORDER.length>0`** 로 강화 | 수정 |
+| webapp/static/screens/work.html `update()`(≈1282) | 생성 시작 버튼 활성 조건을 `!patternId || !ORDER.length` → **`!patternId || !orderUploaded || !ORDER.length`** 로 강화 | 수정 |
+
+🔎 근거(코드 흐름 정독 — 실데이터 경로 확인 후 안전 제거):
+- ORDER는 `uploadOrder()`(515줄)에서 서버 응답으로 **통째 교체**되므로 초기값 `[]` 무영향. 실패 시에도 이미 `ORDER=[]`(522줄) 처리됨.
+- RESULTS는 `loadJobResult()`(975줄)에서 서버 `data.outputs`로 **통째 교체**되고, 검수표 checks도 서버 `o.checks`(983줄)에서 채움 → 데모용 `buildChecks`와 무관. 초기값 `[]` 무영향.
+- 제거한 상수/함수(`FIRST/GIVEN/SZ/buildRoster/failRows/CHECK_NAMES/buildChecks/FAIL_RESULT`)는 grep 결과 **오직 초기 더미 생성에만** 참조됨(서로만 참조). 함께 제거해 dangling reference 0 (grep 재확인: 코드 참조 0, 주석 설명만 잔존).
+- 빈 상태 안내: 704줄 `if(!orderUploaded)` 분기가 이미 "주문서를 업로드하세요" 드롭존을 표시 → 별도 UI 추가 불필요, 그대로 동작.
+
+💡 tester 참고:
+- **테스트 방법**: work.html 첫 로드 → 주문서 단계(step2)까지 진행. 패턴 선택+디자인 통과해도 **주문서를 안 올리면 "다음" 버튼 비활성**이어야 정상. 주문 행 요약(우측 레일)이 "—"(빈 상태)로 표시돼야 함(예전엔 "48행").
+- **정상 동작**: (1) 주문서 미업로드 시 step2에서 "다음"/"생성 시작" 모두 disabled. (2) 실제 .xlsx 업로드하면 서버 파싱 행 수만큼 표가 채워지고 다음 활성화. (3) 생성 완료 후 검수 그리드가 서버 결과로 정상 표시(가짜 김민준 등 절대 안 나와야 함).
+- **주의할 입력**: 주문서 업로드 후 서버가 빈 행(rows=[]) 반환 시 → orderUploaded=true지만 ORDER.length=0 → 게이트가 여전히 막음(의도된 동작). / 업로드 실패(서버 미연결) 시 ORDER=[]+경고 표시, 다음 안 켜짐.
+- **콘솔 에러 점검**: 제거한 식별자 참조 grep 재확인=코드 참조 0(주석만). 참조 안 된 변수로 인한 ReferenceError 없음(논리 점검 완료). 브라우저 실행 검증 권장.
+
+⚠️ reviewer 참고:
+- **불변 제약**: work.html 1개 파일만 수정. 엔진/api.py/main.py/인증/gdrive/storage_backup 무수정. API 패칭(주문서 업로드→서버 파싱→ORDER 교체 508~526) 흐름 그대로 유지.
+- **특별히 봐줬으면**: canAdvance() 배열 인덱스 게이트에서 step2 슬롯만 강화(다른 스텝 슬롯 불변). RESULTS 초기 `[]`가 첫 렌더(renderReview 등 검수 화면은 step4에서만 진입)에서 문제없는지 — step4는 생성 완료 후에만 도달하므로 그 시점 RESULTS는 이미 서버데이터로 채워져 있음.
+
+## 테스트 결과 (tester) — [TOP7 #1] work.html 데모 가짜주문 48명 제거 + 게이트 강화 (2026-07-16)
+
+📊 종합: **5개 항목 전부 통과 / 실패 0** · 수정 요청 없음 · **커밋 가능**. work.html 1개 파일만 수정(엔진·서버·인증 무수정 확인). 실브라우저 로드는 미수행(정적검증 1~4로 충분·근거 아래).
+
+| 테스트 항목 | 결과 | 비고 |
+|-----------|------|------|
+| **[1] 참조 무결성(핵심)** | ✅ 통과 | 삭제 식별자(`buildRoster`/`buildChecks`/`CHECK_NAMES`/`FAIL_RESULT`/`failRows`/`FIRST`/`GIVEN`/`SZ`) grep 전수 → **코드 참조 0**. 315·318·326줄 3건 모두 `//` 주석(변경 설명)뿐. ReferenceError 유발 dangling 참조 없음 |
+| **[2] JS 문법 검증** | ✅ 통과 | script 블록(282~1643줄) 추출 후 `node --check`(v22.19.0) → **SYNTAX_OK**. 괄호·선언 짝 이상 없음 |
+| **[3] 게이트 로직(코드리뷰)** | ✅ 통과 | canAdvance() 1237줄 step2 슬롯 = `orderUploaded && ORDER.length > 0`(다른 step 슬롯 불변). update() 1258줄 생성버튼 = `!patternId \|\| !orderUploaded \|\| !ORDER.length`. **주문서 미업로드(orderUploaded=false)면 ORDER값 무관하게 다음·생성 모두 disabled**. 업로드 실패 시 ORDER=[](495)라 여전히 차단 — 우회 경로 없음 |
+| **[4] 실데이터 경로 무손상** | ✅ 통과 | uploadOrder(480~499): `orderUploaded=true`(481) + 서버 `data.rows`로 `ORDER` 통째 교체(488), 실패 시 `ORDER=[]`(495) — 무변경. loadJobResult(948): 서버 `data.outputs`로 `RESULTS` 교체 — 무변경. 초기값만 `[]`로 비웠고 실데이터 채움 로직 그대로 |
+| **[5] 초기값 `[]` 안전성** | ✅ 통과 | `let ORDER=[]`(319)·`let RESULTS=[]`(328). RESULTS는 검수화면(step4)에서만 참조되며 step4는 생성완료 후 도달=그 시점 이미 서버데이터로 채워짐. 첫 렌더 시 빈배열로 인한 크래시 없음(문법검증 겸 논리 확인) |
+
+🟢 관찰(비차단): (a) 실브라우저 콘솔 로드 검증([5] 항목의 live 파트)은 미수행 — 이유: 변경이 순수 삭제+게이트 강화이고 node --check 통과 + dangling 참조 0이라 정적검증이 결정적. jsdom 통째 로드는 auth·supabase CDN 스텁 필요(errors.md 2건 함정)라 비용 대비 실익 낮음. 최종 확인차 실서버/로컬에서 work.html 첫 화면에 가짜명단(김민준 등) 미표시·콘솔에러 0 육안확인 권장. (b) orderUploaded는 uploadOrder 진입 즉시 true로 세팅되나(481), 게이트가 `&& ORDER.length>0`를 함께 요구하므로 업로드 진행중/실패 시에도 안전하게 차단됨(설계 정상).
 
 ## 구현 기록 (developer) — [Phase B] 등록 패턴 파일 영속화 [1·2단계]
 
@@ -456,10 +509,11 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 | 결과 |
 |------|---------|------|------|
+| 2026-07-16 | developer | **[TOP7 #1] work.html 데모 가짜주문 48명 제거 + step2 게이트 강화** | webapp/static/screens/work.html 1파일만 수정. `ORDER=buildRoster(48)`→`ORDER=[]`, 가짜 RESULTS 파생→`RESULTS=[]`, 더미상수(FIRST/GIVEN/SZ/buildRoster/CHECK_NAMES/buildChecks/FAIL_RESULT) 전부 제거(참조 grep 재확인=코드0·주석만). canAdvance step2 게이트 `orderUploaded && ORDER.length>0`, 생성버튼 `!orderUploaded` 추가. 실데이터 경로(uploadOrder 515·loadJobResult 975) 무영향 확인. 빈상태 안내는 704줄 기존분기 활용. 엔진·서버·인증·API패칭 무수정. **tester 검증 대기** |
+| 2026-07-16 | planner-architect | **[실사용 전체진단] 3축 오류·개선점 도출(코드정독)** | webapp 전부+login/work/patterns.html 정독. TOP7: ①데모ORDER48 미업로드 생성 ②/api/patterns 실패=빈목록위장 ③패턴 수정/삭제 무동작 ④B/C편집기 미전송인데 "저장됨" 거짓안내(design_region 추정) ⑤콜드스타트 "연결됨" 거짓 ⑥등록실패 암호에러 ⑦백업실패 콘솔은폐. 안전지대(engine/auth/gdrive/비밀키/hex백업) 표시. **코드수정0**, 사용자 착수승인 대기 |
 | 2026-07-09 | pm+arch+dev+tester+rev+debugger | **[Phase B] 등록패턴 파일영속화 완료·실서버 e2e 통과** | 5단계(설계→storage_backup.py 모듈+SQL가이드→백업훅→startup 복원훅→한글키 버그수정). 커밋 82c3364·b1e2156·21051bb·4946fb9·7e47bf1·fix·docs(전부 푸시). **debugger 발견**: Supabase Storage는 오브젝트 키 비ASCII(한글) 거부(400 InvalidKey)→패턴명 전부 한글=백업 100%실패(degrade가 삼킴)→**키만 hex 인코딩**(로컬 폴더명 한글 유지)으로 수정. **PM 실서버 e2e 최종확인**: 백업(등록→버킷 hex.zip 27KB 생성)+복원(재배포로 디스크초기화 후 startup 자동복원→U넥_스탠다드-A(암홀X) 목록 유지=재배포에도 살아남음). 이중백업방지·부팅안막음(daemon)·엔진diff0 |
 | 2026-07-07 | dev+tester | 번호·이름 위치 구멍 수정 3·4단계(스캔등록 완성본·글리프셋 파일선택) | api.py others 버킷+patternfiles·patterns.html 드롭다운(자동추천·후보없음안내)+payload reference/glyph_file_id. 선택안함=기존동작·회귀0·엔진diff0. **tester 43검증 전부통과** |
 | 2026-07-07 | dev+tester | 번호·이름 위치 구멍 수정 1·2단계(piece_id 자동부여 + 주문경고) | create_pattern area piece_id setdefault 자동부여(_find_piece_index 매칭)+work has_number_area 경고배너. 엔진무수정. **run_job e2e: BROKEN 번호·이름 미출력→FIXED 앞"7"·뒤"홍길동+7" 실출력. tester 8/8·rev치명0** |
 | 2026-07-07 | developer | 즐겨찾기 별 스타일: 빨강 아웃라인→골드 채움 | 별 색 var(--star-fav)+FILL 1(속채움). colors.css alias 1개. 동작무수정 (e27ac16) |
 | 2026-07-07 | dev/tester/rev | 즐겨찾기+자동분류 프론트(patterns/work, Supabase pattern_meta 직접) | feat 27b96db·tester113assert/0·rev치명0. degrade·트리회귀0·work선택흐름무변경·별표 admin쓰기/전원읽기·카테고리=폴더트리최상위 |
 | 2026-07-07 | planner-architect | 즐겨찾기+자동분류 설계 | 프론트direct Supabase+RLS·단일표 pattern_meta·카테고리 폴더트리·파일영속화 Phase B 분리 |
-| 2026-07-07 | dev/tester/rev | 패턴폴더 자동스캔(백엔드 GET /drive/scan 벌크2쿼리+캐시 / 프론트 [자동찾기]탭+카드그리드) | f3b3257·25f490c·tester68+69·회귀0. 배포 실서버 74폴더 카드 확인 |

@@ -309,50 +309,23 @@ let PATTERNS = [];
 const SIZE_ORDER = ["XS","S","M","L","XL","2XL","3XL","4XL","5XL"];
 const sizeRank = (s) => { const i = SIZE_ORDER.indexOf(s); return i < 0 ? 99 : i; };
 
-// --- generate a realistic large roster (대량 주문 시연용) ---
-const FIRST = ["김","이","박","최","정","강","조","윤","장","임","한","오","서","신","권","황"];
-const GIVEN = ["민준","서연","도윤","지우","하준","서준","지호","수아","예준","지유","주원","하은","건우","서아","현우","민서","우진","지민","선우","유나","도현","채원","시우","예린"];
-const SZ = ["S","S","M","M","M","L","L","XL","XL","2XL"];
-function buildRoster(n) {
-  const rows = [];
-  const failRows = new Set([5, 19, 33]); // 추출 실패(이름 누락) 시연
-  for (let i = 0; i < n; i++) {
-    const name = failRows.has(i) ? "" : FIRST[i % FIRST.length] + GIVEN[(i * 7) % GIVEN.length];
-    rows.push({ size: SZ[i % SZ.length], qty: (i % 4) + 1, name, number: String((i * 3 + 7) % 99).padStart(2, "0") });
-  }
-  return rows;
-}
-let ORDER = buildRoster(48);
+// 주문 명단(ORDER): 처음엔 반드시 빈 배열로 시작한다.
+//   직원이 주문서(.xlsx)를 올리면 uploadOrder() 가 서버 파싱 결과로
+//   이 배열을 '실제 주문 행'으로 통째 교체한다(아래 uploadOrder 참고).
+//   ⚠️ 예전엔 여기서 데모용 가짜 선수 48명(buildRoster)을 만들어 뒀는데,
+//   그러면 주문서를 안 올려도 진행조건(ORDER.length>0)이 통과돼 '다음'이
+//   켜지고, 그대로 생성하면 가짜 이름(김민준 등)으로 출력되는 사고가 났다.
+//   → 초기 더미 데이터와 생성기(FIRST/GIVEN/SZ/buildRoster)를 전부 제거했다.
+let ORDER = [];
 
-const CHECK_NAMES = ["무손실 보존", "단일 임베드", "CMYK 유지", "투명도", "재단선·너치 보존", "합성 정확"];
-function buildChecks(transparencyFail) {
-  return CHECK_NAMES.map((name) => {
-    if (name === "투명도" && transparencyFail)
-      return { name, ok: false, detail: "원본에 투명도가 남아 있어 출력 시 래스터화됩니다. 평탄화 후 재생성하세요." };
-    const detail = {
-      "무손실 보존": "원본 벡터 경로를 손실 없이 보존",
-      "단일 임베드": "디자인을 1회만 임베드 (중복 없음)",
-      "CMYK 유지": "색공간 CMYK 그대로 유지",
-      "투명도": "투명도 없음 · 평탄 합성",
-      "재단선·너치 보존": "조각 외곽 재단선 3 + 너치 6",
-      "합성 정확": "조각·배번·이름 위치 정확",
-    }[name];
-    return { name, ok: true, detail };
-  });
-}
-// RESULTS: 48 결과, 일부 투명도 FAIL
-const FAIL_RESULT = new Set([7, 22, 40]);
-let RESULTS = ORDER.map((r, i) => {
-  const warn = FAIL_RESULT.has(i);
-  return {
-    size: r.size,
-    name: r.name || ("선수 " + (i + 1)),
-    number: r.number,
-    url: null,                       // 서버 제공 PNG 경로 자리
-    status: warn ? "warn" : "pass",
-    checks: buildChecks(warn),
-  };
-});
+// 검수 결과(RESULTS): 처음엔 반드시 빈 배열로 시작한다.
+//   생성이 끝나면 loadJobResult() 가 서버 응답(job.outputs)으로 이 배열을
+//   '실제 결과 타일'로 통째 교체한다. 검수표의 각 항목(checks)도 서버의
+//   실제 verify 결과(o.checks)로 채워진다(아래 loadJobResult 참고).
+//   ⚠️ 예전엔 위의 가짜 ORDER 로부터 가짜 결과 48개를 파생했고, 그때만
+//   쓰이던 데모용 검수 헬퍼(CHECK_NAMES/buildChecks/FAIL_RESULT)도 함께
+//   제거했다(실제 검수표는 서버 데이터로 그려지므로 필요 없음).
+let RESULTS = [];
 
 // 패턴 결함·사이즈 누락으로 생성에서 제외된 주문 (의뢰 3)
 const SKIPPED = [
@@ -1258,7 +1231,10 @@ function canAdvance() {
   const designOk = design === "pass" || design === "warn";
   // 생성 단계(3): 작업이 done 으로 끝나 결과(jobResult)가 도착하면 검수로 진행.
   const genOk = !!jobResult && genDone >= (jobTotal || 1);
-  return [!!patternId, designOk, ORDER.length > 0, genOk, true][step];
+  // 주문서 단계(2): '업로드 완료(orderUploaded)' + 실제 행 존재를 모두 요구한다.
+  //   가짜 초기 데이터를 없앴으므로 ORDER.length 만으로도 충분하지만,
+  //   업로드 여부를 명시적으로 함께 확인해 '주문서 없이 다음' 을 원천 차단한다.
+  return [!!patternId, designOk, orderUploaded && ORDER.length > 0, genOk, true][step];
 }
 function showPanel() {
   for (let i = 0; i < 5; i++) $("#panel-" + i).classList.toggle("hidden", i !== step);
@@ -1279,7 +1255,7 @@ function update() {
     // 생성 단계: 아직 시작 전이면 '생성 시작'(명시적), 완료되면 '검수로 이동'.
     if (!genStarted) {
       next.innerHTML = '<span class="material-symbols-outlined">play_arrow</span>이 형식으로 생성 시작';
-      next.disabled = !patternId || !ORDER.length;   // 패턴·주문 갖춰지면 시작 가능
+      next.disabled = !patternId || !orderUploaded || !ORDER.length;   // 패턴+주문서(업로드완료) 갖춰지면 시작 가능
     } else {
       next.innerHTML = '검수로 이동<span class="material-symbols-outlined">arrow_forward</span>';
       next.disabled = !canAdvance();                 // 작업 done + 결과 도착 시 활성
