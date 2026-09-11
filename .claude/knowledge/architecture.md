@@ -2,6 +2,12 @@
 <!-- 담당: planner-architect, developer | 최대 30항목 -->
 <!-- 프로젝트의 폴더 구조, 파일 역할, 핵심 패턴을 기록 -->
 
+### [2026-09-11] 공유드라이브 대재편(2026-08-09) 이후의 패턴 라이브러리 실제 경로 + 연결 진단 경로(/api/drive/diag)
+- **분류**: architecture
+- **발견자**: pm
+- **내용**: **(1) 드라이브 새 구조.** 2026-08-09 회사 공유드라이브(`0ADoysCJg4xBsUk9PVA`)가 번호체계로 전면 재편됨(최상위: 00_템플릿·폼 / 01_도안 / 02_주문·시안 / 03_목업 / 04_사진 / 05_로고 / 06_폰트 / 07_이미지소스 / 10_웹·쇼핑몰 / 11_SNS·편집물 / 20_클라이언트 / 21_자사브랜드 / 22_자사대회·리그 / 99_ARCHIVE / _검토후_삭제 / 디자이너 작업폴더). grader-v2 가 쓰는 패턴 라이브러리 **`2026 커스텀용 패턴 SVG`(ID `1SeQs7DPxQm4ypczmdmXwkWC5TlvsWNwS`)** 는 이때 **`00_템플릿·폼 › 커스텀패턴` 아래로 통째 이동**했다(형제로 구버전 `2026 커스텀용 패턴`[.ai] 존재). **하위 구조·파일은 2026-04-15 상태 그대로 무변경**(자식=`0. 농구유니폼 확정 정리본`/`1. 야구저지`/`2. 배구유니폼`/`3. 럭비티`/슈팅저지·트랙탑웜업·카라티·라운드반팔 등 → 넥/핏 → 패턴폴더에 5XS~5XL SVG 13장 + `*.meta.json`). **핵심: Drive 폴더 ID 는 이동해도 안 바뀌므로 `GDRIVE_ROOT_FOLDER_ID` 는 그대로 유효**하고, 경로가 2단계 깊어졌지만 `_SCAN_MAX_DEPTH=30` 이라 스캔에도 영향 없다. 카테고리 정규화("0.농구→농구")가 성립하는 것도 루트가 이 폴더이기 때문(자식이 `N. ~ 확정 정리본` 꼴). **범위 밖**: 2026-08-26 신설 `03_목업 › _웹용_컬러레이어 › 농구 › basketball_*`(base.png+mask_body/mask_point.png)는 **웹 색상 커스터마이징용 별개 자산**이라 grader-v2 와 무관(패턴 루트 밖이라 스캔에서 자동 제외). **(2) 연결 진단 경로 신설.** `gdrive.service_account_email()`(SA JSON 의 client_email 만 반환 — private_key 는 절대 미반환, 이메일은 '공유 대상 식별자'라 노출 안전) + `gdrive.get_file_meta(file_id, extra_fields="")`(선택 인자. 빈 값이면 기존과 동일한 요청·반환 — 진단에서 `driveId, trashed` 를 더 받는 용도) + `api._drive_share_hint()`/`api._assert_root_visible(root)` + **`GET /api/drive/diag`(admin)**. diag 는 항상 200(진단이므로 실패도 '결과'로 담음, 미설정만 기존 `configured:false` 규약) 으로 `{service_account_email, root{id,accessible,name,is_folder,trashed,drive_id,error?}, visibility{folders_total,files_total,folders_in_scope}, scan{pattern_folders}, elapsed_ms, checks[{level:ok|warn|error,title,detail}]}` 반환. 벌크 2쿼리를 **한 번만** 돌려 총량과 패턴수를 같이 계산하려고 `_build_drive_scan(folders=None, files=None)` 에 선택 인자를 붙여 재사용(중복구현 0·기본값이면 기존 동작 동일). 루트 미접근 시엔 '패턴 N개 발견' 항목을 아예 내지 않는다(위의 error 와 모순돼 보이므로). **프론트**(patterns.html 자동찾기 툴바): `[연결 진단]`(#btnDriveDiag) → `#driveDiagPanel` 에 기존 `.alert--pass/warn/fail` 톤으로 점검표 렌더(level→톤 매핑 `DIAG_TONE`), 서버 문자열은 전부 `driveEsc`, 탭 전환 시 `hideDriveDiag()` 로 잔상 제거. 빌드0·엔진/인증/등록흐름 무수정.
+- **참조횟수**: 0
+
 ### [2026-07-09] [Phase B 설계·미구현] 등록패턴 파일 영속화 경로 (webapp/storage_backup.py 신규 + 등록훅 + startup 복원훅)
 - **분류**: architecture
 - **발견자**: planner-architect
