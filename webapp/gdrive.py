@@ -82,6 +82,21 @@ def root_folder_id() -> str:
     return (os.environ.get("GDRIVE_ROOT_FOLDER_ID") or "").strip()
 
 
+def service_account_email() -> str:
+    """서비스계정의 이메일(client_email)을 돌려준다 — '누구에게 폴더를 공유해야 하나'의 답.
+
+    비유: 로봇 계정에게 창고를 열게 하려면 그 로봇의 '사번'을 알아야 공유 설정을 걸 수 있다.
+    드라이브 폴더가 이동·재편돼 권한이 끊겼을 때, 화면에 이 이메일을 그대로 보여주면
+    관리자가 곧장 그 계정에 폴더를 다시 공유할 수 있다(진단 → 조치가 한 번에).
+
+    ⚠️ 비밀 아님: client_email 은 '공유 대상 식별자'라 노출해도 안전하다. 반대로 같은 JSON
+       안의 private_key 는 절대 반환하지 않는다(이 함수는 client_email 한 필드만 꺼낸다).
+    미설정·형식 오류면 DriveConfigError 를 그대로 전파한다(호출부가 처리).
+    """
+    info = _load_sa_info()
+    return str(info.get("client_email") or "").strip()
+
+
 def _get_sa_raw() -> str:
     """환경변수에서 서비스계정 JSON 원문(문자열)만 꺼낸다(파싱 전). 없으면 빈 문자열."""
     return (os.environ.get("GDRIVE_SA_JSON") or "").strip()
@@ -420,24 +435,36 @@ def download_file(file_id: str, dest_path: str) -> str:
         raise DriveError(f"Drive 파일 다운로드 실패(file_id={file_id}): {exc}") from exc
 
 
-def get_file_meta(file_id: str) -> Dict[str, Any]:
-    """파일/폴더 1개의 메타(id, name, mimeType). 이름 기반 자동 제안 등에 사용."""
+def get_file_meta(file_id: str, extra_fields: str = "") -> Dict[str, Any]:
+    """파일/폴더 1개의 메타(id, name, mimeType). 이름 기반 자동 제안 등에 사용.
+
+    extra_fields : 추가로 받아올 Drive 필드를 쉼표로 나열(예 "driveId, trashed").
+                   비우면(기본) 기존과 완전히 동일한 요청·반환 — 기존 호출부 영향 0.
+                   요청한 필드는 반환 dict 에 같은 이름의 키로 실려 온다(없으면 None).
+                   진단(어느 공유드라이브 소속인가·휴지통인가)에서 쓴다.
+    """
     file_id = (file_id or "").strip()
     if not file_id:
         raise DriveError("file_id 가 비어 있습니다.")
     # 설정 검증은 try 밖에서(미설정이면 DriveConfigError 그대로 전파).
     get_service()
+    # 추가 필드 이름을 정리(빈 토큰 제거) — 기본은 빈 목록이라 fields 문자열도 그대로다.
+    extras = [t.strip() for t in (extra_fields or "").split(",") if t.strip()]
+    fields = "id, name, mimeType" + ("".join(f", {t}" for t in extras))
     try:
         f = _call_with_retry(
             lambda svc: svc.files()
-            .get(fileId=file_id, fields="id, name, mimeType", supportsAllDrives=True)
+            .get(fileId=file_id, fields=fields, supportsAllDrives=True)
             .execute()
         )
     except Exception as exc:
         raise DriveError(f"Drive 메타 조회 실패(file_id={file_id}): {exc}") from exc
-    return {
+    meta = {
         "id": f.get("id"),
         "name": f.get("name"),
         "mimeType": f.get("mimeType"),
         "isFolder": f.get("mimeType") == _FOLDER_MIME,
     }
+    for t in extras:
+        meta[t] = f.get(t)
+    return meta

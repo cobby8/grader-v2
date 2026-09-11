@@ -422,8 +422,14 @@
               <!-- 개수 + 최신성("방금 스캔"/"N분 전"). renderDriveScanCards 가 채운다(외부값 없음). -->
               <div id="driveScanMeta" class="muted" style="font:var(--text-sm);"></div>
               <!-- 다시 스캔(refresh=1). 서버 TTL 캐시를 무시하고 새로 훑는다. -->
-              <button class="btn btn--ghost btn--sm" id="btnDriveScanRefresh"><span class="material-symbols-outlined">refresh</span>새로고침</button>
+              <div class="row" style="gap:8px;">
+                <!-- 연결 진단: 드라이브가 안 보일 때 '왜 안 보이는지'를 점검표로 뽑는다. -->
+                <button class="btn btn--ghost btn--sm" id="btnDriveDiag"><span class="material-symbols-outlined">troubleshoot</span>연결 진단</button>
+                <button class="btn btn--ghost btn--sm" id="btnDriveScanRefresh"><span class="material-symbols-outlined">refresh</span>새로고침</button>
+              </div>
             </div>
+            <!-- 진단 결과(점검표). 기본 숨김 — [연결 진단] 을 눌렀을 때만 채워져 열린다. -->
+            <div id="driveDiagPanel" class="hidden"></div>
             <!-- 카드 그리드 / 로딩 / 빈상태 / 오류가 이 안에 렌더된다(className 을 상황별로 grid-3↔"" 로 토글). -->
             <div id="driveScanGrid"></div>
           </div>
@@ -1280,6 +1286,7 @@ function showDriveTab(which) {
 
   // 3) 자동 찾기 미리보기는 항상 닫아 카드 목록 상태로 되돌린다(= #driveScanPreview 입력칸 제거)
   driveScanShowList();
+  hideDriveDiag();   // 진단 패널도 닫는다(탭을 오갈 때 옛 결과가 남아 오해를 주지 않게)
 
   if (isScan) {
     // 트리 패널 비우기(입력칸 #driveName 제거) — 상대 뷰 미리보기 제거
@@ -1396,8 +1403,11 @@ function renderDriveScanCards(body) {
   // 0개: 빈상태(격자 밖)
   if (!folders.length) {
     grid.className = "";
-    grid.innerHTML = driveEmptyHtml("search_off", "패턴 폴더를 찾지 못했습니다",
-      "파일명에 사이즈가 들어 있는지, 폴더가 공유돼 있는지 확인하세요.");
+    // 서버가 0건 사유(hint)를 주면 그대로 쓴다 — '권한 끊김'과 '정말 없음'을 구분해 준다.
+    const why = (body && body.hint)
+      ? driveEsc(body.hint)
+      : "파일명에 사이즈가 들어 있는지, 폴더가 공유돼 있는지 확인하세요.";
+    grid.innerHTML = driveEmptyHtml("search_off", "패턴 폴더를 찾지 못했습니다", why);
     return;
   }
 
@@ -1426,6 +1436,115 @@ function openDriveScanFolder(folder) {
 
 // 툴바 버튼: 새로고침(refresh=1 강제 재스캔) / 미리보기에서 카드 목록으로 뒤로가기.
 $("#btnDriveScanRefresh").addEventListener("click", () => loadDriveScan(true));
+
+// ── 연결 진단 ────────────────────────────────────────────────────────────
+// 왜 필요한가: 드라이브가 안 보일 때 원인이 ①폴더 공유 끊김 ②루트 폴더 ID 오지정
+//   ③정말 패턴이 없음 중 무엇인지 화면만으로는 구분할 수 없었다(전부 "패턴 폴더 없음"으로
+//   보였다). 서버 점검표(GET /api/drive/diag)를 그대로 펼쳐, 원인과 조치를 한 화면에 보여준다.
+// level(ok/warn/error) → 기존 .alert 톤(pass/warn/fail)과 아이콘 매핑.
+const DIAG_TONE = { ok: ["pass", "check_circle"], warn: ["warn", "warning"], error: ["fail", "error"] };
+
+function fetchDriveDiag() {
+  return apiFetch("/api/drive/diag").then((r) =>
+    r.json().catch(() => ({})).then((body) => ({ ok: r.ok, status: r.status, body })));
+}
+
+// 점검 항목 1줄. title/detail 은 서버 문자열이므로 반드시 driveEsc 로 이스케이프한다.
+function driveDiagRowHtml(c) {
+  const tone = DIAG_TONE[c && c.level] || DIAG_TONE.warn;
+  return `<div class="alert alert--${tone[0]}">
+    <span class="material-symbols-outlined alert__icon">${tone[1]}</span>
+    <div><div class="alert__title">${driveEsc(c && c.title)}</div>
+    <div class="alert__body">${driveEsc(c && c.detail)}</div></div>
+  </div>`;
+}
+
+// 진단 패널 닫기(탭 전환·드라이브 화면 재진입 시에도 호출해 잔상 제거).
+function hideDriveDiag() {
+  const panel = $("#driveDiagPanel");
+  if (!panel) return;
+  panel.classList.add("hidden");
+  panel.innerHTML = "";
+}
+
+function renderDriveDiag(body) {
+  const panel = $("#driveDiagPanel");
+  if (!panel) return;
+
+  // 미설정은 기존 톤과 동일하게 안내만(점검표 없음).
+  if (body && body.configured === false) {
+    panel.innerHTML = `<div class="alert alert--info">
+      <span class="material-symbols-outlined alert__icon">cloud_off</span>
+      <div><div class="alert__title">드라이브 연동 필요</div>
+      <div class="alert__body">${driveEsc(body.message || "")}</div></div>
+    </div>`;
+    panel.classList.remove("hidden");
+    return;
+  }
+
+  const checks = (body && body.checks) || [];
+  const root = (body && body.root) || {};
+  // 요약 줄: 공유 대상 계정 · 루트 폴더 이름 · 이번 진단에 걸린 시간(= 스캔 1회 비용).
+  const bits = [];
+  if (body && body.service_account_email) bits.push("서비스계정 " + driveEsc(body.service_account_email));
+  if (root.accessible && root.name) bits.push("루트 “" + driveEsc(root.name) + "”");
+  // 1초 미만은 "0.0초"로 뭉개지 말고 ms 그대로(빠른 것도 정보다).
+  if (body && typeof body.elapsed_ms === "number") {
+    bits.push("진단 " + (body.elapsed_ms < 1000 ? body.elapsed_ms + "ms" : (body.elapsed_ms / 1000).toFixed(1) + "초"));
+  }
+
+  panel.innerHTML = `<div class="stack-3" style="margin-bottom:12px;">
+      <div class="row-between">
+        <div class="muted" style="font:var(--text-sm);">연결 진단 결과</div>
+        <button class="linkbtn" id="btnDriveDiagClose" style="color:var(--text-muted);"><span class="material-symbols-outlined">close</span>닫기</button>
+      </div>
+      ${checks.map(driveDiagRowHtml).join("")}
+      ${bits.length ? `<div class="muted" style="font:var(--text-sm);">${bits.join(" · ")}</div>` : ""}
+    </div>`;
+  panel.classList.remove("hidden");
+  const close = panel.querySelector("#btnDriveDiagClose");
+  if (close) close.addEventListener("click", hideDriveDiag);
+}
+
+function loadDriveDiag() {
+  const panel = $("#driveDiagPanel");
+  const btn = $("#btnDriveDiag");
+  if (!panel) return;
+  if (btn) btn.disabled = true;            // 재진입 가드(진단은 수 초 걸릴 수 있음)
+  panel.classList.remove("hidden");
+  panel.innerHTML = `<div class="dtree__loading" style="margin-bottom:12px;"><span class="spinner"></span>연결을 점검하는 중… (수 초 걸릴 수 있어요)</div>`;
+  fetchDriveDiag()
+    .then((res) => {
+      // 진단은 서버가 '실패도 결과로' 200 에 담아 준다. 403/네트워크만 여기서 처리.
+      if (res.status === 403) {
+        panel.innerHTML = `<div class="alert alert--warn">
+          <span class="material-symbols-outlined alert__icon">lock</span>
+          <div><div class="alert__title">권한 필요</div>
+          <div class="alert__body">연결 진단은 관리자(admin) 계정만 실행할 수 있습니다.</div></div>
+        </div>`;
+        return;
+      }
+      if (!res.ok) {
+        panel.innerHTML = `<div class="alert alert--fail">
+          <span class="material-symbols-outlined alert__icon">error</span>
+          <div><div class="alert__title">진단을 실행하지 못했습니다</div>
+          <div class="alert__body">${driveEsc((res.body && res.body.error) || ("오류 " + res.status))}</div></div>
+        </div>`;
+        return;
+      }
+      renderDriveDiag(res.body);
+    })
+    .catch(() => {
+      panel.innerHTML = `<div class="alert alert--fail">
+        <span class="material-symbols-outlined alert__icon">error</span>
+        <div><div class="alert__title">진단을 실행하지 못했습니다</div>
+        <div class="alert__body">네트워크 상태를 확인하고 다시 시도하세요.</div></div>
+      </div>`;
+    })
+    .then(() => { if (btn) btn.disabled = false; });
+}
+
+$("#btnDriveDiag").addEventListener("click", loadDriveDiag);
 $("#btnDriveScanBackToList").addEventListener("click", () => {
   driveSelectedFolder = null;   // 미리보기 취소 → 선택 해제(대기 중 응답도 경쟁 가드로 버려짐)
   driveScanShowList();

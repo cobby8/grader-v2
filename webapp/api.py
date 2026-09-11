@@ -1794,9 +1794,60 @@ def _scope_path(pid: str, fmap: Dict[str, Dict[str, Any]], root: str) -> Any:
     return False, []  # 상한까지 못 만나면 스코프 밖으로 간주.
 
 
-def _build_drive_scan() -> Dict[str, Any]:
+def _drive_share_hint() -> str:
+    """'어디에 공유하면 되는지' 한 문장. 서비스계정 이메일을 못 읽으면 일반 안내로 대체.
+
+    진단 메시지에 이 문장을 붙이면, 화면을 본 관리자가 곧바로 그 계정에 폴더를 공유해
+    스스로 복구할 수 있다(원인 표시 → 조치가 한 화면에서 끝난다).
+    """
+    try:
+        email = gdrive.service_account_email()
+    except Exception:
+        email = ""   # 키를 못 읽는 상황이면 이메일 없이 일반 안내만(진단이 죽지 않게).
+    if email:
+        return f"서비스계정 {email} 에 이 폴더가 공유되어 있는지 확인하세요."
+    return "서비스계정에 이 폴더가 공유되어 있는지 확인하세요."
+
+
+def _assert_root_visible(root: str) -> None:
+    """스캔 전에 '패턴 루트 폴더가 실제로 보이는지' 확인하고, 안 보이면 명확히 실패시킨다.
+
+    왜 필요한가(★조용한 실패 방지★):
+      _build_drive_scan 의 벌크 2쿼리는 '서비스계정에게 보이는 것'만 돌려준다. 그래서 루트
+      폴더 공유가 끊기면 예외 하나 없이 **빈 목록**이 나오고, 화면에는 그냥 "패턴 폴더를
+      찾지 못했습니다"로만 보인다 — 권한이 끊긴 건지, 정말 패턴이 없는 건지 구분이 안 된다.
+      (Phase B 교훈과 같은 함정: degrade·빈결과가 실패를 삼킨다.)
+      → 스캔 직전에 루트를 한 번 조회해서, 못 보면 '왜'와 '어떻게 고치는지'를 담아 던진다.
+
+    통과 조건: 루트 ID 로 메타 조회가 되고, 그게 '폴더'여야 한다.
+    실패 시 DriveError → 호출부가 502 + 메시지로 내려보낸다(화면에 그대로 표시됨).
+    DriveConfigError(키 문제)는 설정 오류이므로 그대로 전파한다(500 대상).
+    """
+    try:
+        meta = gdrive.get_file_meta(root)
+    except gdrive.DriveConfigError:
+        raise   # 키/자격증명 문제는 '설정 오류' 계층 그대로 유지(500).
+    except Exception as exc:
+        raise gdrive.DriveError(
+            f"패턴 루트 폴더(ID: {root})에 접근할 수 없습니다. {_drive_share_hint()}"
+            f" (원인: {exc})"
+        ) from exc
+    if not meta.get("isFolder"):
+        raise gdrive.DriveError(
+            f"GDRIVE_ROOT_FOLDER_ID(ID: {root})가 폴더가 아닙니다"
+            f"(이름: {meta.get('name')}). 패턴 라이브러리 폴더의 ID인지 확인하세요."
+        )
+
+
+def _build_drive_scan(
+    folders: Optional[List[Dict[str, Any]]] = None,
+    files: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     """드라이브 전체를 벌크 2쿼리로 훑어 '등록 가능한 패턴 폴더'를 조립한다.
 
+    folders/files : 이미 받아 둔 벌크 조회 결과가 있으면 넘겨 재사용한다(기본 None=여기서 조회).
+                    진단(/drive/diag)이 같은 결과로 '총 개수'와 '패턴 폴더 수'를 함께 계산할 때
+                    쓴다 — 넘기지 않으면 기존과 동일하게 직접 2쿼리를 돈다(동작 변화 0).
     반환: {"count": int, "folders": [{id, name, path, size_count, sizes}]}
           (cached/scanned_at 은 호출부가 캐시 정보로 덧붙인다.)
     gdrive 예외(DriveConfigError/DriveError)는 호출부가 처리하도록 그대로 올린다.
@@ -1804,7 +1855,7 @@ def _build_drive_scan() -> Dict[str, Any]:
     root = gdrive.root_folder_id()
 
     # 1) 전 폴더 → 'id → {name, parent}' 맵. 경로/루트 소속 계산의 뼈대.
-    folders = gdrive.list_all_folders()
+    folders = gdrive.list_all_folders() if folders is None else folders
     fmap: Dict[str, Dict[str, Any]] = {}
     for fo in folders:
         fid = fo.get("id")
@@ -1817,7 +1868,7 @@ def _build_drive_scan() -> Dict[str, Any]:
         }
 
     # 2) 전 파일 → 확장자/임시 필터 후, '부모 폴더 id' 별로 파일명을 모은다(폴더당 재호출 없이).
-    files = gdrive.list_all_pattern_files()
+    files = gdrive.list_all_pattern_files() if files is None else files
     by_parent: Dict[str, List[str]] = {}
     for fl in files:
         name = fl.get("name") or ""
@@ -1896,6 +1947,8 @@ def drive_scan(refresh: bool = False) -> JSONResponse:
             entry = _SCAN_CACHE.get(root)
             cached = bool(entry) and (not refresh) and (now - entry["ts"] < _SCAN_CACHE_TTL)
             if not cached:
+                # ★스캔 전에 루트 가시성부터★ — 안 보이면 '빈 목록'이 아니라 명확한 실패로.
+                _assert_root_visible(root)
                 data = _build_drive_scan()  # 느린 벌크 스캔(락 안 = 동시 중복 방지).
                 entry = {"result": data, "ts": time.time()}
                 _SCAN_CACHE[root] = entry
@@ -1907,10 +1960,158 @@ def drive_scan(refresh: bool = False) -> JSONResponse:
         return JSONResponse(status_code=502, content={"error": f"Drive 접근 실패: {e}"})
 
     data = entry["result"]
-    return JSONResponse(content={
+    payload: Dict[str, Any] = {
         "configured": True,
         "cached": cached,
         "scanned_at": entry["ts"],
         "count": data["count"],
         "folders": data["folders"],
-    })
+    }
+    if not data["count"]:
+        # 여기까지 왔다 = 루트는 보였다(_assert_root_visible 통과). 그러니 0건의 원인은
+        # '권한'이 아니라 '루트 아래에 사이즈 파일이 든 폴더가 없음'이다 — 그렇게 안내한다.
+        payload["hint"] = (
+            "루트 폴더는 정상적으로 보입니다. 다만 그 안에서 파일명에 사이즈(XL·2XS 등)가 든"
+            " 폴더를 찾지 못했습니다. GDRIVE_ROOT_FOLDER_ID 가 패턴 라이브러리 폴더를"
+            " 가리키는지 [연결 진단]에서 확인하세요."
+        )
+    return JSONResponse(content=payload)
+
+
+# ── 연결 진단(관리자) ─────────────────────────────────────────────────────
+# 파일 총량이 이 수를 넘으면 '서비스계정이 필요 이상으로 넓게 보고 있다'고 경고한다.
+#   근거: 자동 스캔은 '보이는 파일 전부'를 훑는 구조라, 공유 범위가 넓어질수록 그대로 느려진다.
+#   (패턴 라이브러리만 공유된 정상 상태면 보통 수백~천 단위에 머문다.)
+_DIAG_FILES_WARN = 3000
+
+
+@router.get("/drive/diag", dependencies=[Depends(admin_required)])
+def drive_diag() -> JSONResponse:
+    """드라이브 연동 '건강검진' — 고장 원인 판별에 필요한 사실을 한 번에 모아 돌려준다.
+
+    비유: 창고 문이 안 열릴 때 ①로봇 사번이 뭔지 ②그 사번으로 창고 문이 열리는지
+    ③문 안에 물건이 있는지 ④로봇이 창고를 몇 개나 보고 있는지를 한 장의 점검표로 뽑아 준다.
+
+    왜 필요한가: 지금까지 드라이브가 안 보이면 화면엔 "패턴 폴더 없음"만 떴다. 원인이
+    권한인지·루트 ID 오지정인지·정말 패턴이 없는 건지 구분할 방법이 없었다. 이 엔드포인트가
+    그 구분을 담당한다(고장 안 났을 때도 '정상'을 확인해 주는 용도).
+
+    반환(항상 200 — 진단이므로 실패도 '결과'로 담는다. 미설정만 기존 규약 payload):
+      · service_account_email : 공유 대상 계정(개인키는 절대 포함 안 함)
+      · root      : {id, accessible, name, is_folder, trashed, drive_id, error?}
+      · visibility: {folders_total, files_total, folders_in_scope, error?}  ← 공유 범위=스캔 비용
+      · scan      : {pattern_folders, error?}                                ← 실제 발견 개수
+      · elapsed_ms: 이번 진단에 걸린 시간(≈ 자동 찾기 1회 스캔 비용)
+      · checks    : [{level: ok|warn|error, title, detail}] ← 사람이 읽는 점검표(화면 표시용)
+    """
+    if not gdrive.is_configured():
+        return JSONResponse(content=_drive_not_configured_payload())
+
+    started = time.time()
+    out: Dict[str, Any] = {"configured": True}
+    checks: List[Dict[str, str]] = []
+
+    # 1) 서비스계정 이메일 — '이 계정에 폴더를 공유하면 된다'는 답 그 자체.
+    try:
+        sa_email = gdrive.service_account_email()
+    except Exception as exc:
+        sa_email = ""
+        out["service_account_error"] = str(exc)
+    out["service_account_email"] = sa_email
+    if sa_email:
+        checks.append({"level": "ok", "title": "서비스계정 확인",
+                       "detail": f"{sa_email} 로 드라이브를 읽습니다. 패턴 폴더는 이 계정에 공유돼 있어야 합니다."})
+    else:
+        checks.append({"level": "error", "title": "서비스계정 키를 읽을 수 없음",
+                       "detail": "환경변수 GDRIVE_SA_JSON 값(원본 JSON 또는 base64)을 확인하세요."})
+
+    # 2) 루트 폴더가 실제로 보이는가 + 어떤 폴더인가.
+    #    이름까지 보여 주는 이유: ID 는 맞는데 '엉뚱한 폴더'를 가리키는 오지정도 여기서 걸린다.
+    root_id = gdrive.root_folder_id()
+    root: Dict[str, Any] = {"id": root_id, "accessible": False}
+    try:
+        meta = gdrive.get_file_meta(root_id, extra_fields="driveId, trashed")
+        root.update({
+            "accessible": True,
+            "name": meta.get("name"),
+            "is_folder": bool(meta.get("isFolder")),
+            "trashed": bool(meta.get("trashed")),
+            "drive_id": meta.get("driveId"),
+        })
+    except Exception as exc:
+        root["error"] = str(exc)
+    out["root"] = root
+
+    if not root.get("accessible"):
+        checks.append({"level": "error", "title": "루트 폴더에 접근할 수 없음",
+                       "detail": f"ID {root_id} 를 열 수 없습니다. {_drive_share_hint()}"})
+    elif not root.get("is_folder"):
+        checks.append({"level": "error", "title": "루트 ID 가 폴더가 아님",
+                       "detail": f"'{root.get('name')}' 은(는) 폴더가 아닙니다. 패턴 라이브러리 폴더의 ID 를 넣으세요."})
+    elif root.get("trashed"):
+        checks.append({"level": "error", "title": "루트 폴더가 휴지통에 있음",
+                       "detail": f"'{root.get('name')}' 이 휴지통에 있습니다. 복원하거나 새 폴더 ID 로 바꾸세요."})
+    else:
+        checks.append({"level": "ok", "title": "루트 폴더 정상",
+                       "detail": f"'{root.get('name')}' 폴더를 읽을 수 있습니다."})
+
+    # 3) 공유 범위(=스캔 비용) + 실제 패턴 폴더 수. 벌크 2쿼리를 한 번만 돌려 둘 다 계산한다.
+    visibility: Dict[str, Any] = {}
+    scan_info: Dict[str, Any] = {}
+    try:
+        folders = gdrive.list_all_folders()
+        files = gdrive.list_all_pattern_files()
+        visibility["folders_total"] = len(folders)
+        visibility["files_total"] = len(files)
+
+        # 루트 자손 폴더 수 — 전체 대비 이 비율이 낮으면 '루트 밖'까지 넓게 보고 있다는 뜻.
+        fmap: Dict[str, Dict[str, Any]] = {}
+        for fo in folders:
+            fid = fo.get("id")
+            if not fid:
+                continue
+            parents = fo.get("parents") or []
+            fmap[fid] = {"name": fo.get("name") or "", "parent": parents[0] if parents else None}
+        # 루트 자신은 빼고 센다(지표 이름 그대로 '루트 아래' 폴더 수).
+        in_scope = sum(
+            1 for fid in fmap
+            if fid != root_id and _scope_path(fid, fmap, root_id)[0]
+        )
+        visibility["folders_in_scope"] = in_scope
+
+        # 같은 벌크 결과를 재사용해 패턴 폴더 수를 센다(추가 API 호출 0).
+        scan_info["pattern_folders"] = _build_drive_scan(folders=folders, files=files)["count"]
+    except Exception as exc:
+        visibility["error"] = str(exc)
+        scan_info["error"] = str(exc)
+    out["visibility"] = visibility
+    out["scan"] = scan_info
+
+    # 4) 점검표 마무리 — 발견 개수와 공유 범위를 사람이 읽을 문장으로.
+    # ★루트가 안 보이면 '발견 개수'는 의미가 없다★ — 루트 기준으로 거른 값이라 0 이거나
+    #   신뢰할 수 없다. 그 상태에서 "N개 발견 ✅"을 같이 띄우면 위의 error 와 모순돼 보이므로
+    #   아예 넣지 않는다(원인은 이미 루트 항목이 설명한다).
+    found = scan_info.get("pattern_folders") if root.get("accessible") else None
+    if isinstance(found, int) and found > 0:
+        checks.append({"level": "ok", "title": f"패턴 폴더 {found}개 발견",
+                       "detail": "자동 찾기에서 이 개수만큼 카드가 보이면 정상입니다."})
+    elif isinstance(found, int):
+        checks.append({"level": "warn", "title": "패턴 폴더 0개",
+                       "detail": "루트 아래에 파일명 사이즈(XL·2XS 등)가 든 폴더가 없습니다. 루트 폴더 ID 가 패턴 라이브러리를 가리키는지 확인하세요."})
+
+    files_total = visibility.get("files_total")
+    in_scope = visibility.get("folders_in_scope")
+    folders_total = visibility.get("folders_total")
+    if isinstance(files_total, int) and files_total >= _DIAG_FILES_WARN:
+        ratio = ""
+        if isinstance(in_scope, int) and isinstance(folders_total, int) and folders_total:
+            ratio = f" (루트 자손 폴더 {in_scope}/{folders_total}개)"
+        checks.append({"level": "warn", "title": "스캔 범위가 넓습니다",
+                       "detail": f"서비스계정에 보이는 파일이 {files_total}개입니다{ratio}. 패턴 폴더만 공유하면 자동 찾기가 빨라집니다."})
+    elif isinstance(files_total, int):
+        checks.append({"level": "ok", "title": "스캔 범위 적정",
+                       "detail": f"서비스계정에 보이는 파일 {files_total}개 — 자동 찾기 속도에 무리가 없습니다."})
+
+    out["checks"] = checks
+    out["elapsed_ms"] = int((time.time() - started) * 1000)
+    return JSONResponse(content=out)
