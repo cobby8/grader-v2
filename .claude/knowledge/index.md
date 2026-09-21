@@ -4,12 +4,13 @@
 | 파일 | 항목 수 | 최종 업데이트 |
 |------|--------|------------|
 | architecture.md | 9 | 2026-07-09 |
-| errors.md | 16 | 2026-07-09 |
+| errors.md | 17 | 2026-09-22 |
 | conventions.md | 5 | 2026-07-06 |
 | decisions.md | 17 | 2026-07-09 |
 | lessons.md | 2 | 2026-07-09 |
 
 ## 최근 추가된 지식 (최근 5건)
+- [2026-09-22] errors: `_find_job_dir` 가 job_id[:6] 부분일치로 폴더를 찾아 폴더명(`web_26…`)을 넣으면 다른 달 작업 ZIP 이 나갔다 → 폴더명 정확일치 우선 + `_<id6>` 접미만
 - [2026-07-09] decisions+architecture: [Phase B] 등록패턴 파일 영속화 — Render 임시디스크 재배포 시 소실되는 data/patterns/{id}/를 Supabase Storage에 zip 백업/복원. 핵심=SERVICE_ROLE 없이 **요청자 admin JWT를 백엔드가 Storage REST에 릴레이**(등록=admin_required라 헤더에 admin 토큰). 등록직후 자동백업+startup 자동복원(로컬없는것만, zip-slip 방어). 버킷 pattern-presets(private)+RLS(읽기 anon개방·쓰기 admin). 1·2단계 구현·커밋(storage_backup.py 모듈+SQL가이드), 3·4단계(api/main 결선) 대기
 - [2026-07-07] decisions: 패턴 폴더 자동 스캔 — 재귀 대신 전폴더+전파일 각 1쿼리로 훑어 폴더맵 조립·부모별 그룹핑·사이즈파서로 패턴폴더 선별. GET /drive/scan(TTL캐시·루트스코프·경로 breadcrumb). 스캔=발견전용, 등록은 기존 정확경로(/patternfiles·/from-drive) 재사용→근사오차 무오염. 프론트 [자동찾기|트리] 탭+카드그리드, renderDrivePreview panel 인자화+activeDrivePanel로 입력칸 중복방어. Drive `name contains`는 prefix매칭이라 누락위험→전파일 fetch+endswith
 - [2026-07-06] errors: Drive 동시호출 SSL record layer failure — google-api-python-client httplib2는 스레드 비세이프. 전역 service를 FastAPI 스레드풀이 공유→동시 execute 충돌. 해결=스레드로컬 service + 전송에러 리셋 재시도(HttpError 제외). 재시도 래퍼로 감쌀 함수는 config검증(DriveConfigError)을 try 밖 선호출로 분리해 에러계층 보존
