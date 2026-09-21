@@ -273,6 +273,9 @@
         </div>
         <!-- 즐겨찾기/카테고리 필터 바(신규) — pattern_meta(Supabase) 기반. JS(pmBuildFilterBar)가 채운다.
              Supabase 미설정/로컬이면 이름 파생 카테고리로 degrade(별표는 없음). -->
+        <!-- 백업 상태(TOP7 #7, 관리자만): GET /api/patterns/backup-status 결과. JS(pmBackupStatusRender)가 채운다.
+             목록 표시를 막지 않도록 목록이 뜬 뒤에 지연 호출한다. 비관리자·미로드 땐 hidden. -->
+        <div id="pmBackupStatus" class="hidden"></div>
         <div id="pmFilterBar" class="pm-filterbar hidden"></div>
         <div class="grid-3" id="patternGrid"></div>
       </section>
@@ -312,6 +315,15 @@
         <!-- Substep B · 디자인↔조각 매핑 (신규) -->
         <div id="subB" class="hidden" style="display:grid; grid-template-columns:340px 1fr; gap:24px; align-items:start;">
           <div class="stack-5">
+            <!-- 정직한 안내(TOP7 #4): 이 편집기의 좌표는 아직 서버로 전송되지 않는다(savePattern 은 이름·기준사이즈·파일만 보냄).
+                 실제 조각 영역은 서버가 페이지 균등분할로 추정한다. 좌표 전송은 후속 작업. -->
+            <div class="alert alert--warn" data-honest-banner>
+              <span class="material-symbols-outlined alert__icon">info</span>
+              <div>
+                <div class="alert__title">이 화면의 위치 조정은 미리보기용이에요</div>
+                <div class="alert__body">실제 조각 위치는 서버가 자동 추정하며, 정밀 조정은 등록 후 preset.json(design_region_pt)에서 합니다.</div>
+              </div>
+            </div>
             <div>
               <div class="field__label" style="margin-bottom:4px;">조각 → 디자인 영역</div>
               <div class="section-sub">조각을 고른 뒤 오른쪽 디자인 위에 드래그해 그 조각이 쓸 영역을 그립니다.</div>
@@ -341,16 +353,25 @@
               <span class="origin-tag" style="left:6px; bottom:6px;">pt 원점 (0,0) · 좌하단</span>
               <span class="origin-tag" style="left:6px; top:6px;">이미지 원점 · 좌상단</span>
             </div>
-            <div class="note" style="margin-top:8px;"><span class="material-symbols-outlined">swap_vert</span><span id="mapHint">좌표는 디자인 페이지 pt(좌하단 원점)로 환산되어 저장됩니다. 화면은 좌상단 원점이라 y축이 뒤집힙니다.</span></div>
+            <div class="note" style="margin-top:8px;"><span class="material-symbols-outlined">swap_vert</span><span id="mapHint">미리보기용 영역입니다(저장되지 않음). 실제 위치는 서버가 자동 추정하며 preset.json 에서 조정합니다.</span></div>
           </div>
         </div>
 
         <!-- Substep C · 배번 / 이름 영역 (기존) -->
         <div id="subC" class="hidden" style="display:grid; grid-template-columns:340px 1fr; gap:24px; align-items:start;">
           <div class="stack-5">
+            <!-- 정직한 안내(TOP7 #4): 드래그로 맞춘 번호·이름 영역도 서버로 전송되지 않는다.
+                 실제 영역은 '완성본 1장' 을 올리면 서버가 자동 추출(reference)하고, 그 외엔 preset.json 에서 조정한다. -->
+            <div class="alert alert--warn" data-honest-banner>
+              <span class="material-symbols-outlined alert__icon">info</span>
+              <div>
+                <div class="alert__title">이 화면의 위치 조정은 미리보기용이에요</div>
+                <div class="alert__body">실제 번호·이름 위치는 완성본에서 서버가 자동 추출하며, 정밀 조정은 등록 후 preset.json 에서 합니다.</div>
+              </div>
+            </div>
             <div>
               <div class="field__label" style="margin-bottom:4px;">배번 · 이름 위치</div>
-              <div class="section-sub">완성본 1장을 올리면 위치·크기·자간을 자동 인식합니다. 미세조정은 직접 드래그로.</div>
+              <div class="section-sub">완성본 1장을 올리면 위치·크기·자간을 자동 인식해 저장합니다. 직접 드래그는 미리보기 전용(저장 안 됨)입니다.</div>
             </div>
             <div class="seg" id="methodTabs" style="width:100%;">
               <button data-method="auto" class="is-active" style="flex:1;">완성본에서 자동 추출 (권장)</button>
@@ -377,7 +398,7 @@
               </div>
               <div class="coord" id="optRel">rel_bbox —</div>
             </div>
-            <div class="note"><span class="material-symbols-outlined">drag_indicator</span><span id="rgnHint">영역을 끌어 옮기거나 모서리로 크기를 조절하세요.</span></div>
+            <div class="note"><span class="material-symbols-outlined">drag_indicator</span><span id="rgnHint">영역을 끌어 옮기거나 모서리로 크기를 조절하세요. (미리보기 전용 — 이 값은 저장되지 않아요)</span></div>
             </div>
           </div>
           <div>
@@ -561,7 +582,10 @@ function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 function toast(tone, icon, title, body) {
   const t = document.createElement("div");
   t.className = "toast toast--" + tone;
-  t.innerHTML = `<span class="material-symbols-outlined toast__icon">${icon}</span><div><div class="toast__title">${title}</div><div class="toast__body">${body}</div></div>`;
+  // title/body 는 서버 응답(body.error)·파일명 등 외부값이 섞여 들어오므로 글자로만 보이게 이스케이프한다
+  //   (예전엔 innerHTML 에 그대로 넣어 <img onerror> 같은 HTML 이 실행될 수 있었다). icon 은 고정 문자열.
+  //   driveEsc 는 함수 선언이라 여기서 호출해도 된다(호이스팅).
+  t.innerHTML = `<span class="material-symbols-outlined toast__icon">${icon}</span><div><div class="toast__title">${driveEsc(title)}</div><div class="toast__body">${driveEsc(body)}</div></div>`;
   $("#toaster").appendChild(t);
   setTimeout(() => t.remove(), 3600);
 }
@@ -625,12 +649,13 @@ function renderPatternGrid() {
     <div style="padding:14px;">
       <div class="row-between" style="align-items:flex-start;">
         <div>
-          <div style="font:var(--text-body-strong); color:var(--text-strong);">${p.name}</div>
+          <div style="font:var(--text-body-strong); color:var(--text-strong);">${driveEsc(p.name)}</div>
           <div class="tnum" style="font:var(--text-caption); color:var(--text-muted); margin-top:3px;">${p.sizes.length ? `${p.sizes[0]} – ${p.sizes[p.sizes.length-1]} · ` : ""}${p.sizes.length}개 사이즈</div>
         </div>
         <div class="row" style="gap:2px;">
-          <button class="icon-btn icon-btn--sm" aria-label="수정"><span class="material-symbols-outlined">edit</span></button>
-          <button class="icon-btn icon-btn--sm icon-btn--danger" aria-label="삭제"><span class="material-symbols-outlined">delete</span></button>
+          <!-- 수정: 아직 기능이 없어 disabled + '준비 중'. 삭제: 관리자만(pmDecorateCard 가 권한에 따라 켜고 끈다. 기본은 꺼짐). -->
+          <button class="icon-btn icon-btn--sm" aria-label="수정" data-act="edit" disabled title="준비 중"><span class="material-symbols-outlined">edit</span></button>
+          <button class="icon-btn icon-btn--sm icon-btn--danger" aria-label="삭제" data-act="delete" data-name="${driveEsc(p.name)}" disabled title="관리자만 삭제할 수 있어요"><span class="material-symbols-outlined">delete</span></button>
         </div>
       </div>
     </div>
@@ -644,10 +669,51 @@ function renderPatternGrid() {
       location.href = "work.html";
     });
   });
-  // 수정/삭제 아이콘 버튼은 아직 동작이 없다. 다만 클릭이 카드(작업 이동)까지 번지지 않게만 막는다.
+  // 수정/삭제 아이콘: 클릭이 카드(작업 이동)까지 번지지 않게 막고, 삭제는 실제 삭제 흐름으로 잇는다.
+  //   (수정은 아직 기능이 없어 disabled — 클릭 자체가 안 온다.)
   grid.querySelectorAll(".icon-btn").forEach((btn) => {
-    btn.addEventListener("click", (e) => e.stopPropagation());
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (btn.dataset.act !== "delete" || btn.disabled) return;
+      const card = btn.closest("[data-pattern]");
+      if (card) deletePattern(card.dataset.pattern, btn.dataset.name || card.dataset.pattern, btn);
+    });
   });
+}
+
+// ── 패턴 삭제(TOP7 #3) ────────────────────────────────────────────────────────
+//   confirm → DELETE /api/patterns/{id} → 성공이면 목록 다시 로드 + 토스트.
+//   서버는 하드 삭제가 아니라 data/patterns/_trash/ 로 옮긴다(복구 가능). 다만 Storage 백업본은
+//   그대로라 재배포 때 되살아날 수 있어, 서버가 준 restore_warning 을 그대로 보여준다.
+let deleting = false;   // 이중 클릭 방어
+function deletePattern(id, name, btn) {
+  if (deleting) return;
+  // 표시 이름(preset_name)과 폴더 id 가 다르면 둘 다 보여 준다(복사본처럼 이름이 같은 패턴을 헷갈리지 않게).
+  const label = name && name !== id ? `'${name}' (${id})` : `'${id}'`;
+  if (!confirm(`${label} 패턴을 삭제할까요?\n(휴지통으로 옮겨져 서버에서 복구할 수 있어요)`)) return;
+  deleting = true;
+  if (btn) btn.disabled = true;
+  let gotResponse = false;
+  apiFetch(`/api/patterns/${encodeURIComponent(id)}`, { method: "DELETE" })
+    .then((r) => { gotResponse = true;
+      return r.json().catch(() => ({})).then((j) => ({ ok: r.ok, status: r.status, body: j || {} })); })
+    .then(({ ok, status, body }) => {
+      if (!ok || body.error) {
+        // 403/404/5xx → 등록 실패와 같은 한글 문구 헬퍼 재사용(문구만 '삭제' 로 바꿈).
+        toast("warn", "error", "패턴 삭제 실패", regFailMsg(status, body).replace("등록에 실패했어요", "삭제에 실패했어요"));
+        if (btn) btn.disabled = false;
+        return;
+      }
+      toast("pass", "delete", "패턴을 삭제했어요", `${name} · 휴지통(${body.trashed_to || "data/patterns/_trash"})으로 옮겼어요.`);
+      if (body.restore_warning) toast("warn", "cloud_sync", "참고", body.restore_warning);
+      loadPatternList();          // 목록 다시 로드(카드 사라짐). work.html 도 같은 API 라 자동 반영.
+      pmBackupStatusLoad();       // 창고에만 남은 백업이 있으면 상태에 표시된다.
+    })
+    .catch((e) => {
+      toast("warn", "error", "패턴 삭제 실패", !gotResponse ? REG_NET_FAIL_MSG : String((e && e.message) || e));
+      if (btn) btn.disabled = false;
+    })
+    .finally(() => { deleting = false; });
 }
 renderPatternGrid();   // 처음엔 '불러오는 중…'(도착 전)
 
@@ -854,7 +920,7 @@ function armPiece(id) {
   mapCanvas.classList.toggle("is-drawing", !!armedPiece);
   $("#mapHint").textContent = armedPiece
     ? `${PIECES.find((p) => p.id === armedPiece).name} 영역을 디자인 위에 드래그하세요.`
-    : "좌표는 디자인 페이지 pt(좌하단 원점)로 환산되어 저장됩니다. 화면은 좌상단 원점이라 y축이 뒤집힙니다.";
+    : "미리보기용 영역입니다(저장되지 않음). 실제 위치는 서버가 자동 추정하며 preset.json 에서 조정합니다.";   // 거짓 고지("pt로 환산되어 저장") 정정
   renderPieceList();
 }
 function drawPieceRegion(p, x, y, w, h) {
@@ -1243,7 +1309,8 @@ function savePattern() {
       const dis = (body.disabled_sizes || []).map((d) => d.name);
       const disMsg = dis.length ? ` · 비활성 ${dis.join(",")}` : "";
       const glyphMsg = body.glyph_source ? `글리프셋 ${glyphCount}자` : "기본폰트";
-      toast("pass", "check_circle", "패턴이 저장되었습니다",
+      // 문구 정직화(TOP7 #4): 화면에서 그린 조각 영역은 전송되지 않으므로 "위치는 자동 추정" 을 명시한다.
+      toast("pass", "check_circle", "패턴이 등록됐어요 (위치는 자동 추정)",
         `${body.pattern_id} · 조각 ${body.pieces} · 사이즈 ${(body.active_sizes||[]).length}개 · ${glyphMsg}${disMsg}`);
 
       // 경고가 있으면 안내(부분 실패 등).
@@ -1877,7 +1944,7 @@ function registerFromDrive() {
       // (c) 성공(2xx dict) — 등록된 패턴 정보를 성공 토스트로. (savePattern 성공 토스트와 동일 톤)
       const glyphMsg = body.glyph_source ? "글리프셋" : "기본폰트";
       const sizeCount = (body.active_sizes || []).length;
-      toast("pass", "check_circle", "패턴이 등록되었습니다",
+      toast("pass", "check_circle", "패턴이 등록됐어요 (위치는 자동 추정)",
         `${body.pattern_id} · 조각 ${body.pieces} · 사이즈 ${sizeCount}개 · ${glyphMsg}`);
 
       // ★자동분류 저장★: 드라이브 경로 최상위 폴더(옷 종류)를 카테고리로 pattern_meta 에 upsert.
@@ -2114,6 +2181,7 @@ const PM_NEW = "__new__";        // 관리자 카테고리 select 의 '직접 �
 // 상태(모두 pm 접두로 기존 전역과 충돌 방지)
 let pmSupaClient;                 // undefined=아직 시도 안 함 · null=불가(degrade) · object=클라이언트
 let pmAdmin = false;             // 관리자 여부(별표 토글·카테고리 변경 노출 게이트)
+let pmAuthRequired = true;       // 서버 인증이 켜져 있는가(false=로컬 무인증 → 서버 admin_required 도 통과하므로 삭제·백업 UI 를 연다)
 let pmMetaMap = {};              // { pattern_id: {is_favorite, category} }
 let pmActiveCat = PM_ALL;        // 선택된 카테고리 필터
 let pmFavOnly = false;           // '즐겨찾기만 보기' 토글
@@ -2123,6 +2191,7 @@ async function pmGetSb() {
   if (pmSupaClient !== undefined) return pmSupaClient;   // 한 번만 생성(캐시)
   try {
     const cfg = await (await fetch("/api/public-config")).json();
+    pmAuthRequired = !!(cfg && cfg.auth_required);   // 삭제/백업 UI 게이트(pmCanManage)가 읽는다
     if (!cfg || !cfg.auth_required || !cfg.supabase_url || !cfg.supabase_publishable_key || !window.supabase) {
       pmSupaClient = null;                                // 로컬/미설정 → degrade
     } else {
@@ -2230,6 +2299,14 @@ function pmDecorateCard(card, editable) {
   card.dataset.pmFav = fav ? "1" : "0";
   // 이전에 덧댄 요소 제거(재렌더 시 중복 방지)
   card.querySelectorAll(".pm-added").forEach((el) => el.remove());
+
+  // 0) 삭제 아이콘 게이트(TOP7 #3): 관리자 또는 로컬 무인증일 때만 켠다. 그 외엔 disabled + '관리자만'.
+  const delBtn = card.querySelector('[data-act="delete"]');
+  if (delBtn) {
+    const can = pmCanManage();
+    delBtn.disabled = !can;
+    delBtn.title = can ? "패턴 삭제(휴지통으로 이동)" : "관리자만 삭제할 수 있어요";
+  }
 
   // 1) 별표(좌상단) — 이미지 영역(첫 자식 div)에 절대배치
   const imgArea = card.children[0];
@@ -2410,13 +2487,86 @@ function pmRefreshMeta() { pmLoadMeta().then((m) => { pmMetaMap = m; pmAfterRend
 const pmOrigRenderPatternGrid = renderPatternGrid;
 renderPatternGrid = function () { pmOrigRenderPatternGrid.apply(this, arguments); pmAfterRender(); };
 const pmOrigReloadPatterns = reloadPatterns;
-reloadPatterns = function () { pmOrigReloadPatterns.apply(this, arguments); pmRefreshMeta(); };
+reloadPatterns = function () { pmOrigReloadPatterns.apply(this, arguments); pmRefreshMeta(); pmBackupStatusLoad(); };
 
-// 초기화: 관리자 여부 + 메타 로드 → 첫 렌더 덧대기.
+// 삭제·백업 UI 를 열어도 되는가: 관리자이거나, 인증이 꺼진 로컬(서버 admin_required 도 통과)이면 true.
+function pmCanManage() { return pmAdmin || !pmAuthRequired; }
+
+// ── 백업 상태(TOP7 #7, 관리자만) ─────────────────────────────────────────────
+//   GET /api/patterns/backup-status 를 목록이 뜬 '뒤' 에 부른다(느린 창고 조회가 목록을 막지 않게).
+//   미설정 → 한 줄 / 조회 실패 → 사유+다시 확인 / 정상 → 백업 안 된 패턴 목록 + "지금 백업" 버튼.
+let pmBackupTimer = null;
+function pmBackupStatusLoad(delayMs) {
+  if (!pmCanManage()) return;                       // 비관리자는 요청조차 안 보낸다(403 회피)
+  clearTimeout(pmBackupTimer);
+  pmBackupTimer = setTimeout(pmBackupStatusFetch, delayMs == null ? 600 : delayMs);
+}
+function pmBackupStatusFetch() {
+  const box = document.getElementById("pmBackupStatus");
+  if (!box) return;
+  apiFetch("/api/patterns/backup-status")
+    .then((r) => r.json().catch(() => ({})).then((j) => ({ ok: r.ok, status: r.status, body: j || {} })))
+    .then(({ ok, status, body }) => {
+      if (!ok) { pmBackupStatusRender({ ok: false, configured: true, reason: regFailMsg(status, body) }); return; }
+      pmBackupStatusRender(body);
+    })
+    .catch(() => pmBackupStatusRender({ ok: false, configured: true, reason: REG_NET_FAIL_MSG }));
+}
+function pmBackupStatusRender(st) {
+  const box = document.getElementById("pmBackupStatus");
+  if (!box) return;
+  box.classList.remove("hidden");
+  const retry = `<button type="button" class="btn btn--ghost btn--sm" data-bk-retry><span class="material-symbols-outlined">refresh</span>다시 확인</button>`;
+  if (!st || (st.ok === false && st.configured === false)) {
+    // 미설정: 한 줄만. (로컬은 디스크가 영속이라 정상 상태.)
+    box.innerHTML = `<div class="note"><span class="material-symbols-outlined">cloud_off</span>백업 미설정 — ${driveEsc((st && st.reason) || "Supabase Storage 가 설정되지 않았어요.")}</div>`;
+  } else if (st.ok === false) {
+    box.innerHTML = `<div class="alert alert--warn"><span class="material-symbols-outlined alert__icon">warning</span><div>
+        <div class="alert__title">백업 상태를 확인하지 못했어요</div>
+        <div class="alert__body">${driveEsc(st.reason || "")}</div>
+        <div style="margin-top:8px;">${retry}</div></div></div>`;
+  } else {
+    const missing = st.missing_backup || [];
+    const only = st.only_in_storage || [];
+    const backed = st.backed_up || [];
+    const onlyLine = only.length
+      ? `<div class="note" style="padding:0; margin-top:6px;"><span class="material-symbols-outlined">cloud_sync</span>창고에만 있는 백업 ${only.length}개(${driveEsc(only.join(", "))}) — 삭제한 패턴이면 재배포 때 되살아나요.</div>`
+      : "";
+    if (!missing.length) {
+      box.innerHTML = `<div class="alert alert--pass"><span class="material-symbols-outlined alert__icon">cloud_done</span><div>
+          <div class="alert__title">백업 상태: 패턴 ${backed.length}개 모두 백업됨</div>${onlyLine}</div></div>`;
+    } else {
+      const rows = missing.map((id) => `<div class="row-between" style="margin-top:6px;"><span>${driveEsc(id)}</span>
+          <button type="button" class="btn btn--ghost btn--sm" data-bk-now="${driveEsc(id)}"><span class="material-symbols-outlined">cloud_upload</span>지금 백업</button></div>`).join("");
+      box.innerHTML = `<div class="alert alert--warn"><span class="material-symbols-outlined alert__icon">cloud_off</span><div style="flex:1;">
+          <div class="alert__title">백업 안 된 패턴 ${missing.length}개 — 재배포 시 사라질 수 있어요</div>
+          <div class="alert__body">백업됨 ${backed.length}개 · 안 됨 ${missing.length}개</div>${rows}${onlyLine}
+          <div style="margin-top:8px;">${retry}</div></div></div>`;
+    }
+  }
+  const rb = box.querySelector("[data-bk-retry]");
+  if (rb) rb.addEventListener("click", () => { rb.disabled = true; pmBackupStatusLoad(0); });
+  box.querySelectorAll("[data-bk-now]").forEach((b) => b.addEventListener("click", () => pmBackupNow(b.dataset.bkNow, b)));
+}
+// "지금 백업": POST /api/patterns/{id}/backup → 결과 토스트 → 상태 다시 확인.
+function pmBackupNow(id, btn) {
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="material-symbols-outlined">hourglass_top</span>백업 중…'; }
+  apiFetch(`/api/patterns/${encodeURIComponent(id)}/backup`, { method: "POST" })
+    .then((r) => r.json().catch(() => ({})).then((j) => ({ ok: r.ok, status: r.status, body: j || {} })))
+    .then(({ ok, status, body }) => {
+      if (ok && body.ok) toast("pass", "cloud_done", "백업 완료", `${id} 를 창고에 올렸어요.`);
+      else toast("warn", "error", "백업 실패", body.reason || regFailMsg(status, body));
+    })
+    .catch(() => toast("warn", "error", "백업 실패", REG_NET_FAIL_MSG))
+    .finally(() => pmBackupStatusLoad(0));
+}
+
+// 초기화: 관리자 여부 + 메타 로드 → 첫 렌더 덧대기 → (관리자면) 백업 상태를 뒤늦게 조회.
 async function pmInitPatterns() {
   try { pmAdmin = await pmIsAdmin(); } catch (e) { pmAdmin = false; }
   try { pmMetaMap = await pmLoadMeta(); } catch (e) { pmMetaMap = {}; }
   pmAfterRender();
+  pmBackupStatusLoad();
 }
 pmInitPatterns();
 </script>

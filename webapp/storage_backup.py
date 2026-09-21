@@ -273,6 +273,64 @@ def list_backups() -> List[str]:
     return names
 
 
+def list_backups_checked() -> dict:
+    """[신규 · TOP7 #7 백업 상태 가시화] 창고 zip 목록을 '실패 사유와 함께' 돌려준다.
+
+    왜 따로 두나: 기존 list_backups() 는 '실패' 와 '진짜 0개' 를 둘 다 빈 리스트로
+    돌려줘, 관리자 화면이 "백업이 하나도 없다" 와 "창고에 연결을 못 했다" 를 구분할
+    수 없다. 기존 함수(복원 경로가 쓰는 것)는 한 줄도 바꾸지 않고 이 함수만 덧붙인다.
+
+    반환: {"ok": bool, "names": [hex.zip, ...], "reason": None | 사유 문자열}
+      - 미설정(env 없음)   → ok=False, reason="미설정"
+      - 네트워크/HTTP 실패 → ok=False, reason 에 종류·status 만(키·토큰 절대 미포함)
+      - 성공               → ok=True, names 에 zip 이름들(0개일 수 있음)
+    """
+    base, publishable = _config()
+    if not base or not publishable:
+        return {"ok": False, "names": [], "reason": "Supabase Storage 미설정(env 없음)"}
+
+    url = f"{base}/storage/v1/object/list/{BUCKET}"
+    try:
+        resp = httpx.post(
+            url,
+            headers={
+                "apikey": publishable,
+                "Authorization": f"Bearer {publishable}",   # 읽기는 공개키(anon 역할)
+                "Content-Type": "application/json",
+            },
+            json={"prefix": "", "limit": 1000, "offset": 0},
+            timeout=_HTTP_TIMEOUT,
+        )
+    except Exception as e:
+        # 네트워크 단절·타임아웃. 예외 메시지에 URL 이 섞일 수 있어 종류 이름만 남긴다.
+        return {"ok": False, "names": [], "reason": f"창고 연결 실패(네트워크: {type(e).__name__})"}
+
+    if resp.status_code != 200:
+        return {"ok": False, "names": [], "reason": f"창고 목록 조회 실패(status {resp.status_code})"}
+
+    try:
+        items = resp.json() or []
+    except Exception:
+        return {"ok": False, "names": [], "reason": "창고 응답을 읽지 못함(JSON 아님)"}
+
+    names: List[str] = []
+    for it in items:
+        if isinstance(it, dict):
+            nm = it.get("name")
+            if isinstance(nm, str) and nm.lower().endswith(".zip"):
+                names.append(nm)
+    return {"ok": True, "names": names, "reason": None}
+
+
+def decode_backup_name(obj_name: str) -> Optional[str]:
+    """[신규] 창고 zip 이름(hex.zip)을 패턴 id 로 되돌리는 공개 래퍼(api.py 가 쓴다).
+
+    내부 함수 _decode_object_name 을 그대로 호출만 한다(동작 변경 없음). 우리 백업이
+    아닌 외부 파일이면 None.
+    """
+    return _decode_object_name(obj_name)
+
+
 # ══════════════════════════════════════════════════════════════════════════
 #  3) 복원(다운로드+해제) - 로컬에 없는 것만
 # ══════════════════════════════════════════════════════════════════════════

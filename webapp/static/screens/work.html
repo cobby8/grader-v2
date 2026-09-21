@@ -1570,7 +1570,8 @@ loadPatterns();     // 서버에서 실제 패턴을 받아 다시 그린다.
 function toast(tone, icon, title, body) {
   const t = document.createElement("div");
   t.className = "toast toast--" + tone;
-  t.innerHTML = `<span class="material-symbols-outlined toast__icon">${icon}</span><div><div class="toast__title">${title}</div><div class="toast__body">${body}</div></div>`;
+  // title/body 는 외부값(서버 오류문·파일명)이 올 수 있어 esc(위쪽 공통 헬퍼)로 글자로만 보이게 한다. icon 은 고정 문자열.
+  t.innerHTML = `<span class="material-symbols-outlined toast__icon">${icon}</span><div><div class="toast__title">${esc(title)}</div><div class="toast__body">${esc(body)}</div></div>`;
   document.getElementById("toaster").appendChild(t);
   setTimeout(() => t.remove(), 4000);   // 4초 후 자동 제거
 }

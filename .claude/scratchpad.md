@@ -76,6 +76,35 @@
 - #1·#2·#5·#6은 프론트 소규모(파일1~2개)=경량. #3은 DELETE 엔드포인트 신설(admin_required)=중간. #7은 관리자 UI+상태엔드포인트=중간.
 - 착수 순서 권장: #1(즉시·치명·쉬움) → #2·#5·#6(콜드스타트 3종 묶음) → #4(정직안내 먼저, 좌표전송은 후속) → #3 → #7.
 
+## 구현 기록 (developer) — [TOP7 #3·#4·#7 + toast XSS] 삭제·정직안내·백업상태 (2026-09-22, 미커밋)
+- **A toast 이스케이프**: patterns.html toast→driveEsc / work.html toast→esc(378행 기존 헬퍼). 호출부에 HTML 넣는 곳 grep 0건. `<img onerror>` 글자로만 표시 확인.
+- **B 정직 안내(#4)**: subB/subC 상단 `alert--warn` 배너("미리보기용·서버 자동 추정·preset.json 조정") + mapHint/rgnHint/section-sub 문구 정정 + 등록 성공 토스트 "패턴이 등록됐어요 (위치는 자동 추정)". 좌표 전송은 구현 안 함(후속). 1124행 "preset 에 저장했습니다"는 서버 area.used 일 때만 떠서 사실이라 유지.
+- **C 삭제(#3)**: api.py `DELETE /api/patterns/{id}`(admin) — `_resolve_pattern_dir`(storage_backup._sanitize_pattern_id 와 같은 기준+부모==data/patterns 검사) → `data/patterns/_trash/{id}_{YYYYMMDD-HHMMSS}/` 이동, 없으면 404, `_trash`/이탈 400. GET /patterns 가 `_trash` 이름으로도 제외. 카드 삭제 아이콘→confirm→DELETE→loadPatternList+토스트(+restore_warning 토스트), 비관리자 disabled "관리자만"(pmCanManage=pmAdmin||!pmAuthRequired), 수정 아이콘 disabled "준비 중".
+- **D 백업 상태(#7)**: storage_backup.py 에 **새 함수만** `list_backups_checked()`({ok,names,reason}) · `decode_backup_name()`. api.py `GET /api/patterns/backup-status`(미설정/실패=200+ok:false, 정상=backed_up/missing_backup/only_in_storage) · `POST /api/patterns/{id}/backup`(기존 backup_pattern 그대로, JWT 는 헤더 릴레이). patterns.html `#pmBackupStatus`(관리자만, 목록 뒤 600ms 지연) 미설정 한 줄/실패+다시 확인/누락 목록+"지금 백업".
+- 검증: py_compile 3파일·vm.Script 2파일 OK · 로컬 :8000(내가 띄운 PID 만 종료)에서 DELETE→_trash 이동→목록 제외→재삭제 404·`_trash`/`..` 거부·backup-status ok:false configured:false·화면 삭제흐름/게이트/배너/XSS/백업 3분기 렌더/지금백업 실패토스트 확인 · `engine selftest` PASS · 실패턴 2개 무손상, 임시폴더·_trash 정리 완료. diff 4파일(api.py·storage_backup.py·patterns.html·work.html).
+
+## 테스트 결과 (tester) — [TOP7 #3·#4·#7 + toast XSS + _find_job_dir] (2026-09-22)
+
+📊 종합: **52개 중 52개 통과 / 0개 실패** · 판정 **통과**. API 는 FastAPI TestClient(in-process, 인증 OFF/ON 각각), 화면은 내가 띄운 uvicorn :8000(PID 24856, 끝나고 그것만 종료)+Claude 브라우저. 임시 패턴·_trash·내가 만든 job 폴더·uploads 2건 전부 정리, 실패턴 2개 무손상.
+
+| 테스트 항목 | 결과 | 비고 |
+|-----------|------|------|
+| py_compile 3파일 · vm.Script 2파일 · `engine selftest` PASS | ✅ 통과 | |
+| 회귀: GET patterns 2개 → order/parse 38행(연세대 최신 xlsx) → design/check pass → POST jobs(V넥·6행·pdf) → done → GET jobs outputs 5+skip 1(3XL 비활성, 기존 동작) → zip 200 | ✅ 통과 | |
+| E `_find_job_dir`: 폴더명 정확일치·12hex→`_<id6>` 접미·`_qa_합성23`·`..`/`.`/``/`../x`/`web_26` → None | ✅ 통과 | `GET /jobs/web_260922_012559_8f5f64/zip` = **그 폴더 PDF 11개**(6월 폴더 파일 0) · `web_26` 404 |
+| C DELETE: 임시패턴 200→`_trash/{id}_{stamp}` 이동→목록 제외→재삭제 404 · `_trash`·`%2E%2E`·`..%5C` 400 · `..%2F..%2F` 404 · backup-status 이름 404 | ✅ 통과 | |
+| D backup-status(로컬 미설정) 200 `ok:false configured:false local:[2]` · POST backup 미설정 `ok:false reason` · `_trash`/backup 400 · nope/backup 404 | ✅ 통과 | |
+| 인증 ON(GRADER_REQUIRE_AUTH=1) 토큰 없이 DELETE/backup-status/backup → 401 | ✅ 통과 | 가짜 토큰은 500(auth.py 기존: 로컬에 SUPABASE env 없음, 범위 밖) |
+| A toast XSS 두 화면: `<img onerror>`·`<b>` 글자로만, `window.__xss` undefined, 기존 toast 호출부 HTML 의도 0건(grep) | ✅ 통과 | |
+| B 배너: subB·subC 각 1개, mapHint/rgnHint/section-sub 정정, "pt로 환산되어 저장" 사용자 노출 0(JS 주석 1곳만) | ✅ 통과 | |
+| 화면 삭제흐름: 아이콘 2연타 → confirm 1회·DELETE 1회(deleting 가드) → 토스트 2개(삭제·restore_warning) → 목록 재로드·별표 재덧대기·backup-status 재조회 | ✅ 통과 | confirm 문구 `'농구_V넥_양면' (_qa_tmp_delete)` 로 표시명≠id 구분 |
+| 게이트: 수정 disabled "준비 중" · 로컬 무인증=삭제 enabled · `pmAuthRequired=true&&!pmAdmin` → disabled "관리자만"+backup-status 요청 0건 | ✅ 통과 | |
+| 백업 영역 3분기 렌더(미설정 한 줄 / 실패+다시 확인 / 누락 목록+지금 백업+창고에만) — reason·id 이스케이프(`<b>`·`<img>` 글자), 목록 그리드 유지, 하드코딩 색 0 | ✅ 통과 | |
+| 콘솔 에러 | ✅ 통과 | 앱 에러 0. 남는 404 는 `cdn.jsdelivr.net/.../PretendardVariable.woff2`(tokens/fonts.css, diff 밖·기존) |
+| 안전: engine/·auth.py·gdrive.py diff 0 · storage_backup.py 삭제 줄 0(추가만) · innerHTML 서버 문자열(p.name·reason·id) driveEsc | ✅ 통과 | |
+
+- 수정 요청 없음. 참고(범위 밖·기존): Pretendard CDN 404 콘솔 노이즈, 인증 ON+가짜토큰 500.
+
 ## 구현 기록 (developer) — [TOP7 #2·#5·#6] 콜드스타트 거짓표시 3종 (2026-09-22, 미커밋)
 | 파일 | 변경 |
 |---|---|
@@ -489,7 +518,8 @@
 ## 백로그 (차단 아님, 후속)
 - **[Phase B: 등록패턴 파일 영속화]** Render 임시디스크→재배포 시 등록 preset 소실(현 repo커밋 2개만 잔존). 복구=재스캔등록(같은이름이면 메타 자동재적용). preset 20~88KB 소형→Supabase Storage 백업/복원 별도 승인단위로.
 - **[즐겨찾기/분류 후속]** updated_by 프론트 미전송(SQL nullable이라 OK). 별표 이중클릭 debounce 없음(멱등). 카테고리 라벨 정규화 목록(PM_KNOWN_CATEGORIES) 조정 여지.
-- **[Drive UI 후속]** DRIVE_SIZE_ORDER=백엔드 _SIZE_TOKENS 프론트복제(동기화 의무). glyph_file_id/reference_file_id 미노출(서버지원). 카드 수정/삭제 무동작(서버 삭제API 없음). toast 헬퍼 미이스케이프(savePattern 관례·admin·저위험).
+- **[Drive UI 후속]** DRIVE_SIZE_ORDER=백엔드 _SIZE_TOKENS 프론트복제(동기화 의무). glyph_file_id/reference_file_id 미노출(서버지원). 카드 **수정** 무동작(disabled "준비 중" — 수정 API 없음).
+- **[패턴 삭제 후속 · 2026-09-22]** 삭제는 `_trash/` 이동만이라 **Storage 백업 zip 은 남는다** → 재배포 startup `restore_missing`(로컬에 없는 것만 복원)이 지운 패턴을 되살린다. 막으려면 storage_backup 에 삭제(DELETE object) 추가 필요(금지영역이라 미구현, UI·응답에 경고만). `_trash/` 영구 정리(TTL) 없음. pattern_meta(즐겨찾기) 행은 삭제 시 안 지움. B/C 편집기 좌표 실제 전송(create_pattern 인자 확장)은 여전히 미구현.
 - **[_handoff 비대칭]** apiFetch·인증·계정·도움말·drive·pm(즐겨찾기) JS 전부 webapp/static에만 → _handoff 재복사 시 소실 위험(conventions.md).
 - **[인증/자산]** auth.py 토큰캐시 만료정리. design_XL.ai 로컬부재. hide_design_cutline_layer V넥한정. 3XL.ai 재확보. job.py:732 _auto_bleed svg_index 가드.
 
@@ -530,11 +560,13 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 | tester | stiz-*.json 키 | gitignore 누락(유출위험) | ✅해결 07-06: .gitignore stiz-*.json 추가 |
 | debugger | webapp/storage_backup.py | **[Phase B 백업 조용히 실패=근본원인 확정]** Supabase Storage 가 오브젝트 키의 **한글(비ASCII)을 400 InvalidKey 로 거부**(괄호·공백은 무해, 한글만 원인·실측). httpx 퍼센트인코딩해도 서버가 디코딩 후 재검증→소용없음(`%`도 거부). 모든 패턴명이 한글이라 백업 100% 실패, degrade 가 조용히 숨김. **수정안**: 오브젝트 키를 ASCII 가역 인코딩(hex 또는 base64url, 둘 다 실측 통과+가역)으로 — backup_pattern 인코딩/restore_missing 디코딩 일치. 로컬 폴더명은 한글 유지. 기존 백업0=마이그레이션 불필요. errors.md 상세 기록. | ✅ developer 수정완료 07-09(hex 인코딩·py_compile OK·라운드트립 단위검증 PASS) — tester+reviewer 검증 후 PM 커밋 |
 | tester | webapp/static/screens/patterns.html regFailMsg(≈1180) | [TOP7 #6 회귀] 502/503/504 에서 body.error(서버 JSON, 예: from-drive "Drive 접근 실패: …")가 있어도 "서버가 깨어나는 중"으로 덮음 → 드라이브 권한 문제를 콜드스타트로 오안내. 수정안: body.error 있으면 그걸 우선, 없을 때(HTML 게이트웨이 응답)만 깨우는중 문구 | 대기 |
-| tester | patterns.html toast(561)·work.html toast | [기존 약점·권장] toast body 를 innerHTML 로 넣어 서버 body.error 의 HTML이 실행됨. 수정안: toast 안에서 title/body 이스케이프(또는 textContent) | 대기(권장) |
+| tester | patterns.html toast(561)·work.html toast | [기존 약점·권장] toast body 를 innerHTML 로 넣어 서버 body.error 의 HTML이 실행됨. 수정안: toast 안에서 title/body 이스케이프(또는 textContent) | ✅해결 09-22: 두 화면 toast title/body 이스케이프(driveEsc/esc), tester 재검증 통과 |
 
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 | 결과 |
 |------|---------|------|------|
+| 2026-09-22 | tester | [TOP7 #3·#4·#7 + toast XSS + _find_job_dir] 검증(TestClient 인증 OFF/ON + 로컬 :8000 브라우저) | **52/52 통과 · 판정 통과**. 회귀(patterns→parse 38→check pass→jobs 6행→zip) 정상 · `_find_job_dir` 정확일치/접미만(web_260922 zip=그 폴더 11 PDF) · DELETE→_trash→404·경로이탈 400 · 인증ON 무토큰 401 · toast XSS 차단 · 배너/게이트/백업 3분기 렌더 · 콘솔 앱에러 0(CDN 폰트 404 는 기존). 수정 요청 0, 임시 산출물 정리 완료 |
+| 2026-09-22 | developer | **[TOP7 #3·#4·#7 + toast XSS] 패턴 삭제(_trash 이동)·B/C 정직 안내·백업 상태 가시화** | api.py DELETE/backup-status/backup 3엔드포인트(admin) + storage_backup 새 함수 2개(기존 무수정) + patterns.html 삭제흐름·배너·백업영역 + work.html toast esc. 로컬 :8000 API/화면 검증·selftest PASS. 백로그: Storage zip 잔존→재배포 시 되살아남. **tester 검증 대기, 미커밋** |
 | 2026-09-22 | tester | [TOP7 #2·#5·#6] 콜드스타트 3종 검증(playwright 실브라우저) | 57/59 통과. 실패: regFailMsg 502 가 서버 원문(Drive 접근 실패) 덮음(회귀) · toast innerHTML XSS(기존). 수정 요청 2건 |
 | 2026-07-16 | developer | **[TOP7 #1] work.html 데모 가짜주문 48명 제거 + step2 게이트 강화** | webapp/static/screens/work.html 1파일만 수정. `ORDER=buildRoster(48)`→`ORDER=[]`, 가짜 RESULTS 파생→`RESULTS=[]`, 더미상수(FIRST/GIVEN/SZ/buildRoster/CHECK_NAMES/buildChecks/FAIL_RESULT) 전부 제거(참조 grep 재확인=코드0·주석만). canAdvance step2 게이트 `orderUploaded && ORDER.length>0`, 생성버튼 `!orderUploaded` 추가. 실데이터 경로(uploadOrder 515·loadJobResult 975) 무영향 확인. 빈상태 안내는 704줄 기존분기 활용. 엔진·서버·인증·API패칭 무수정. **tester 검증 대기** |
 | 2026-07-16 | planner-architect | **[실사용 전체진단] 3축 오류·개선점 도출(코드정독)** | webapp 전부+login/work/patterns.html 정독. TOP7: ①데모ORDER48 미업로드 생성 ②/api/patterns 실패=빈목록위장 ③패턴 수정/삭제 무동작 ④B/C편집기 미전송인데 "저장됨" 거짓안내(design_region 추정) ⑤콜드스타트 "연결됨" 거짓 ⑥등록실패 암호에러 ⑦백업실패 콘솔은폐. 안전지대(engine/auth/gdrive/비밀키/hex백업) 표시. **코드수정0**, 사용자 착수승인 대기 |

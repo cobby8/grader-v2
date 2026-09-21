@@ -182,6 +182,10 @@ def patterns() -> List[Dict[str, Any]]:
         folder = os.path.join(base, name)
         if not os.path.isdir(folder):
             continue
+        # 휴지통(_trash/)은 목록에서 제외한다. (안에 preset.json 이 '바로' 없어 원래도 걸러지지만,
+        #  나중에 누가 _trash/preset.json 을 두더라도 되살아나지 않게 이름으로도 막는다.)
+        if name == _TRASH_DIRNAME:
+            continue
         try:
             item = _scan_one_pattern(folder)
         except Exception:
@@ -190,6 +194,167 @@ def patterns() -> List[Dict[str, Any]]:
         if item:
             result.append(item)
     return result
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 패턴 삭제(TOP7 #3) + 백업 상태 가시화(TOP7 #7) — 전부 관리자 전용
+#   · 삭제는 '하드 삭제' 가 아니라 data/patterns/_trash/{id}_{시각}/ 으로 옮긴다(복구 가능).
+#   · ⚠️ Storage(Supabase) 백업본은 건드리지 않는다. 그래서 재배포 때 startup 복원이
+#     "로컬에 없는 것" 으로 보고 그 패턴을 다시 살려 낼 수 있다. storage_backup 은
+#     수정 금지 영역이라 여기서는 응답에 그 사실을 적어 관리자가 알게만 한다(백로그).
+# ══════════════════════════════════════════════════════════════════════════
+_TRASH_DIRNAME = "_trash"
+_RESTORE_WARNING = (
+    "재배포 시 Storage 백업본에서 되살아날 수 있어요"
+    " (완전히 없애려면 관리자가 Supabase Storage 의 pattern-presets 버킷에서 zip 을 삭제해야 합니다)."
+)
+
+
+def _resolve_pattern_dir(pattern_id: str) -> Optional[str]:
+    """pattern_id 가 안전한 '패턴 폴더 이름' 이면 그 절대경로를, 아니면 None 을 돌려준다.
+
+    기준은 storage_backup._sanitize_pattern_id 와 같다(경로 구분자·상위경로·금지문자 제거).
+    다듬은 결과가 원래 값과 다르면(= 뭔가 위험한 문자가 섞여 있었으면) 거부한다.
+    또 최종 경로가 data/patterns 바로 아래인지(한 단계 아래·경계 안쪽) 한 번 더 확인한다.
+    휴지통 폴더 이름(_trash) 자체는 패턴이 아니므로 거부.
+    """
+    raw = (pattern_id or "").strip()
+    safe = storage_backup._sanitize_pattern_id(raw)
+    if not safe or safe != raw or safe == _TRASH_DIRNAME:
+        return None
+    base = os.path.abspath(state.get_patterns_dir())
+    target = os.path.abspath(os.path.join(base, safe))
+    # 경계 이탈 방어: 부모가 정확히 base 여야 한다(하위 폴더·바깥 경로 모두 거부).
+    if os.path.dirname(target) != base:
+        return None
+    return target
+
+
+def _local_pattern_ids() -> List[str]:
+    """로컬 data/patterns 바로 아래 '패턴으로 인정되는' 폴더 이름(preset.json 있음) 목록."""
+    base = state.get_patterns_dir()
+    if not os.path.isdir(base):
+        return []
+    ids: List[str] = []
+    for name in sorted(os.listdir(base)):
+        if name == _TRASH_DIRNAME:
+            continue
+        folder = os.path.join(base, name)
+        if os.path.isdir(folder) and os.path.exists(os.path.join(folder, "preset.json")):
+            ids.append(name)
+    return ids
+
+
+# ⚠️ 라우트 순서: 고정 경로(/patterns/backup-status)를 변수 경로(/patterns/{pattern_id})보다
+#    먼저 등록해 "backup-status" 라는 이름의 패턴으로 오해되지 않게 한다.
+@router.get("/patterns/backup-status", dependencies=[Depends(admin_required)])
+def patterns_backup_status() -> Dict[str, Any]:
+    """[관리자] 로컬 패턴 ↔ Storage 백업본 대조 결과.
+
+    반환:
+      미설정      → {ok:false, configured:false, reason, local:[...]}
+      조회 실패   → {ok:false, configured:true,  reason, local:[...]}   (500 이 아니라 200 + ok:false)
+      성공        → {ok:true,  configured:true,
+                      backed_up:[...]        로컬에도 있고 창고에도 있음
+                      missing_backup:[...]   로컬엔 있는데 창고에 없음  ← 재배포 때 사라질 위험
+                      only_in_storage:[...]  창고에만 있음(삭제한 패턴 등) ← 재배포 때 되살아남
+                      restore_warning}
+    """
+    local = _local_pattern_ids()
+    if not storage_backup.is_enabled():
+        return {"ok": False, "configured": False,
+                "reason": "Supabase Storage 미설정(env 없음) — 로컬 디스크에만 저장됩니다.",
+                "local": local}
+
+    checked = storage_backup.list_backups_checked()
+    if not checked.get("ok"):
+        return {"ok": False, "configured": True,
+                "reason": checked.get("reason") or "창고 조회 실패", "local": local}
+
+    # 창고 zip 이름(hex.zip) → 패턴 id. 우리 백업이 아닌 외부 파일은 건너뛴다.
+    in_storage: List[str] = []
+    for nm in checked.get("names") or []:
+        decoded = storage_backup.decode_backup_name(nm)
+        if decoded is None:
+            continue
+        pid = storage_backup._sanitize_pattern_id(decoded)
+        if pid:
+            in_storage.append(pid)
+    storage_set = set(in_storage)
+    local_set = set(local)
+    return {
+        "ok": True,
+        "configured": True,
+        "backed_up": [p for p in local if p in storage_set],
+        "missing_backup": [p for p in local if p not in storage_set],
+        "only_in_storage": sorted(storage_set - local_set),
+        "restore_warning": _RESTORE_WARNING,
+    }
+
+
+@router.post("/patterns/{pattern_id}/backup", dependencies=[Depends(admin_required)])
+def pattern_backup_now(pattern_id: str, request: Request) -> Any:
+    """[관리자] 패턴 하나를 지금 다시 백업한다(기존 backup_pattern 을 그대로 호출).
+
+    토큰은 등록 훅과 똑같이 요청 Authorization 헤더의 admin JWT 를 릴레이한다.
+    backup_pattern 은 True/False 만 주므로 실패 사유는 서버 로그(Render 콘솔)에만 남는다.
+    """
+    folder = _resolve_pattern_dir(pattern_id)
+    if folder is None:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "패턴 이름이 올바르지 않아요."})
+    if not os.path.isdir(folder):
+        return JSONResponse(status_code=404, content={"ok": False, "error": "패턴을 찾을 수 없어요."})
+    if not storage_backup.is_enabled():
+        return {"ok": False, "reason": "Supabase Storage 미설정(env 없음) — 백업할 창고가 없어요."}
+    user_jwt = _extract_bearer_token(request)
+    if not user_jwt:
+        return {"ok": False, "reason": "로그인 토큰이 없어요(로컬 무인증에서는 백업하지 않아요)."}
+    try:
+        done = storage_backup.backup_pattern(pattern_id, user_jwt)
+    except Exception as e:
+        done = False
+        print(f"[pattern_backup_now] 백업 호출 예외: {type(e).__name__}")
+    if done:
+        return {"ok": True, "pattern_id": pattern_id}
+    return {"ok": False, "reason": "백업에 실패했어요(권한·네트워크). 서버 로그를 확인해 주세요."}
+
+
+@router.delete("/patterns/{pattern_id}", dependencies=[Depends(admin_required)])
+def delete_pattern(pattern_id: str) -> Any:
+    """[관리자] 패턴을 휴지통(data/patterns/_trash/{id}_{YYYYMMDD-HHMMSS}/)으로 옮긴다.
+
+    하드 삭제가 아니라 '이동' 이라 서버 파일을 만질 수 있는 사람은 되돌릴 수 있다.
+    404: 폴더 없음 / 400: 이름이 안전하지 않음 / 500: 이동 실패(권한·잠금 등).
+    응답의 restore_warning 은 Storage 백업본이 남아 재배포 때 되살아날 수 있다는 안내.
+    """
+    import shutil
+    from datetime import datetime
+
+    folder = _resolve_pattern_dir(pattern_id)
+    if folder is None:
+        return JSONResponse(status_code=400, content={"error": "패턴 이름이 올바르지 않아요."})
+    if not os.path.isdir(folder):
+        return JSONResponse(status_code=404, content={"error": "패턴을 찾을 수 없어요."})
+
+    trash_root = os.path.join(state.get_patterns_dir(), _TRASH_DIRNAME)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest = os.path.join(trash_root, f"{pattern_id}_{stamp}")
+    try:
+        os.makedirs(trash_root, exist_ok=True)
+        if os.path.exists(dest):   # 같은 초에 두 번 지우는 극단 상황 — 뒤에 번호를 붙인다
+            dest = f"{dest}_{int(time.time() * 1000) % 1000:03d}"
+        shutil.move(folder, dest)
+    except Exception as e:
+        print(f"[delete_pattern] 휴지통 이동 실패: {pattern_id} - {type(e).__name__}")
+        return JSONResponse(status_code=500,
+                            content={"error": "패턴을 휴지통으로 옮기지 못했어요. 서버 로그를 확인해 주세요."})
+
+    return {
+        "ok": True,
+        "pattern_id": pattern_id,
+        "trashed_to": os.path.relpath(dest, state.PROJECT_ROOT).replace("\\", "/"),
+        "restore_warning": _RESTORE_WARNING,
+    }
 
 
 @router.get("/settings")
@@ -739,13 +904,26 @@ def _find_job_dir(job_id: str) -> Optional[str]:
     base = state.get_jobs_dir()
     if not os.path.isdir(base):
         return None
+    def _ok(name: str) -> Optional[str]:
+        cand = os.path.join(base, name)
+        if os.path.isdir(cand) and os.path.exists(os.path.join(cand, "job.json")):
+            return cand
+        return None
+
+    # ① 폴더 이름 그대로(작업 이력 목록의 id 가 폴더명이다) — 정확히 일치하면 그것.
+    #    ⚠️ 2026-09-22 실측: 이 단계가 없으면 'web_260922_…' 의 앞 6자 'web_26' 이
+    #    다른 달의 'web_26…' 폴더에 먼저 걸려 **남의 작업 ZIP** 이 내려갔다.
+    if os.sep not in job_id and "/" not in job_id and job_id not in (".", ".."):
+        hit = _ok(job_id)
+        if hit:
+            return hit
+    # ② web_<stamp>_<id6> 규칙 — 끝이 '_<id6>' 인 폴더만(느슨한 부분일치는 쓰지 않는다).
     needle = job_id[:6]
     for name in os.listdir(base):
-        # web_<stamp>_<id6> 규칙으로 만든 폴더를 우선 매칭.
-        if name.endswith("_" + needle) or needle in name:
-            cand = os.path.join(base, name)
-            if os.path.isdir(cand) and os.path.exists(os.path.join(cand, "job.json")):
-                return cand
+        if name.endswith("_" + needle):
+            hit = _ok(name)
+            if hit:
+                return hit
     return None
 
 
