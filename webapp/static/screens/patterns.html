@@ -232,7 +232,7 @@
       <a class="nav__item" href="settings.html"><span class="material-symbols-outlined">settings</span>설정</a>
     </nav>
     <div class="sidebar__foot">
-      <div class="server-pill"><span class="dot"></span>서버 연결됨 · :8000</div>
+      <div class="server-pill"><span class="dot" style="background:var(--ink-300); box-shadow:0 0 0 3px var(--ink-100);"></span>연결 확인 중…</div>
       <div class="sidebar__note">스티즈 전사유니폼 출력 자동화</div>
     </div>
   </aside>
@@ -546,7 +546,11 @@ async function apiFetch(url, opts) {
 
 // 패턴 목록은 서버 GET /api/patterns 로 채운다(빈 배열에서 시작).
 let PATTERNS = [];
-const PAGE = [4478.74, 5669.29];          // design.page_size_pt
+// 패턴 목록 불러오기 상태: "loading"(받는 중) / "error"(실패) / "ok"(받음).
+//   빈 목록이 '진짜 0개'인지 '못 받아온 것'인지 구분하려고 둔다(콜드스타트 30~50초 대비).
+let PATTERNS_LOAD = "loading";
+let PATTERNS_ERR_CODE = 0;   // 실패 시 HTTP 상태코드(네트워크 오류면 0)
+const PAGE =[4478.74, 5669.29];          // design.page_size_pt
 const PIECES = [
   { id:"front",  name:"앞판", color:"#2F6BD8", seed:{x:10.5, y:6.7,  w:36.4, h:42.5} },
   { id:"back",   name:"뒤판", color:"#1F9D63", seed:{x:51.6, y:6.7,  w:37.7, h:42.5} },
@@ -593,7 +597,23 @@ function renderPatternGrid() {
   const cnt = $("#patternCount");
   if (cnt) cnt.textContent = `${PATTERNS.length}개 패턴 프리셋`;
   if (!PATTERNS.length) {
-    grid.innerHTML = `<div class="note"><span class="material-symbols-outlined">info</span>등록된 패턴이 없습니다.</div>`;
+    // 받는 중 / 실패 / 진짜 0개 를 각각 다르게 안내한다.
+    //   (예전엔 실패도 '등록된 패턴이 없습니다'로 보여 서버 문제를 '패턴 없음'으로 오해했다)
+    //   스피너·빈상태·다시 시도 버튼은 드라이브 스캔 화면과 같은 모양을 재사용한다.
+    if (PATTERNS_LOAD === "loading") {
+      if (cnt) cnt.textContent = "패턴 불러오는 중…";
+      grid.innerHTML = `<div class="dtree__loading" style="grid-column:1/-1;"><span class="spinner"></span>패턴 목록을 불러오는 중… (서버가 잠들어 있으면 최대 30~50초 걸려요)</div>`;
+    } else if (PATTERNS_LOAD === "error") {
+      if (cnt) cnt.textContent = "패턴 목록 없음(불러오기 실패)";
+      const code = PATTERNS_ERR_CODE ? ` (오류 ${PATTERNS_ERR_CODE})` : "";
+      grid.innerHTML = `<div style="grid-column:1/-1;">`
+        + driveEmptyHtml("error", "패턴 목록을 불러오지 못했어요", `서버가 깨어나는 중일 수 있어요. 잠시 후 다시 시도해 주세요${code}.`)
+        + `<div style="text-align:center; margin-top:8px;"><button class="btn btn--ghost btn--sm" id="patternsRetry"><span class="material-symbols-outlined">refresh</span>다시 시도</button></div></div>`;
+      const b = grid.querySelector("#patternsRetry");
+      if (b) b.addEventListener("click", () => loadPatternList());   // 같은 요청을 다시 보낸다
+    } else {
+      grid.innerHTML = `<div class="note"><span class="material-symbols-outlined">info</span>등록된 패턴이 없습니다.</div>`;
+    }
     return;
   }
   grid.innerHTML = PATTERNS.map((p) => `
@@ -629,23 +649,65 @@ function renderPatternGrid() {
     btn.addEventListener("click", (e) => e.stopPropagation());
   });
 }
-renderPatternGrid();   // 처음엔 '패턴 없음'(도착 전)
+renderPatternGrid();   // 처음엔 '불러오는 중…'(도착 전)
 
 // 서버 헬스체크 → 사이드바 server-pill
-(function refreshServerPill() {
+//   처음엔 '연결 확인 중…'(회색). 예전엔 HTML 에 '서버 연결됨 · :8000' 이 박혀 있어
+//   서버가 깨어나는 30~50초 동안에도 연결된 척 보였다. 이제 GET /api/health(무인증) 결과로만 바뀐다:
+//     5초 넘게 응답 없음 → '서버 깨우는 중…'(노랑) / 성공 → '서버 연결됨'(초록)
+//     실패 → '서버 연결 안 됨'(빨강, 누르면 다시 확인)
+//   포트(:8000)는 배포 환경마다 달라 표시하지 않는다(마우스를 올리면 주소가 보인다).
+function refreshServerPill() {
   const pill = document.querySelector(".server-pill");
   if (!pill) return;
+  const dot = (bg, ring) => `<span class="dot" style="background:var(${bg}); box-shadow:0 0 0 3px var(${ring});"></span>`;
+  pill.onclick = null; pill.style.cursor = ""; pill.title = "";
+  pill.innerHTML = `${dot("--ink-300", "--ink-100")}연결 확인 중…`;
+  // 응답이 늦으면(콜드스타트) 기다리는 이유를 알려 준다.
+  const slowTimer = setTimeout(() => {
+    pill.innerHTML = `${dot("--amber-500", "--amber-bg")}서버 깨우는 중… (최대 30~50초)`;
+  }, 5000);
   apiFetch("/api/health")
     .then((r) => r.ok ? r.json() : Promise.reject())
-    .then((d) => { pill.innerHTML = `<span class="dot"></span>서버 연결됨 · :${d.port}`; })
-    .catch(() => { pill.innerHTML = `<span class="dot" style="background:var(--red-500,#e5484d);"></span>서버 연결 끊김`; });
-})();
+    .then(() => {
+      clearTimeout(slowTimer);
+      pill.innerHTML = `<span class="dot"></span>서버 연결됨`;   // 기본 초록 점(app.css)
+      pill.title = location.host;
+    })
+    .catch(() => {
+      clearTimeout(slowTimer);
+      pill.innerHTML = `${dot("--red-500", "--red-bg")}서버 연결 안 됨 · 다시 확인`;
+      pill.title = "누르면 서버 연결을 다시 확인합니다";
+      pill.style.cursor = "pointer";
+      pill.onclick = refreshServerPill;   // 누르면 다시 확인(onclick 대입이라 중복 등록 없음)
+    });
+}
+refreshServerPill();
 
-// 서버에서 실제 패턴을 받아 그리드 갱신
-apiFetch("/api/patterns")
-  .then((r) => r.ok ? r.json() : Promise.reject())
-  .then((list) => { PATTERNS = Array.isArray(list) ? list : []; renderPatternGrid(); })
-  .catch(() => { PATTERNS = []; renderPatternGrid(); });
+// 서버에서 실제 패턴을 받아 그리드 갱신.
+//   실패(네트워크 오류·5xx·502/504 HTML 응답)는 '패턴 0개'가 아니라 '불러오기 실패 + 다시 시도'로 보인다.
+//   ※ renderPatternGrid 는 이름으로 부른다 — 아래 즐겨찾기(pm) 코드가 renderPatternGrid 를
+//     감싼 함수로 재대입하므로, 이름으로 불러야 별표·필터 덧대기가 함께 적용된다.
+function loadPatternList() {
+  PATTERNS_LOAD = "loading";
+  if (!PATTERNS.length) renderPatternGrid();   // 다시 시도 때도 스피너로 바뀌게
+  apiFetch("/api/patterns")
+    .then((r) => r.ok ? r.json() : Promise.reject({ status: r.status }))
+    .then((list) => {
+      // 200 이어도 배열이 아니면 '0개'가 아니라 비정상 응답으로 본다.
+      if (!Array.isArray(list)) return Promise.reject({ status: 0 });
+      PATTERNS_LOAD = "ok";
+      PATTERNS = list;
+      renderPatternGrid();
+    })
+    .catch((e) => {
+      PATTERNS = [];
+      PATTERNS_LOAD = "error";
+      PATTERNS_ERR_CODE = (e && e.status) || 0;
+      renderPatternGrid();
+    });
+}
+loadPatternList();
 
 // ---- size chips (실제 파일 선택과 연결) ----
 //   각 칩을 클릭하면 그 사이즈의 패턴 파일(.ai/.svg)을 고른다. 고른 사이즈는
@@ -1108,6 +1170,23 @@ function regForward() {
   rs++; showSub();
 }
 
+// ── 등록 실패 메시지(공통) ─────────────────────────────────────────────
+//   파일 등록(savePattern)과 드라이브 등록(registerFromDrive)이 같은 문구를 쓰도록 한 곳에 모았다.
+//   status = HTTP 상태코드, body = 안전 파싱된 응답 본문({} 일 수 있음).
+function regFailMsg(status, body) {
+  body = body || {};
+  if (status === 403) return "관리자 권한이 필요해요.";
+  if (status === 409) return "같은 이름의 패턴이 이미 있어요. 다른 이름으로 등록해 주세요.";
+  // 우리 서버가 이유를 적어 보낸 502(예: "Drive 접근 실패: …")는 그 이유를 그대로 보여준다.
+  // 이유 없이 HTML 만 온 경우(Render 프록시가 콜드스타트 중 돌려줌)만 "깨어나는 중"으로 안내.
+  if ((status === 502 || status === 503 || status === 504) && !body.error)
+    return "서버가 깨어나는 중이에요. 잠시 후 다시 시도해 주세요.";
+  if (status === 400 && !body.error) return "요청 값을 확인해 주세요(이름/폴더).";
+  return body.error || `등록에 실패했어요 (코드 ${status}).`;
+}
+// 응답 자체를 못 받았을 때(네트워크 끊김·서버 무응답)의 문구.
+const REG_NET_FAIL_MSG = "서버에 연결하지 못했어요. 인터넷 연결을 확인하거나, 서버가 깨어나는 중이면 잠시 후 다시 시도해 주세요.";
+
 // ── 실제 패턴 등록: REG 의 파일들을 FormData 로 모아 POST /api/patterns ─────
 let saving = false;
 function savePattern() {
@@ -1143,11 +1222,17 @@ function savePattern() {
   btn.disabled = true;
   toast("info", "cloud_upload", "패턴 등록 중", `${sizes.length}개 사이즈 변환·검증 중입니다…`);
 
+  let gotResponse = false;   // 서버 응답을 받았는가(못 받았으면 네트워크 문제로 안내)
   apiFetch("/api/patterns", { method: "POST", body: fd })
-    .then((r) => r.json().then((j) => ({ ok: r.ok, body: j })))
-    .then(({ ok, body }) => {
+    // 안전 파싱: 502/504 HTML 응답이면 json() 이 실패하므로 {} 로 대신한다
+    //   (예전엔 여기서 "Unexpected token <" 같은 영어 에러가 그대로 보였다).
+    .then((r) => { gotResponse = true;
+      return r.json().catch(() => ({})).then((j) => ({ ok: r.ok, status: r.status, body: j || {} })); })
+    .then(({ ok, status, body }) => {
       if (!ok || body.error) {
-        throw new Error(body.error || "등록 실패");
+        const err = new Error(regFailMsg(status, body));   // 상태코드별 한글 메시지
+        err.regMsg = true;
+        throw err;
       }
       // 성공: 글리프셋·완성본 추출 결과를 화면 카드에 반영.
       glyphCount = (body.glyph && body.glyph.count) || 0;
@@ -1173,7 +1258,10 @@ function savePattern() {
       }, 1400);
     })
     .catch((e) => {
-      toast("warn", "error", "패턴 등록 실패", String(e.message || e));
+      // 한글 메시지로 만든 실패면 그대로 / 응답도 못 받았으면 네트워크 안내 / 그 밖(화면 처리 중 예외)은 원문.
+      const msg = (e && e.regMsg) ? e.message
+        : (!gotResponse ? REG_NET_FAIL_MSG : String((e && e.message) || e));
+      toast("warn", "error", "패턴 등록 실패", msg);
     })
     .finally(() => {
       saving = false;
@@ -1781,11 +1869,8 @@ function registerFromDrive() {
 
       // (b) 실패 — 상태코드별로 사람이 이해할 한글 메시지.
       if (!res.ok || body.error) {
-        let msg;
-        if (res.status === 403) msg = "관리자(admin) 권한이 필요합니다.";
-        else if (res.status === 400) msg = body.error || "요청 값을 확인해 주세요(이름/폴더).";
-        else msg = body.error || `등록에 실패했습니다 (오류 ${res.status}).`;
-        toast("warn", "error", "패턴 등록 실패", msg);
+        // 파일 등록(savePattern)과 같은 공통 문구(403/409/502·503·504/400/그 외).
+        toast("warn", "error", "패턴 등록 실패", regFailMsg(res.status, body));
         return;
       }
 
@@ -1820,8 +1905,7 @@ function registerFromDrive() {
     })
     .catch(() => {
       // 네트워크/예외 — apiFetch 의 401 리다이렉트를 제외한 실패.
-      toast("warn", "error", "패턴 등록 실패",
-        "요청 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.");
+      toast("warn", "error", "패턴 등록 실패", REG_NET_FAIL_MSG);   // savePattern 과 같은 문구
     })
     .finally(() => {
       // 실패했으면 사용자가 곧바로 재시도할 수 있게 버튼을 원복·재활성화한다.

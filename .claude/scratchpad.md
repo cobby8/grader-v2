@@ -76,6 +76,30 @@
 - #1·#2·#5·#6은 프론트 소규모(파일1~2개)=경량. #3은 DELETE 엔드포인트 신설(admin_required)=중간. #7은 관리자 UI+상태엔드포인트=중간.
 - 착수 순서 권장: #1(즉시·치명·쉬움) → #2·#5·#6(콜드스타트 3종 묶음) → #4(정직안내 먼저, 좌표전송은 후속) → #3 → #7.
 
+## 구현 기록 (developer) — [TOP7 #2·#5·#6] 콜드스타트 거짓표시 3종 (2026-09-22, 미커밋)
+| 파일 | 변경 |
+|---|---|
+| webapp/static/screens/work.html | 핀 초기값 '연결 확인 중…'·refreshServerPill 4상태(확인중/5초후 깨우는중/연결됨/연결안됨+클릭재확인, 포트표시 제거) · PATTERNS_LOAD 상태 + renderPatterns 빈목록 3분기(불러오는중/실패+다시시도/진짜0개) · loadPatterns 상태코드·비배열 200 실패처리 |
+| webapp/static/screens/patterns.html | 위와 동일 핀·상태 · 초기 fetch → loadPatternList()(renderPatternGrid 이름호출=pm 래퍼 유지, 실패=driveEmptyHtml+다시시도) · regFailMsg(403/409/502·503·504/400/그외)+REG_NET_FAIL_MSG 공통헬퍼 · savePattern 안전파싱(json().catch)·gotResponse 로 네트워크/HTTP 구분 · registerFromDrive 도 같은 헬퍼 |
+- 검증: vm.Script 두 파일 OK · 로컬서버+fetch 가로채기로 net/502/504/hang/재시도복구/핀클릭재확인/savePattern 6케이스(502HTML·409·403·500JSON·500HTML·net) 한글문구 확인 · 재시도 후 별표(pm) 덧대기 정상 · diff 2파일만.
+- tester 참고: 빈목록 안내를 renderPatterns/renderPatternGrid 안에서 그려서 즐겨찾기 재렌더가 끼어들어도 안내가 안 지워짐. reloadPatterns(등록 직후) 는 무수정(실패 시 기존 목록 유지).
+
+## 테스트 결과 (tester) — [TOP7 #2·#5·#6] 콜드스타트 거짓표시 3종 (2026-09-22)
+
+📊 종합: **59개 중 57개 통과 / 2개 실패** · 판정 **수정 필요(1건 필수 + 1건 권장)**. 로컬서버(:8000)+playwright 실브라우저, 끝나고 띄운 PID만 종료. diff = HTML 2파일뿐(엔진·서버 파이썬 0).
+
+| 테스트 항목 | 결과 | 비고 |
+|-----------|------|------|
+| 스크립트 문법(vm.Script) 두 파일 | ✅ 통과 | |
+| 정상 회귀: 목록·핀 연결됨·필터바·즐겨찾기만·Drive 진입(configured:false 안내)·카드클릭→work 프리셀렉트(키 1회 소거)·work 선택·콘솔에러 0 | ✅ 통과 | |
+| 목록 실패 흉내(net/502 HTML/504/200비배열) 양 화면 → 실패+다시시도, 진짜 0개·로딩중 구분 | ✅ 통과 | 복구 후 별표/배지 덧대기 정상 |
+| 다시 시도 실제 마우스 3연타 → 요청 1회 | ✅ 통과 | 버튼이 즉시 스피너로 바뀌어 중복 없음 |
+| 핀: 확인중→5초 깨우는중→연결됨 / 실패→클릭 재확인(연타 3회=요청 1회)·6초 뒤 타이머 누수 없음 / 연결됨 클릭 무반응 / 503 | ✅ 통과 | |
+| savePattern 한글문구(net·502·504·409·403·400·500JSON·500HTML)+버튼 원복, JSON 파싱에러 노출 없음 | ✅ 통과 | |
+| CSS 변수 사용(하드코딩 색 없음) | ✅ 통과 | 옛 #e5484d 폴백 제거됨 |
+| regFailMsg: 서버가 직접 만든 502 JSON(from-drive "Drive 접근 실패: …") | ❌ 실패 | patterns.html 1180 — 502/503/504면 body.error 무시하고 "서버가 깨어나는 중"으로 덮음. 변경 전엔 원문 표시(회귀) |
+| body.error 이스케이프(XSS) | ❌ 실패(기존 약점) | `toast()`(patterns 561)가 body를 innerHTML로 넣음 → `{"error":"<img src=x onerror=…>"}` 실행됨. 변경 전에도 동일, 이번 diff가 만든 건 아님 |
+
 ## 구현 기록 (developer) — [TOP7 #1] work.html 데모 가짜주문 48명 제거 + 게이트 강화 (2026-07-16)
 
 📝 구현한 기능: `work.html`(실경로 `webapp/static/screens/work.html`)에서 화면 로드 즉시 생성되던 **데모용 가짜 주문 48명(김민준 등)을 제거**. 이제 직원이 주문서(.xlsx)를 실제로 업로드해야만 생성 단계로 넘어갈 수 있음. **이 파일 1개만 수정**(엔진·서버·인증·API 패칭 로직 전부 무수정).
@@ -505,10 +529,13 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 | reviewer/tester | 3XL.ai | 원본이 5XL과 동일(자산결함) | 비활성·재확보 대기 |
 | tester | stiz-*.json 키 | gitignore 누락(유출위험) | ✅해결 07-06: .gitignore stiz-*.json 추가 |
 | debugger | webapp/storage_backup.py | **[Phase B 백업 조용히 실패=근본원인 확정]** Supabase Storage 가 오브젝트 키의 **한글(비ASCII)을 400 InvalidKey 로 거부**(괄호·공백은 무해, 한글만 원인·실측). httpx 퍼센트인코딩해도 서버가 디코딩 후 재검증→소용없음(`%`도 거부). 모든 패턴명이 한글이라 백업 100% 실패, degrade 가 조용히 숨김. **수정안**: 오브젝트 키를 ASCII 가역 인코딩(hex 또는 base64url, 둘 다 실측 통과+가역)으로 — backup_pattern 인코딩/restore_missing 디코딩 일치. 로컬 폴더명은 한글 유지. 기존 백업0=마이그레이션 불필요. errors.md 상세 기록. | ✅ developer 수정완료 07-09(hex 인코딩·py_compile OK·라운드트립 단위검증 PASS) — tester+reviewer 검증 후 PM 커밋 |
+| tester | webapp/static/screens/patterns.html regFailMsg(≈1180) | [TOP7 #6 회귀] 502/503/504 에서 body.error(서버 JSON, 예: from-drive "Drive 접근 실패: …")가 있어도 "서버가 깨어나는 중"으로 덮음 → 드라이브 권한 문제를 콜드스타트로 오안내. 수정안: body.error 있으면 그걸 우선, 없을 때(HTML 게이트웨이 응답)만 깨우는중 문구 | 대기 |
+| tester | patterns.html toast(561)·work.html toast | [기존 약점·권장] toast body 를 innerHTML 로 넣어 서버 body.error 의 HTML이 실행됨. 수정안: toast 안에서 title/body 이스케이프(또는 textContent) | 대기(권장) |
 
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 | 결과 |
 |------|---------|------|------|
+| 2026-09-22 | tester | [TOP7 #2·#5·#6] 콜드스타트 3종 검증(playwright 실브라우저) | 57/59 통과. 실패: regFailMsg 502 가 서버 원문(Drive 접근 실패) 덮음(회귀) · toast innerHTML XSS(기존). 수정 요청 2건 |
 | 2026-07-16 | developer | **[TOP7 #1] work.html 데모 가짜주문 48명 제거 + step2 게이트 강화** | webapp/static/screens/work.html 1파일만 수정. `ORDER=buildRoster(48)`→`ORDER=[]`, 가짜 RESULTS 파생→`RESULTS=[]`, 더미상수(FIRST/GIVEN/SZ/buildRoster/CHECK_NAMES/buildChecks/FAIL_RESULT) 전부 제거(참조 grep 재확인=코드0·주석만). canAdvance step2 게이트 `orderUploaded && ORDER.length>0`, 생성버튼 `!orderUploaded` 추가. 실데이터 경로(uploadOrder 515·loadJobResult 975) 무영향 확인. 빈상태 안내는 704줄 기존분기 활용. 엔진·서버·인증·API패칭 무수정. **tester 검증 대기** |
 | 2026-07-16 | planner-architect | **[실사용 전체진단] 3축 오류·개선점 도출(코드정독)** | webapp 전부+login/work/patterns.html 정독. TOP7: ①데모ORDER48 미업로드 생성 ②/api/patterns 실패=빈목록위장 ③패턴 수정/삭제 무동작 ④B/C편집기 미전송인데 "저장됨" 거짓안내(design_region 추정) ⑤콜드스타트 "연결됨" 거짓 ⑥등록실패 암호에러 ⑦백업실패 콘솔은폐. 안전지대(engine/auth/gdrive/비밀키/hex백업) 표시. **코드수정0**, 사용자 착수승인 대기 |
 | 2026-07-09 | pm+arch+dev+tester+rev+debugger | **[Phase B] 등록패턴 파일영속화 완료·실서버 e2e 통과** | 5단계(설계→storage_backup.py 모듈+SQL가이드→백업훅→startup 복원훅→한글키 버그수정). 커밋 82c3364·b1e2156·21051bb·4946fb9·7e47bf1·fix·docs(전부 푸시). **debugger 발견**: Supabase Storage는 오브젝트 키 비ASCII(한글) 거부(400 InvalidKey)→패턴명 전부 한글=백업 100%실패(degrade가 삼킴)→**키만 hex 인코딩**(로컬 폴더명 한글 유지)으로 수정. **PM 실서버 e2e 최종확인**: 백업(등록→버킷 hex.zip 27KB 생성)+복원(재배포로 디스크초기화 후 startup 자동복원→U넥_스탠다드-A(암홀X) 목록 유지=재배포에도 살아남음). 이중백업방지·부팅안막음(daemon)·엔진diff0 |
