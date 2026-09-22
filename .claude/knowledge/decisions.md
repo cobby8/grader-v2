@@ -2,6 +2,12 @@
 <!-- 담당: planner-architect | 최대 30항목 -->
 <!-- "왜 A 대신 B를 선택했는지" 기술 결정의 배경과 이유를 기록 -->
 
+### [2026-09-22] 디스크 자동 정리 TTL 규약: 업로드 7일 · 작업 폴더 30일 · `web_` 접두 폴더만 · 하루 한 번 · env 로 끄기/조정
+- **분류**: decision
+- **발견자**: developer
+- **내용**: `state.cleanup_old_files()` 가 mtime 기준으로 `data/uploads/` 바로 아래 일반 파일(7일)과 `data/jobs/web_*` 폴더(30일)만 지운다. **30일인 이유**: history.html 이 ZIP 재다운로드·요약표를 이 폴더에서 읽으므로 «한 달 안 재출력» 을 보장한다. **7일인 이유**: 업로드는 엔진이 읽는 순간 용도가 끝나고 결과는 jobs 에 남는다. **`web_` 접두만**: `_qa_*`·`260619_*` 같은 사람이 만든 검수 폴더는 이름으로 구분되므로 접두어 하나로 안전하게 제외(폴더 안을 뒤져 판정하지 않는다). 삭제 전 `realpath` 로 대상이 정리 폴더 «안» 인지 확인하고 링크·running job 은 건너뛴다. **실행 주체**: main.py daemon 스레드(부팅 직후 1회 + 24h, `time.sleep` 루프) — 부팅·헬스체크를 막지 않고 실패는 `state._MAINT` 에 기록만. 끄기 `GRADER_CLEANUP_DISABLED=1`(로컬 보관용), TTL `GRADER_UPLOADS_TTL_DAYS`/`GRADER_JOBS_TTL_DAYS`(1 미만·비숫자는 기본값 — 0일은 방금 올린 파일까지 지우는 사고라 거부). 메모리 `_JOBS` 는 done/error 후 24h 지나면 같은 주기에서 제거(결과는 job.json 에 있어 화면 무영향). **대안 기각**: (a) 업로드 직후 삭제 — 디자인 점검 토큰(design_token)이 나중에 그 파일을 다시 읽는다 (b) APScheduler 등 외부 스케줄러 — 의존성 추가 없이 `--workers 1` 프로세스 하나라 스레드 하나로 충분 (c) `_trash/` TTL 정리 포함 — 묘비·복원 규약과 얽혀 별도 승인 단위로 미룸.
+- **참조횟수**: 0
+
 ### [2026-09-22] 패턴 삭제 «묘비(tombstone)» 규약: Storage zip 삭제는 best effort, 부활 차단은 묘비 파일이 책임진다
 - **분류**: decision
 - **발견자**: developer

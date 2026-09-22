@@ -421,6 +421,18 @@ def settings() -> Dict[str, Any]:
     return state.read_settings()
 
 
+@router.get("/maintenance/status", dependencies=[Depends(admin_required)])
+def maintenance_status() -> Dict[str, Any]:
+    """자동 정리(업로드 7일·작업 30일) 의 마지막 결과·다음 예정 시각(관리자 전용).
+
+    반환: {enabled, runs, last_run, last_result{uploads_removed, jobs_removed, freed_bytes,
+           errors[], jobs_pruned, ...}, last_error, next_run}
+      · enabled=false 면 GRADER_CLEANUP_DISABLED=1 로 꺼 둔 것(로컬 보관용).
+      · 서버가 켜진 직후엔 last_run 이 null 일 수 있다(첫 청소가 백그라운드에서 도는 중).
+    """
+    return state.get_maintenance_status()
+
+
 @router.put("/settings", dependencies=[Depends(admin_required)])
 def update_settings(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     """설정을 '머지' 방식으로 저장한다(부분 갱신 → 전체 반환).
@@ -508,6 +520,11 @@ def _job_summary(job_dir: str) -> Dict[str, Any] | None:
                 meta = {}
         except Exception:
             meta = {}
+
+    # 주문명: 생성 때 화면이 보낸 주문서 파일명(job_meta.order_name)이 있으면 그것이 우선.
+    # 구 job(메타 없음)은 위에서 정한 값(폴더명)이 그대로 남는다.
+    if isinstance(meta.get("order_name"), str) and meta["order_name"].strip():
+        name = meta["order_name"].strip()
 
     pattern = (meta.get("pattern_id")
                or summary.get("preset_name") or summary.get("pattern")
@@ -912,6 +929,7 @@ def _run_job_thread(job_id: str, preset_path: str, design_path: str,
                 j["status"] = "done"
                 j["out_dir"] = os.path.abspath(out_dir)
                 j["produced"] = produced
+                j["finished_at"] = time.time()   # 메모리 정리(state.prune_finished_jobs) 기준 시각
     except Exception as e:
         # 생성 자체가 실패해도 서버는 살아 있어야 한다 → 상태만 error 로.
         tb = traceback.format_exc()
@@ -933,12 +951,16 @@ async def create_job_endpoint(payload: Dict[str, Any] = Body(...)) -> Dict[str, 
         design      : 또는 명시 디자인 경로(빈 본체 기본값 등, 선택).
         rows        : [{name,number,size,qty}] 화면 표(사용자 수정 반영).
         out_format  : "pdf" | "eps" | "both" (선택, 기본 preset/pdf).
+        order_name  : 주문서 파일명(선택). 작업 기록 화면의 '주문' 칸에 폴더명 대신 보인다.
       }
     반환: {job_id, total}
     """
     pattern_id = payload.get("patternId") or payload.get("pattern_id")
     rows = _normalize_rows(payload.get("rows"))
     out_format = (payload.get("out_format") or payload.get("format") or "").lower() or None
+    # 주문서 이름: 표시용 문자열일 뿐이라 폴더 구분자를 떼고 길이만 자른다(경로로 쓰지 않는다).
+    order_name = payload.get("order_name")
+    order_name = os.path.basename(str(order_name)).strip()[:200] if isinstance(order_name, str) else ""
 
     # 입력 검증(차단). 친절한 한국어 사유로 막는다.
     if not pattern_id:
@@ -994,6 +1016,8 @@ async def create_job_endpoint(payload: Dict[str, Any] = Body(...)) -> Dict[str, 
             "out_format": out_format,
             "created": _t.strftime("%Y-%m-%dT%H:%M:%S"),
             "total": len(rows),
+            # 주문서 파일명(화면이 보낸 것, 없으면 빈 문자열 → 기록 화면은 폴더명으로 폴백).
+            "order_name": order_name,
         }
         _final = os.path.join(out_dir, "job_meta.json")
         _tmp = _final + ".tmp"

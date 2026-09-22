@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 
 from fastapi import FastAPI, Depends
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -69,9 +70,57 @@ def _restore_patterns_background() -> None:
         print(f"[startup] 등록 패턴 복원 건너뜀(부팅에는 영향 없음): {type(e).__name__}")
 
 
+# ── 오래된 업로드·작업 폴더 자동 정리(디스크 청소) ────────────────────────────
+#   왜: data/uploads(주문서·디자인 임시본)와 data/jobs(web_ 결과 폴더)는 쌓이기만 하고
+#   지우는 코드가 없었다. 하루 한 번 청소부 스레드가 돌며 오래된 것만 치운다
+#   (규약·제외 대상은 state.cleanup_old_files 주석 참고). 복원 스레드와 같은 이유로
+#   부팅을 막지 않는 daemon 스레드이며, 실패해도 서버에는 영향이 없다.
+#   끄기: GRADER_CLEANUP_DISABLED=1 (로컬 개발자가 산출물을 보관하고 싶을 때).
+CLEANUP_INTERVAL_SEC = 24 * 3600      # 하루 한 번
+_TRUTHY = ("1", "true", "yes", "on")
+
+
+def _cleanup_disabled() -> bool:
+    return os.environ.get("GRADER_CLEANUP_DISABLED", "").strip().lower() in _TRUTHY
+
+
+def _run_cleanup_once() -> None:
+    """청소 한 바퀴: 디스크(uploads·jobs) + 메모리(_JOBS) → 결과를 state 에 기록."""
+    started = time.time()
+    try:
+        result = state.cleanup_old_files()
+        result["jobs_pruned"] = state.prune_finished_jobs()
+        state.record_maintenance(
+            runs=state.get_maintenance_status().get("runs", 0) + 1,
+            last_run=time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(started)),
+            last_result=result,
+            last_error=None,
+        )
+        print(f"[cleanup] 업로드 {result['uploads_removed']}개 · 작업 {result['jobs_removed']}개 · "
+              f"{result['freed_bytes']:,}바이트 정리"
+              + (f" · 실패 {len(result['errors'])}건" if result["errors"] else ""))
+    except Exception as e:
+        # 청소 실패는 서버 동작에 영향을 주지 않는다 — 기록만 남기고 다음 주기를 기다린다.
+        state.record_maintenance(
+            last_run=time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(started)),
+            last_error=f"{type(e).__name__}: {e}",
+        )
+        print(f"[cleanup] 정리 실패(서버에는 영향 없음): {type(e).__name__}: {e}")
+
+
+def _cleanup_loop() -> None:
+    """부팅 직후 1회, 이후 24시간마다 청소를 반복한다(daemon 스레드 본체)."""
+    while True:
+        _run_cleanup_once()
+        next_at = time.time() + CLEANUP_INTERVAL_SEC
+        state.record_maintenance(
+            next_run=time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(next_at)))
+        time.sleep(CLEANUP_INTERVAL_SEC)
+
+
 @app.on_event("startup")
 def _on_startup() -> None:
-    """앱 시작 시 패턴 복원을 '백그라운드 스레드' 로 띄운다(부팅을 막지 않게).
+    """앱 시작 시 패턴 복원·디스크 청소를 '백그라운드 스레드' 로 띄운다(부팅을 막지 않게).
 
     여기서는 스레드를 시작만 하고 곧바로 반환한다 → 헬스체크/요청 처리는 지연 0.
     복원 자체는 storage_backup.restore_missing() 이 뒤에서 조용히 진행한다.
@@ -85,6 +134,16 @@ def _on_startup() -> None:
     except Exception as e:
         # 스레드 생성 자체가 실패해도 부팅은 계속(복원만 생략).
         print(f"[startup] 복원 스레드 시작 실패(부팅은 계속): {type(e).__name__}")
+
+    # 디스크 청소 스레드(위와 같은 방식). 환경변수로 껐으면 상태만 남기고 띄우지 않는다.
+    if _cleanup_disabled():
+        state.record_maintenance(enabled=False)
+        print("[startup] 자동 정리 꺼짐(GRADER_CLEANUP_DISABLED)")
+        return
+    try:
+        threading.Thread(target=_cleanup_loop, name="disk-cleanup", daemon=True).start()
+    except Exception as e:
+        print(f"[startup] 정리 스레드 시작 실패(부팅은 계속): {type(e).__name__}")
 
 
 @app.get("/login")

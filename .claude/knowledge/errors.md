@@ -123,3 +123,9 @@
 - **발견자**: tester
 - **내용**: ZIP 주문요약 검증에서 이름 `=1+1` 을 넣은 job 을 돌리니 ① CSV 는 `1,=1+1,7,XL,…` 원문 그대로(엑셀이 CSV 를 열 때 수식으로 해석) ② **xlsx 는 `ws.append(["=1+1"])` 만으로 openpyxl 이 `cell.data_type='f'`(수식) 로 저장** — `<f>1+1</f>` 셀이라 엑셀이 보안 경고 없이 계산·실행한다(`+…`·`-…`·`@…` 는 문자열 's' 로 남지만 CSV 쪽엔 여전히 위험). 주문서 이름은 고객이 적는 값이라 외부 입력이다. **예방규칙**: 표를 csv/xlsx 로 내보내는 코드는 문자열 셀이 `= + - @ \t \r` 로 시작하면 `'` 를 접두하고, openpyxl 은 값 대입 뒤 `cell.data_type='s'` 를 강제(또는 접두 후 대입). 검증은 «이름 `=1+1` job → csv 원시 줄 + openpyxl `data_type`» 둘 다 본다(파싱된 값만 보면 둘 다 문자열처럼 보여 놓친다). ─ 별건: `with open(p,"w") as f: json.dump(...)` 에서 dump 가 예외를 내면 **open 이 이미 만든 0바이트 파일이 남는다**. "저장 실패 → 파일 없음" 으로 단정한 테스트가 틀렸다(파일은 있고 비어 있음). 읽는 쪽이 «없음 = 깨짐» 을 같이 처리하는지(`_load_order_rows` 는 처리함)를 봐야 하고, 원자적으로 하려면 임시파일 후 `os.replace`.
 - **참조횟수**: 0
+
+### [2026-09-22] 자동 정리 검증 함정 — 서버를 그냥 띄우면 실데이터가 지워진다 / job 완료 폴링은 `/jobs/{id}` 가 아니라 `/progress` / Windows `basename` 은 `/` 를 자른다
+- **분류**: error
+- **발견자**: tester
+- **내용**: ① `_cleanup_loop` 는 **부팅 직후 1회** 돈다 — 로컬 실측 data/uploads 51개 중 45개가 7일 초과, web_ job 15개 중 12개가 30일 초과라 `GRADER_CLEANUP_DISABLED=1` 없이 uvicorn/TestClient 를 띄우는 순간 지워진다(의도된 동작). 로컬 검증은 **env 로 끄거나** import 전에 `state.get_uploads_dir/get_jobs_dir` 를 임시 폴더로 monkeypatch 한 뒤 `with TestClient(app)` 에 들어간다(startup 이벤트가 스레드를 띄우므로 «with 이후» 패치는 늦다). ② `GET /api/jobs/{id}` 의 `status` 는 검수 결과 `pass|warn` 이지 `done` 이 아니다 — 완료 대기는 `/api/jobs/{id}/progress` 로(잘못 보면 케이스당 타임아웃까지 헛대기·14분 낭비). ③ `os.path.basename` 은 Windows 에서 `/`·`\` 둘 다 자른다 → `order_name` 같은 «표시용 문자열»에 `</b>` 가 있으면 `b>…` 만 남는다(경로 방어로는 맞고 표시엔 무해). 이스케이프 검증용 문자열은 `/` 없는 `<img onerror>` 로 넣는다. ④ Browser 페인에서 뷰포트를 1600 으로 에뮬레이트하면 스크린샷 프레임↔CSS 비율이 0.5 가 아니라 실측 ≈0.18 이고 **ref 클릭이 빗나간다** — 알려진 버튼을 한 번 눌러 비율을 잰 뒤 좌표 드래그를 쓴다(실마우스 드래그는 그 비율로 잘 먹는다).
+- **참조횟수**: 0

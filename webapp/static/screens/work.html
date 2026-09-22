@@ -903,6 +903,8 @@ async function startGenerate() {
       design_token: (designServer && designServer.design_token) || null,
       rows: ORDER.map((r) => ({ name: r.name, number: r.number, size: r.size, qty: r.qty })),
       out_format: apiFmt(),
+      // 주문서 파일명 — 작업 기록 화면의 '주문' 칸에 폴더명(web_…) 대신 보이게 한다(표시용, 선택).
+      order_name: (orderServer && orderServer.fileName) || null,
     };
     const res = await apiFetch("/api/jobs", {
       method: "POST", headers: { "Content-Type": "application/json" },

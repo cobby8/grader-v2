@@ -4,7 +4,7 @@
 - **2026-09-22 (Fable 5.1 세션)**: 실사용 개선 TOP7 — **#1·#2·#3(삭제)·#5·#6·#7 완료**, #4 는 정직 안내만(좌표 전송 미구현). + toast XSS·`_find_job_dir` 남의 ZIP 버그 수정. 커밋 0ae5f26·a2f2d08·2f316c8 (**미푸시 3**).
 - **🚨 운영 서버 grader-v2-47gd.onrender.com 이 Render 에서 «suspended»(503, x-render-routing: suspend)** — 코드가 아니라 계정/플랜. 사장님이 Render 대시보드에서 확인 필요. 직원은 지금 접속 불가.
 - **실사용 e2e(로컬, 실주문서 연세대 38행 + 실디자인 .ai)**: 파싱 38/38 정확 · V넥 12행 생성 14초 · 검사 전부 PASS · EPS 11/11 · 미리보기 육안 정상. **3XL 5명(13%)은 자산 결함으로 생성 불가**(skip 배너로 표시됨).
-- **다음**: ① Render 복구 ② 3XL.ai 재확보 ③ ZIP 에 주문요약(수량 포함) 동봉 ④ 이력 화면 재다운로드 ⑤ B/C 좌표 실제 전송. 상세 제안은 PM 보고(2026-09-22).
+- **제안 3~7 전부 구현 완료**(③ 37498cc ④ a273ff2 ⑤ 8c29327 ⑥ 96df4d3 ⑦ 커밋 대기). 남은 것: ① Render 복구 ② 3XL.ai 재확보.
 
 ## TOP7 진행표 (2026-07-16 진단 · 2026-09-22 현재)
 | # | 문제 | 축 | 위치 | 심각도 | 빈도 | 난이도 | 쉬운말 한줄 |
@@ -38,18 +38,18 @@
 | **TOP7 #2·#5·#6** | 콜드스타트 거짓표시 3종(목록 실패 구분·서버 핀 4상태·등록 실패 한글) | ✅ a2f2d08 (tester 59항목) |
 | **TOP7 #3·#4·#7 + XSS + ZIP탐색** | 패턴 삭제(_trash)·정직 안내·백업 상태 UI·toast 이스케이프·_find_job_dir 정확일치 | ✅ 2f316c8 (tester 52/52) |
 
-## 구현 기록 (developer · 2026-09-22 제안⑤ B/C 편집기 좌표 실제 저장)
-- **api.py**: `create_pattern` 에 `layout: Optional[str] = Form(None)` 추가(from-drive 무수정). 신설 `_apply_layout`·`_layout_page_frame`(design_file MediaBox→완성본→화면 힌트→preset page_size_pt)·`_norm_rect`·`_norm_to_pt`(y 뒤집기)·`_layout_find_piece`(id→index). preset 조립 뒤 «보낸 항목만» `pieces[].design_region_pt`·`back_number_area`·`back_name_area`(·front_number) 덮어쓰기. 전 조각 덮으면 균등분할 경고 제거. 응답 `layout_applied:{pieces,areas}`. 틀린 layout=경고+자동 추정 유지(200).
-- **patterns.html**: B/C 영역에 `dataset.touched`(시드 0 · 직접 그림/이동/리사이즈 1). `buildLayoutPayload()` → 손댄 것만 `layout` JSON(정규화 0~1·좌상단, C 는 뒤판 조각 상대 piece_id:"back"). 배너 «여기서 맞춘 위치가 등록 시 저장돼요»(alert--info)·힌트 문구·성공 토스트 «맞춘 위치 N개 저장». `resetRegister` 가 편집기 영역도 비움(지난 등록의 손댄 영역 재전송 방지).
-- 검증: py_compile·vm.Script·selftest PASS. TestClient (a) a273ff2 워크트리 vs 현재, layout 없이 등록 → preset·응답 **완전 동일**(layout_applied 만 추가) (b) pieces 1·areas 2 → 해당 키만 변경·수동 계산 일치 (c) JSON 깨짐·범위 밖·없는 piece·비dict → 200+경고+auto 와 동일 (d) from-drive 코드 정독 무영향 (e) 임시 패턴 2개로 run_job 1행 각각 8/8 PASS, 미리보기 PNG 에서 번호·이름이 layout 대로 이동 확인. 브라우저 :8000 — 시드 미전송·드래그 후 등록 → 서버 preset front/band/back_number 정확, back 자동 유지, 토스트 "맞춘 위치 3개 저장". 임시 패턴 8개·job 2개·uploads 15개·워크트리 정리(PM 0125* 보존).
-- tester 참고: 화면 3번째 조각 id 는 'sleeve'(서버 'band' 는 index 2 로 매칭). C 캔버스 = 뒤판이라 앞번호는 항상 자동. 브라우저 드래그는 pointer 합성 이벤트로 검증(실 OS 드래그는 tester 확인 권장).
+## 구현 기록 (developer · 2026-09-22 제안⑦ 자동 정리 + 이력 주문서명 + 편집기 시드 안내 — 커밋 대기)
+- **A state.py**: `get_uploads_dir()` · `cleanup_old_files(uploads_ttl_days=7, jobs_ttl_days=30, dry_run)`(mtime · uploads 는 바로 아래 일반 파일만 · jobs 는 `web_` 접두 폴더만 · `_is_inside` realpath 경로 이탈 방어 · 링크·running job 제외 · 항목별 errors 계속) · `prune_finished_jobs(86400)`(done/error + finished_at) · `record/get_maintenance_status`. `update_job` 이 status done/error 때 `finished_at` 자동 기록. **main.py**: `_cleanup_loop` daemon 스레드(부팅 직후 1회 + 24h) · `GRADER_CLEANUP_DISABLED=1` 이면 스레드 안 띄우고 enabled:false. **api.py**: `GET /maintenance/status`(admin). settings.html 서버 섹션 «자동 정리» 한 줄(403/404 면 숨김). `.env.example` 3변수.
+- **B**: work.html `startGenerate` body 에 `order_name: orderServer.fileName` · api `create_job_endpoint` 가 basename·200자 잘라 `job_meta.order_name` 저장 · `_job_summary` 가 meta.order_name 우선(구 job 은 폴더명 그대로). 폴더명 규칙 무변경.
+- **C patterns.html**: subB 배너 «미리 그려진 앞판·뒤판(점선)은 자동 추정이에요…» · CSS `.region[data-touched="0"]{border-style:dashed}`(색 변수 무변경) · 조각 목록 «자동 추정» 상태 · 매핑 완료 배너에 «그중 N개는 점선» · 하단 `#layoutCount` «자동 추정 N개 · 저장 N개»(`countLayoutState`, B+C 합산) · 성공 토스트에 «· 자동 추정 N개». `buildLayoutPayload`·전송 규칙 무수정.
+- 검증: py_compile 3 · vm.Script 4 · selftest PASS. A 단위(임시 폴더 monkeypatch): dry_run 집계=실삭제 2/2 · 최근·`_qa_`·접두 없는 폴더·patterns·링크 너머·running·잠긴 파일(errors 1 계속) 전부 무손상 · 2회차 0 · env TTL(abc/0→기본) · prune. TestClient: 부팅 11ms · on: runs 1·jobs_removed 1·next_run · off: enabled false·스레드 없음·삭제 0 · 인증 ON 무토큰 401 · POST /jobs order_name(`C:\문서\…xlsx`→basename)·없음→폴더명·숫자→"". 브라우저 :8000(내 PID 종료): 배너·점선·«자동 추정 2개 · 저장 0개»→드래그 후 «1·1»→소매 그림 «1·2»+«그중 1개는 점선»→subC «3·2»→배번 드래그 «2·3», payload 손댄 것만 · work.html startGenerate 캡처 body 에 order_name(없으면 null) · settings 행 «꺼짐». 실제 uploads 51·jobs 49·patterns 2 무변동.
+- tester 참고: 정리 스레드는 서버 부팅 직후 1회 돈다 — 로컬에서 실서버 띄울 때 `GRADER_CLEANUP_DISABLED=1` 없이 켜면 **실제 data/uploads 의 7일 지난 파일·data/jobs 의 30일 지난 web_ 폴더가 지워진다**(의도된 동작). 보관하려면 env 로 끄기. 브라우저 드래그는 pointer 합성 이벤트(실 OS 드래그는 5번에서 검증됨).
 
-## 구현 기록 (developer · 2026-09-22 제안⑥ 삭제 시 Storage zip 삭제 + 묘비)
-- **storage_backup.py**(기존 함수 본문 무수정·삭제 0줄): 신설 `delete_backup(id, jwt)`→`{ok,status,reason}`(DELETE /storage/v1/object/pattern-presets/{hex}.zip · apikey=publishable · Bearer=요청 JWT · 200 ok · 404 는 목록 재확인 후 «이미 없음» ok / 목록에 남았으면 «권한 없음(RLS)» 실패 · 그 외 status·네트워크 예외 실패) · 묘비 `_trash/.tombstones.json`{id:ISO} — `_load_tombstones`(없음/깨짐→{})·`_save_tombstones`(tmp→os.replace)·`add_tombstone`·`_clear_tombstone`·`is_tombstoned`. `restore_missing` 에 가드 **1줄**(로컬 존재 체크 직후 `if pid in _load_tombstones(): … continue`).
-- **api.py**: `delete_pattern(request)` — _trash 이동 후 묘비 기록 → `delete_backup` best effort → 응답 `storage:{ok,status,reason}`·`tombstoned`·(실패 시만)`restore_warning`. backup-status 에 `tombstoned:[…]`. 신설 `DELETE /patterns/backup/{name}`(admin · 이름 불안전 400 · 로컬 존재 409 · 미설정 200 ok:false · 성공 시 묘비 기록). `create_pattern` 백업 훅 안에 `_clear_tombstone` 1줄(재등록=묘비 해제).
-- **patterns.html**: 삭제 토스트 «백업 창고에서도 지웠어요» / «창고 삭제 실패(사유) — 묘비로 부활은 막았어요…» · 백업 상태 only_in_storage 행마다 묘비 여부 + «창고에서 삭제» 버튼(`pmBackupDelete`, confirm·409 문구 그대로). driveEsc·CSS 변수만.
-- 검증: py_compile 3·vm.Script·selftest PASS · monkeypatch 40항목(200/404×2/500/예외/토큰없음/미설정, 헤더 SECRET 미포함, 묘비 가드로 복원 0→해제 후 복원 대상, 깨진 묘비, TestClient 삭제→묘비→같은 id 재등록(U넥 SVG)→묘비 제거, 409/400) · 인증 ON: 새 DELETE backup·backup-status 토큰 없이 401 · 브라우저 :8000 실클릭 삭제 → 토스트 «창고 삭제 실패(미설정) / 묘비로 부활은 막았어요», 백업 상태 행·버튼 렌더(가짜 payload)·`<img onerror>` 글자화·DELETE URL 인코딩 확인. 임시 패턴·_trash·묘비 정리, 실패턴 2개 보존, 서버 PID 단독 종료.
-- tester 참고: 로컬은 미설정이라 delete_backup 실경로(200/404/RLS)는 monkeypatch 로만 검증 — 실서버(Render+Supabase) 에서 삭제 후 backup-status 의 only_in_storage 에서 빠지는지 1회 확인 권장. 인증 ON+잘못된 토큰은 기존 엔드포인트와 같이 500(auth.py introspection, 범위 밖).
+## 구현 기록 (developer · 2026-09-22 제안⑤ B/C 편집기 좌표 실제 저장 — 커밋 8c29327)
+- api.py `layout` Form 필드 → `_apply_layout`(정규화→pt, y 뒤집기, 보낸 항목만 덮어쓰기, 틀리면 경고+자동 유지) · patterns.html `dataset.touched`·`buildLayoutPayload()`(손댄 것만) · 응답 `layout_applied`. 상세는 커밋 + decisions.
+
+## 구현 기록 (developer · 2026-09-22 제안⑥ 삭제 시 Storage zip 삭제 + 묘비 — 커밋 96df4d3)
+- storage_backup `delete_backup`(JWT 릴레이)·`_trash/.tombstones.json`·restore 가드 1줄 · api `DELETE /patterns/backup/{name}`·삭제 응답 storage/tombstoned · patterns.html 토스트·«창고에서 삭제» 버튼. 상세는 커밋 + decisions.
 
 ## 구현 기록 (developer · 2026-09-22 ZIP 주문요약 동봉 — 완료·커밋 37498cc)
 - api.py `order_rows.json` 저장 · `_build_manifest_rows` · 주문요약.csv/xlsx ZIP 동봉 · `GET /jobs/{id}/manifest` · work.html 안내 1줄. 상세는 커밋 37498cc + 아래 tester 결과. 구 job 제외 행은 배번 빈칸.
@@ -60,17 +60,16 @@
 - 검증: py_compile·vm.Script OK · TestClient 새 job(연세대 3행·V넥·both) pattern/format/design/has_files ✓, 구 ffc664 "-"/both/skipped 5 ✓, output 이름변경→has_files false→원복 ✓, zip pdf/eps 200+CD ✓ · 브라우저 :8000 버튼·요약표 38행 펼침·잠금 행 ✓, 콘솔 404 1건은 외부(fonts) 기존 · selftest PASS · 만든 job·업로드 삭제(PM 0125* 2개 보존).
 - tester 참고: 주문명 칸은 여전히 폴더명(job.json 에 주문서명이 없고 POST /jobs 도 안 받음) — 이번 범위 밖.
 
+## 테스트 결과 (tester · 2026-09-22 제안⑦ 자동 정리·이력 주문서명·시드 안내 — 미커밋 diff)
+- **통과 · 실패 0**. 정적 6종 OK(compile/vm.Script/selftest/색 0/보호파일 diff 0/workers 1/env 3). **삭제 안전 51/51**(임시 폴더): dry_run=실삭제 2+2 · 최근·하위폴더·`_qa_`·`260619_`·`_trash`·running·**정션+심볼릭 링크 너머 원본 무손상** · TTL0 도 예외 건너뜀 · patterns 오지정 시 `web_` 규칙으로 무손상 · 잠긴 파일 errors 후 계속.
+- startup: 11ms · DISABLED=1 → 스레드 0·enabled false · 무토큰 401 · cleanup 예외 주입 후 루프 생존·last_error 기록. ENABLED(임시): daemon 1·runs 1·1+1 삭제. order_name 7케이스(basename·200자·없음/숫자/공백→폴더명·구 job) OK.
+- 브라우저 **실마우스**: history `<img onerror>` 글자 그대로 · settings «꺼짐» · patterns 앞판 드래그 «1·2»→소매 «2·1»+«그중 2개는 점선»→subC «3·2»→배번 «2·3», payload 손댄 것만 · work body `order_name` 캡처 · 콘솔 favicon 404 뿐. 참고: `order_name` 의 `/`(`</b>`)는 basename 이 자름(표시 전용·무해). data 51/49/2 불변.
+
 ## 테스트 결과 (tester · 2026-09-22 제안⑥ 삭제→창고 zip 삭제+묘비)
-- **판정: 통과 — 자동 68/68 · 브라우저 실클릭 · 실패 0.** 회귀: 8c29327 대비 함수 단위 AST 비교 → restore_missing 외 전부 바이트 동일·삭제 0줄·가드 1줄이 `isdir(local_dir)…continue` 직후. restore(가짜 httpx): 창고 A·B/로컬 A→B만 · 묘비 B→0(다운로드 0) · 묘비 깨짐/list/없음→기존 · 묘비 A(로컬)→무영향 · 미설정 0.
-- delete_backup 200/404(목록 없음 ok·있음 RLS 실패)/500/예외/토큰없음/미설정/불안전 이름 규약대로 · 헤더 apikey=공개키·Bearer=요청 JWT·SECRET/SERVICE_ROLE 센티널 미포함 · URL hex.zip ASCII. api: 순서 _trash→묘비→delete_backup(예외여도 200·묘비 잔존) · 재등록(U넥 XS.svg)→묘비 제거 · backup/{name} 409/400/미설정 ok:false/성공 시 묘비·'backup' 패턴 있어도 라우트 충돌 0 · backup-status tombstoned · GET /patterns·local 에 _trash 없음 · 인증 ON 무토큰 401×3.
-- 브라우저(:8000 내 PID 종료): 삭제 토스트 «창고 삭제 실패(미설정)/묘비로 부활은 막았어요» · 가짜 payload 행+«창고에서 삭제» 실클릭 confirm→DELETE(URL 인코딩)→토스트 · `<img onerror>` 글자화·불안전 이름 400 토스트 · 하드코딩 색 0 · 콘솔 앱 에러 0(외부 Pretendard·/favicon.ico 404 기존). selftest PASS · engine/auth/gdrive/main/_handoff diff 0. 정리: 임시 패턴·_trash·묘비 삭제, 실패턴 2 보존.
+- **통과 68/68 · 실패 0** (커밋 96df4d3). restore_missing 외 함수 단위 바이트 동일 · delete_backup 8갈래 · 헤더 비밀키 0 · 브라우저 실클릭 · 인증 ON 401×3. 참고: 로컬 미설정이라 창고 실경로는 monkeypatch — 실서버 1회 확인 권장.
 
 ## 테스트 결과 (tester · 2026-09-22 제안⑤ B/C 편집기 좌표 실제 저장)
-- **판정: 통과 — 회귀 0 증명·layout 환산·오류 6종+폭탄·엔진 반영·브라우저 실마우스·안전, 실패 0.** ① 회귀: `git worktree add … a273ff2` 로 옛 코드 트리 → 같은 V넥 SVG 12개로 layout 없이 등록(완성본 없음/있음 2벌) → preset.json 키정렬 비교 **완전 동일**, 응답도 `layout_applied` 제외 동일, 폴더 파일 목록 동일. from-drive 정독: layout 인자 자체를 안 넘김(무영향).
-- ② 적용: pieces 1 + areas 2(정규화) → MediaBox(4478.74×5669.29, pikepdf 로 실제 읽음) y 뒤집기 손계산과 **소수 1자리까지 일치**(front [447.87,566.93,2239.37,2834.64] · back_number center [2239.4,3259.8] cap 283.5 · back_name baseline 2645.7 em 189.0 pitch 270.8=em×1.4326). 손대지 않은 back/band·나머지 키 = 자동본 그대로(바뀐 키 정확히 3개). 조각 3개 전부(+`sleeve`→index 2 폴백)면 균등분할 경고 제거·실 preset 값 왕복 오차 ≤0.2pt · 완성본 있으면 색/폰트 유지·pitch 비율 유지(346.6) · front_number 자동 그대로. 응답 `layout_applied` 수 일치.
-- ③ 오류: JSON 깨짐·범위 밖·x0>x1·없는 piece·문자열 bbox·비dict·NaN → 전부 200 + `[layout]` 경고 + preset = 자동본. 1MB 문자열·`[`×10만·`{"a":`×5만 → 200 경고(서버 생존, health 200). **1MB 초과 JSON 은 starlette 가 400 "Part exceeded maximum size of 1024KB"**(등록 자체 거절, 폴더 없음 — 허용 범위). ④ 엔진: 기준/이동 패턴 각 run_job 1행 XL **8/8 PASS**, 미리보기 PNG 픽셀 측정: 번호 Δ888px(예상 887) · 이름 Δ2449px(예상 2446) · cap 769px(예상 770) — layout 값이 실제 합성에 그대로 먹음.
-- ⑤ 브라우저(:8000 내가 띄운 PID→종료, 실마우스 드래그): 소매 영역 그림 + 배번 영역 아래로 끌기 → FormData `layout` = **손댄 2개만**(sleeve index 2 · back_number) · 시드 front/back·name 미전송 · 서버 preset band/back_number 손계산 일치·front/back 균등분할 유지 · 토스트 «맞춘 위치 2개 저장». 새 등록 시작 → 캔버스 0개·pieceRegions 빈·payload null · 소매만 그리고 등록 → `layout` 1개·«맞춘 위치 1개 저장»(지난 등록의 배번 이동 재전송 없음). 콘솔 새 에러 0(기존 8건은 이전 history 탭 zip 404).
-- ⑥ 안전: layout id/index 로 경로 접근 0(os.path/open 없음) · `../<script>` id → 경고 문구에만 들어가고 toast 는 driveEsc 이스케이프 · 하드코딩 색 0 · engine/auth/gdrive/storage_backup/main/state/_handoff diff 0 · `_find_piece_index` 는 조회만. 참고(차단 아님): (a) UI 는 소매 매핑이 필수라 **layout 없는 등록(«위치는 자동 추정» 토스트)은 화면에선 도달 불가**(from-drive 전용) (b) 시드 front/back 을 안 옮기면 화면엔 «모든 조각 매핑» 인데 저장은 균등분할 추정 — 직원 안내 필요 (c) `pieces:"front"` 같은 타입 틀린 컬렉션은 경고 없이 무시(무해) (d) `#pname` 은 resetRegister 가 안 비움(기존). 정리: 임시 패턴 22·job 2·uploads 268·워크트리 삭제, 실패턴 2·0125* 보존.
+- **통과 · 실패 0** (커밋 8c29327). a273ff2 워크트리 회귀 diff 0 · layout 환산 소수 1자리 일치 · 오류 6종+1MB 폭탄 200 경고(1MB 초과는 starlette 400) · run_job 픽셀 Δ 일치 · 실마우스 드래그 2회 · 안전. 참고: (b) 시드 front/back 안 옮기면 «모든 조각 매핑» 인데 저장은 자동 추정 → **제안⑦ C 로 안내 추가**.
 
 ## 테스트 결과 (tester · 2026-09-22 ZIP 주문요약 — 커밋 37498cc)
 - 통과 70/70·회귀 0. 수정 권장 1(csv/xlsx `=1+1` 인젝션 → 수정 요청표·errors.md).
@@ -126,6 +125,8 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 | 결과 |
 |------|---------|------|------|
+| 2026-09-22 | tester | [제안⑦ 검증] 정적 6종 · 삭제 안전 51(정션/심볼릭/running/_trash/TTL0/patterns 오지정) · TestClient disabled/enabled+401+루프 예외 생존 · order_name 7케이스 · 브라우저 실마우스 4단계+work body 캡처 | **통과** 실패 0 · data 51/49/2 불변 · 정리 완료 |
+| 2026-09-22 | developer | [제안⑦ 자동 정리·이력 주문서명·시드 안내] cleanup_old_files(7일/30일·web_ 만·realpath)+24h daemon+maintenance/status · order_name→job_meta · 점선/카운트 배너 | 단위+TestClient+브라우저 통과 · 실데이터 무변동 · 커밋 대기(PM) |
 | 2026-09-22 | developer | [제안⑥ 삭제→Storage zip 삭제+묘비] delete_backup(JWT 릴레이)·.tombstones.json·restore 가드 1줄·DELETE /patterns/backup/{name}·UI 토스트/버튼 | 단위 40/40 · 인증 ON 401 · 브라우저 실클릭 · selftest PASS · storage_backup 삭제줄 0 · 커밋 대기(PM) |
 | 2026-09-22 | tester | [제안⑥ 검증] storage_backup 함수 단위 회귀 0 · restore 묘비 가드 5시나리오 · delete_backup 8갈래+헤더 비밀키 0 · api 순서/재등록/backup 삭제/401 · 브라우저 실클릭 | **통과** 68/68 · 실패 0 · 정리 완료 |
 | 2026-09-22 | tester | [제안⑤ 검증] a273ff2 워크트리 회귀 diff 0 · layout 환산 손계산 · 오류 6종+폭탄 · run_job 픽셀 측정 · 브라우저 실마우스 2회 · 안전 | **통과** 실패 0 · 참고 4(UI 는 소매 필수라 layout 없는 등록 불가 등) · 정리 완료 |
@@ -134,9 +135,3 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 | 2026-09-22 | developer | [제안④ 이력 재다운로드] job_meta.json · /jobs format/design/skipped/has_files · history 버튼 3개+접이식 요약표 | TestClient 15/15 · 브라우저 확인 · selftest PASS · 커밋 대기(PM) |
 | 2026-09-22 | tester | [ZIP 주문요약 검증] 정적 3종·e2e 38행 both·csv/xlsx/manifest 대조·회귀·주입·인젝션 | 기능 70/70 통과 · 수정 권장 1(csv/xlsx 인젝션) · errors.md 1건 |
 | 2026-09-22 | developer | [ZIP 주문요약] order_rows.json 보존 · 주문요약.csv/xlsx 동봉 · /manifest API · work 안내 1줄 | e2e 38행 수량합 87 일치 · selftest PASS · 커밋 대기(PM) |
-| 2026-09-22 | pm | scratchpad 100KB→정리(완료 섹션 삭제, 로그 요약) · 실사용 e2e 검증 · Render suspended 발견 · 개선 제안 | 커밋 docs |
-| 2026-09-22 | dev+tester | [TOP7 #3·#4·#7 + toast XSS + _find_job_dir] | 2f316c8 · tester 52/52 · engine diff 0 · errors.md 17항목 |
-| 2026-09-22 | dev+tester+pm | [TOP7 #2·#5·#6] 콜드스타트 거짓표시 3종 | a2f2d08 · tester 57/59→PM 수정(502 원문 유지)→통과 |
-| 2026-07-16 | developer | [TOP7 #1] 데모 ORDER 48명 제거 + step2 게이트 | 0ae5f26 · tester 5/5 |
-| 2026-07-16 | planner-architect | [실사용 전체진단] TOP7 도출(코드정독, 수정 0) | 안전지대: engine/auth/gdrive/비밀키/hex백업 |
-| 2026-07-09 | 전원 | [Phase B] 등록패턴 Storage 백업/복원 완료·실서버 e2e | 한글키→hex. 커밋 82c3364~7e47bf1 |

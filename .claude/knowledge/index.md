@@ -6,10 +6,11 @@
 | architecture.md | 9 | 2026-07-09 |
 | errors.md | 17 | 2026-09-22 |
 | conventions.md | 5 | 2026-07-06 |
-| decisions.md | 17 | 2026-07-09 |
+| decisions.md | 20 | 2026-09-22 |
 | lessons.md | 2 | 2026-07-09 |
 
 ## 최근 추가된 지식 (최근 5건)
+- [2026-09-22] decisions: 자동 정리 TTL — uploads 7일·jobs(`web_`만) 30일·24h daemon·realpath 방어·env 로 끄기/조정
 - [2026-09-22] errors: `_find_job_dir` 가 job_id[:6] 부분일치로 폴더를 찾아 폴더명(`web_26…`)을 넣으면 다른 달 작업 ZIP 이 나갔다 → 폴더명 정확일치 우선 + `_<id6>` 접미만
 - [2026-07-09] decisions+architecture: [Phase B] 등록패턴 파일 영속화 — Render 임시디스크 재배포 시 소실되는 data/patterns/{id}/를 Supabase Storage에 zip 백업/복원. 핵심=SERVICE_ROLE 없이 **요청자 admin JWT를 백엔드가 Storage REST에 릴레이**(등록=admin_required라 헤더에 admin 토큰). 등록직후 자동백업+startup 자동복원(로컬없는것만, zip-slip 방어). 버킷 pattern-presets(private)+RLS(읽기 anon개방·쓰기 admin). 1·2단계 구현·커밋(storage_backup.py 모듈+SQL가이드), 3·4단계(api/main 결선) 대기
 - [2026-07-07] decisions: 패턴 폴더 자동 스캔 — 재귀 대신 전폴더+전파일 각 1쿼리로 훑어 폴더맵 조립·부모별 그룹핑·사이즈파서로 패턴폴더 선별. GET /drive/scan(TTL캐시·루트스코프·경로 breadcrumb). 스캔=발견전용, 등록은 기존 정확경로(/patternfiles·/from-drive) 재사용→근사오차 무오염. 프론트 [자동찾기|트리] 탭+카드그리드, renderDrivePreview panel 인자화+activeDrivePanel로 입력칸 중복방어. Drive `name contains`는 prefix매칭이라 누락위험→전파일 fetch+endswith

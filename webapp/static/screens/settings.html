@@ -198,6 +198,11 @@
             <div><div class="setrow__label">엔진 버전</div><div class="setrow__desc">run_job · parse_order · flatten · verify · preview</div></div>
             <div class="setrow__control"><span class="mono muted" style="font-size:13px;">grader-engine v2.0</span></div>
           </div>
+          <!-- 자동 정리 상태(관리자만 읽을 수 있는 /api/maintenance/status). 못 읽으면 행 자체를 숨긴다. -->
+          <div class="setrow hidden" id="maintRow">
+            <div><div class="setrow__label">자동 정리</div><div class="setrow__desc">오래된 업로드(7일)·작업 폴더(30일)를 하루 한 번 지웁니다</div></div>
+            <div class="setrow__control"><span class="mono muted" style="font-size:13px;" id="maintText">—</span></div>
+          </div>
         </div>
       </section>
 
@@ -333,6 +338,30 @@ function loadSettings() {
     })
     .catch(() => { /* 서버 못 읽어도 화면은 기본값으로 동작 */ });
 }
+
+// ── 자동 정리 상태(관리자 전용) → 서버 섹션 한 줄 ──────────────────────
+//   403(관리자 아님)·미지원 서버(404)·네트워크 실패면 행을 숨긴 채로 둔다(화면 동작엔 영향 0).
+(function loadMaintenance() {
+  apiFetch("/api/maintenance/status")
+    .then((r) => r.ok ? r.json() : Promise.reject())
+    .then((m) => {
+      const row = document.getElementById("maintRow"), txt = document.getElementById("maintText");
+      if (!row || !txt) return;
+      let s;
+      if (m.enabled === false) s = "꺼짐 (GRADER_CLEANUP_DISABLED)";
+      else if (!m.last_run) s = "서버 시작 후 첫 정리 대기 중";
+      else if (m.last_error) s = `마지막 ${m.last_run} 실패: ${m.last_error}`;
+      else {
+        const r = m.last_result || {};
+        const mb = Math.round((r.freed_bytes || 0) / 1048576 * 10) / 10;
+        s = `마지막 ${m.last_run} · 업로드 ${r.uploads_removed || 0}개 · 작업 ${r.jobs_removed || 0}개 · ${mb}MB` +
+            (m.next_run ? ` · 다음 ${m.next_run}` : "");
+      }
+      txt.textContent = s;   // textContent = 서버 문자열을 HTML 로 해석하지 않는다
+      row.classList.remove("hidden");
+    })
+    .catch(() => { /* 관리자 아님·구 서버 — 행 숨김 유지 */ });
+})();
 
 // 서버 헬스체크 → 사이드바 server-pill
 (function refreshServerPill() {

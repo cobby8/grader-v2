@@ -52,6 +52,10 @@
     display: none; align-items: center; justify-content: center; cursor: pointer; color: var(--text-muted);
   }
   .region__del .material-symbols-outlined { font-size: 13px; }
+  /* 자동 시드(한 번도 안 끈 영역) = 점선 테두리. 색은 기존 변수 그대로, 선 모양만 다르다.
+     끌거나 크기를 바꾸면 data-touched="1" 이 되어 실선으로 바뀐다(= 등록 시 저장되는 것). */
+  .region[data-touched="0"] { border-style: dashed; }
+  .region[data-touched="0"] .region__label { opacity: .8; }
   .region.is-selected { box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 35%, transparent); z-index: 4; }
   .region.is-selected .region__del { display: flex; }
   .region--number { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 12%, transparent); color: var(--brand); }
@@ -322,7 +326,7 @@
               <span class="material-symbols-outlined alert__icon">info</span>
               <div>
                 <div class="alert__title">여기서 맞춘 위치가 등록 시 저장돼요</div>
-                <div class="alert__body">직접 그리거나 옮긴 조각 영역은 preset.json(design_region_pt)에 저장됩니다. 손대지 않은 항목은 서버가 자동 추정합니다.</div>
+                <div class="alert__body">직접 그리거나 옮긴 조각 영역은 preset.json(design_region_pt)에 저장됩니다. 손대지 않은 항목은 서버가 자동 추정합니다. <strong>미리 그려진 앞판·뒤판(점선)은 자동 추정이에요. 정확한 위치로 쓰려면 한 번 끌어서 맞춰 주세요(끌면 저장돼요).</strong></div>
               </div>
             </div>
             <div>
@@ -415,6 +419,8 @@
 
         <!-- register footer nav -->
         <div class="actionbar">
+          <!-- 편집기(B·C) 영역 상태 — 점선(자동 추정) / 실선(끌어서 맞춤 = 등록 시 저장). 표시 전용. -->
+          <span class="muted" style="font:var(--text-caption); margin-right:auto;" id="layoutCount"></span>
           <button class="btn btn--ghost" id="regPrev"><span class="material-symbols-outlined">arrow_back</span>이전</button>
           <button class="btn btn--primary" id="regNext">다음 단계<span class="material-symbols-outlined">arrow_forward</span></button>
         </div>
@@ -909,6 +915,10 @@ function renderPieceList() {
     const set = !!pieceRegions[p.id];
     const coord = set ? toPt(pieceRegions[p.id]).join(", ") : "미지정";
     const armed = armedPiece === p.id;
+    // 시드(한 번도 안 끈 것)는 '자동 추정' 으로 표시 — 등록 시 이 좌표가 아니라 서버 추정값이 저장된다.
+    const auto = set && pieceRegions[p.id].dataset.touched !== "1";
+    const stateLabel = set ? (auto ? "자동 추정" : "지정됨") : (armed ? "그리는 중" : "지정");
+    const stateIcon = set ? (auto ? "auto_fix_high" : "check_circle") : (armed ? "edit" : "radio_button_unchecked");
     return `
       <div class="piecerow ${armed ? "is-armed" : ""}" data-piece="${p.id}">
         <span class="piecerow__dot" style="background:${p.color};"></span>
@@ -916,14 +926,34 @@ function renderPieceList() {
           <div class="piecerow__name">${p.name}</div>
           <div class="coord" style="margin-top:4px; display:inline-block;">[${coord}]</div>
         </div>
-        <span class="piecerow__state ${set ? "is-set" : ""}">
-          <span class="material-symbols-outlined">${set ? "check_circle" : (armed ? "edit" : "radio_button_unchecked")}</span>${set ? "지정됨" : (armed ? "그리는 중" : "지정")}
+        <span class="piecerow__state ${set && !auto ? "is-set" : ""}">
+          <span class="material-symbols-outlined">${stateIcon}</span>${stateLabel}
         </span>
       </div>`;
   }).join("");
   $("#pieceList").querySelectorAll("[data-piece]").forEach((row) => {
     row.addEventListener("click", () => armPiece(row.dataset.piece));
   });
+  updateLayoutCount();
+}
+
+// ── 편집기 영역 상태 집계(표시 전용) ─────────────────────────────────────────
+//   B(조각)·C(배번·이름) 캔버스의 영역을 세어 «자동 추정 N개 · 저장 N개» 를 만든다.
+//   저장 = data-touched="1"(끌었거나 직접 그림) → buildLayoutPayload 가 보내는 것과 같은 기준.
+//   전송 규칙은 바꾸지 않는다 — 숫자만 보여 준다.
+function countLayoutState() {
+  let auto = 0, saved = 0;
+  document.querySelectorAll("#mapCanvas .region--piece, #rgnCanvas .region").forEach((el) => {
+    if (el.dataset.touched === "1") saved++; else auto++;
+  });
+  return { auto, saved };
+}
+function updateLayoutCount() {
+  const c = countLayoutState();
+  const el = $("#layoutCount");
+  if (!el) return;
+  el.textContent = (c.auto + c.saved) ? `자동 추정 ${c.auto}개 · 저장 ${c.saved}개` : "";
+  el.title = "점선 = 자동 추정(등록 시 서버 추정값) · 실선 = 끌어서 맞춤(등록 시 이 위치 저장)";
 }
 function armPiece(id) {
   armedPiece = armedPiece === id ? null : id;
@@ -941,7 +971,7 @@ function drawPieceRegion(p, x, y, w, h, touched) {
     cls: "region--piece", color: p.color, x, y, w, h,
     label: p.name, data: { piece: p.id, touched: touched ? "1" : "0" }, deletable: true,
     onChange: (r) => { r.dataset.touched = "1"; renderPieceList(); recomputeContentBox(false); },
-    onDelete: () => { delete pieceRegions[p.id]; renderPieceList(); recomputeContentBox(false); validateMap(); },
+    onDelete: () => { delete pieceRegions[p.id]; renderPieceList(); recomputeContentBox(false); validateMap(); setTimeout(updateLayoutCount, 0); },
   });
   pieceRegions[p.id] = el;
 }
@@ -981,12 +1011,18 @@ function validateMap() {
         <div class="alert__body">${unset.map((p) => p.name).join(" · ")} 영역을 지정해야 다음 단계로 진행할 수 있습니다.</div></div>
       </div>`;
   } else {
+    // 매핑은 됐지만 시드(자동 추정)가 남아 있으면 그 수를 함께 보여 준다 — «전부 맞췄다» 로 오해하지 않게.
+    const autoN = PIECES.filter((p) => pieceRegions[p.id] && pieceRegions[p.id].dataset.touched !== "1").length;
+    const body = autoN
+      ? `<div class="alert__body">그중 ${autoN}개는 점선(자동 추정)이에요. 정확한 위치로 쓰려면 한 번 끌어서 맞춰 주세요.</div>`
+      : "";
     $("#mapWarn").innerHTML = `
       <div class="alert alert--pass">
         <span class="material-symbols-outlined alert__icon">check_circle</span>
-        <div><div class="alert__title">모든 조각이 매핑되었습니다</div></div>
+        <div><div class="alert__title">모든 조각이 매핑되었습니다</div>${body}</div>
       </div>`;
   }
+  updateLayoutCount();
   return unset.length === 0;
 }
 mapCanvas.addEventListener("pointerdown", (e) => {
@@ -1053,8 +1089,8 @@ function makeRgn(kind, x, y, w, h, align, touched) {
   return addRegion(rgnCanvas, {
     cls: "region--" + kind, x, y, w, h, align: align || "center",
     label: LABELS[kind], sample: SAMPLE[kind], data: { kind, touched: touched ? "1" : "0" }, deletable: true,
-    onChange: (el) => { el.dataset.touched = "1"; if (el === rgnSelected) showRgnOpts(el); },
-    onDelete: (el) => { if (el === rgnSelected) { rgnSelected = null; showRgnOpts(null); } },
+    onChange: (el) => { el.dataset.touched = "1"; if (el === rgnSelected) showRgnOpts(el); updateLayoutCount(); },
+    onDelete: (el) => { if (el === rgnSelected) { rgnSelected = null; showRgnOpts(null); } setTimeout(updateLayoutCount, 0); },
   });
 }
 document.querySelectorAll(".toolbtn").forEach((b) => {
@@ -1083,6 +1119,7 @@ rgnCanvas.addEventListener("pointerdown", (e) => {
   const up = () => {
     document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", up);
     if (parseFloat(el.style.width) < 5 || parseFloat(el.style.height) < 4) { el.remove(); rgnCanvas.__ed.select(null); }
+    updateLayoutCount();
     activeTool = null;
     document.querySelectorAll(".toolbtn").forEach((x) => x.classList.remove("is-active"));
     rgnCanvas.classList.remove("is-drawing");
@@ -1097,6 +1134,7 @@ $("#optAlign").querySelectorAll("button").forEach((b) => b.addEventListener("cli
 function seedRgn() {
   makeRgn("number", 34, 22, 32, 20, "center", false);   // 시드 = 미전송(손대면 전송)
   makeRgn("name", 28, 50, 44, 11, "center", false);
+  updateLayoutCount();
 }
 
 // ── 등록 시 서버로 보낼 layout(화면에서 '손댄' 위치만) ─────────────────────────
@@ -1265,6 +1303,7 @@ function showSub() {
   $("#regNext").innerHTML = rs === 2
     ? '<span class="material-symbols-outlined">save</span>패턴 저장'
     : '다음 단계<span class="material-symbols-outlined">arrow_forward</span>';
+  updateLayoutCount();
 }
 function regForward() {
   if (rs === 1 && !validateMap()) {
@@ -1357,7 +1396,10 @@ function savePattern() {
       // 화면에서 맞춘 위치가 서버에 저장됐으면 그 개수를, 하나도 없으면 "위치는 자동 추정" 을 명시한다.
       const la = body.layout_applied || {};
       const laN = (la.pieces || 0) + ((la.areas || []).length);
-      toast("pass", "check_circle", laN ? `패턴이 등록됐어요 (맞춘 위치 ${laN}개 저장)` : "패턴이 등록됐어요 (위치는 자동 추정)",
+      // 시드(점선)로 남긴 영역 수 — 서버 추정값이 저장됐다는 뜻이라 함께 보여 준다.
+      const autoN = countLayoutState().auto;
+      const autoMsg = autoN ? ` · 자동 추정 ${autoN}개` : "";
+      toast("pass", "check_circle", laN ? `패턴이 등록됐어요 (맞춘 위치 ${laN}개 저장${autoMsg})` : `패턴이 등록됐어요 (위치는 자동 추정${autoMsg})`,
         `${body.pattern_id} · 조각 ${body.pieces} · 사이즈 ${(body.active_sizes||[]).length}개 · ${glyphMsg}${disMsg}`);
 
       // 경고가 있으면 안내(부분 실패 등).

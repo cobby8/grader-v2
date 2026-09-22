@@ -63,6 +63,15 @@ def get_jobs_dir() -> str:
     return JOBS_DIR
 
 
+def get_uploads_dir() -> str:
+    """업로드 임시저장 폴더(data/uploads, 절대경로) 를 돌려준다.
+
+    save_upload 와 cleanup_old_files 가 같은 곳을 보게 하는 단일 창구. 테스트는 이 함수를
+    monkeypatch 해 임시 폴더로 돌린다(실제 data/uploads 를 건드리지 않게).
+    """
+    return UPLOADS_DIR
+
+
 def save_upload(upload) -> str:
     """업로드된 파일(UploadFile)을 data/uploads/ 에 임시 저장하고 절대경로를 돌려준다.
 
@@ -187,6 +196,9 @@ def update_job(job_id: str, **fields: Any) -> None:
     """job 의 일부 필드를 갱신한다(자물쇠로 보호). 모르는 job_id 는 조용히 무시."""
     with _JOBS_LOCK:
         if job_id in _JOBS:
+            # 완료·실패로 넘어가는 순간을 기록해 둔다(메모리 정리 prune_finished_jobs 의 기준 시각).
+            if fields.get("status") in ("done", "error") and "finished_at" not in fields:
+                fields["finished_at"] = time.time()
             _JOBS[job_id].update(fields)
 
 
@@ -203,3 +215,197 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
     with _JOBS_LOCK:
         j = _JOBS.get(job_id)
         return dict(j) if j else None
+
+
+# ── 오래된 업로드·작업 폴더 자동 정리(디스크 청소) ─────────────────────────────
+# 왜 필요한가(비유):
+#   업로드(data/uploads)는 '우편함' 이라 주문서·디자인이 들어올 때마다 쌓이는데, 엔진이
+#   읽고 난 뒤 치우는 코드가 없었다(2026-09-22 실측 48개). 작업 결과(data/jobs)도 마찬가지
+#   (49개). Render 는 재배포 때 디스크가 새것이 되지만, 오래 켜 두면 디스크가 찬다.
+#   그래서 '청소부(스레드)' 가 하루 한 번 돌며 오래된 것만 치운다.
+#
+# 규약(TTL):
+#   · uploads : 7일  — 엔진이 읽는 순간 용도가 끝난다(결과는 jobs 에 남는다).
+#   · jobs    : 30일 — history.html 이 목록·ZIP 재다운로드에 읽으므로 넉넉히 둔다.
+#   · 환경변수 GRADER_UPLOADS_TTL_DAYS / GRADER_JOBS_TTL_DAYS 로 덮어쓸 수 있다.
+#
+# 🚫 절대 안 건드리는 것:
+#   · data/patterns/ (등록 패턴) · _trash/ · .tombstones.json — 청소 대상 폴더가 아니다.
+#   · jobs 안에서 이름이 `web_` 로 시작하지 않는 폴더(_qa_* 등 사람이 만든 검수 폴더).
+#   · 심볼릭 링크·정리 대상 폴더 밖을 가리키는 경로(realpath 로 확인) — 경로 이탈 방어.
+#   · 아직 실행 중(running)인 job 의 결과 폴더.
+UPLOADS_TTL_DAYS_DEFAULT = 7
+JOBS_TTL_DAYS_DEFAULT = 30
+_JOB_CLEANUP_PREFIX = "web_"          # 웹앱이 만든 job 폴더만 정리 대상(api.py create_job_endpoint 규칙)
+
+
+def ttl_days_from_env(name: str, default: int) -> int:
+    """환경변수에서 TTL(일)을 읽는다. 없거나 숫자가 아니거나 1 미만이면 기본값.
+
+    0·음수를 거부하는 이유: '0일' 은 방금 올린 파일까지 지우게 되어 사고로 이어진다.
+    끄고 싶으면 GRADER_CLEANUP_DISABLED=1 을 쓴다.
+    """
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        days = int(raw)
+    except ValueError:
+        return default
+    return days if days >= 1 else default
+
+
+def _is_inside(path: str, base: str) -> bool:
+    """path 가 base 폴더 '안' 인지 realpath 로 판정한다(심볼릭 링크·`..` 이탈 방어)."""
+    try:
+        real_path = os.path.realpath(path)
+        real_base = os.path.realpath(base)
+        return os.path.commonpath([real_path, real_base]) == real_base and real_path != real_base
+    except (ValueError, OSError):
+        # 드라이브가 다르면 commonpath 가 ValueError — 당연히 '밖' 이다.
+        return False
+
+
+def _tree_bytes(path: str) -> int:
+    """폴더(또는 파일) 크기 합계. 실패한 항목은 0 으로 센다(집계용이라 정확도보다 안전)."""
+    if os.path.isfile(path):
+        try:
+            return os.path.getsize(path)
+        except OSError:
+            return 0
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for fn in files:
+            try:
+                total += os.path.getsize(os.path.join(root, fn))
+            except OSError:
+                pass
+    return total
+
+
+def _running_job_dirs() -> set:
+    """지금 실행 중(running)인 job 들의 결과 폴더(realpath) 집합 — 청소에서 제외한다."""
+    out = set()
+    with _JOBS_LOCK:
+        for j in _JOBS.values():
+            if j.get("status") == "running" and j.get("out_dir"):
+                out.add(os.path.realpath(str(j["out_dir"])))
+    return out
+
+
+def cleanup_old_files(uploads_ttl_days: Optional[int] = None,
+                      jobs_ttl_days: Optional[int] = None,
+                      dry_run: bool = False) -> Dict[str, Any]:
+    """오래된 업로드 파일·web_ job 폴더를 mtime 기준으로 지운다(dry_run 이면 집계만).
+
+    인자를 안 주면 환경변수(GRADER_*_TTL_DAYS) → 기본값(7일/30일) 순으로 정한다.
+    반환: {uploads_removed, jobs_removed, freed_bytes, errors[], dry_run, uploads_ttl_days, jobs_ttl_days}
+      · 항목 하나가 실패해도 멈추지 않고 errors 에 적고 계속 간다.
+    """
+    if uploads_ttl_days is None:
+        uploads_ttl_days = ttl_days_from_env("GRADER_UPLOADS_TTL_DAYS", UPLOADS_TTL_DAYS_DEFAULT)
+    if jobs_ttl_days is None:
+        jobs_ttl_days = ttl_days_from_env("GRADER_JOBS_TTL_DAYS", JOBS_TTL_DAYS_DEFAULT)
+
+    now = time.time()
+    result: Dict[str, Any] = {
+        "uploads_removed": 0, "jobs_removed": 0, "freed_bytes": 0, "errors": [],
+        "dry_run": bool(dry_run),
+        "uploads_ttl_days": int(uploads_ttl_days), "jobs_ttl_days": int(jobs_ttl_days),
+    }
+
+    # ① 업로드 파일: uploads 폴더 '바로 아래' 의 일반 파일만(하위 폴더·링크는 건너뜀).
+    uploads_dir = get_uploads_dir()
+    uploads_cutoff = now - uploads_ttl_days * 86400
+    if os.path.isdir(uploads_dir):
+        for fn in sorted(os.listdir(uploads_dir)):
+            path = os.path.join(uploads_dir, fn)
+            try:
+                if os.path.islink(path) or not os.path.isfile(path):
+                    continue
+                if not _is_inside(path, uploads_dir):
+                    continue  # 경로 이탈(링크 등) — 만지지 않는다
+                if os.path.getmtime(path) > uploads_cutoff:
+                    continue  # 아직 신선하다
+                size = _tree_bytes(path)
+                if not dry_run:
+                    os.remove(path)
+                result["uploads_removed"] += 1
+                result["freed_bytes"] += size
+            except Exception as e:
+                result["errors"].append(f"uploads/{fn}: {type(e).__name__}: {e}")
+
+    # ② job 폴더: 이름이 web_ 로 시작하는 폴더만. 실행 중인 job 은 제외.
+    jobs_dir = get_jobs_dir()
+    jobs_cutoff = now - jobs_ttl_days * 86400
+    running = _running_job_dirs()
+    if os.path.isdir(jobs_dir):
+        for fn in sorted(os.listdir(jobs_dir)):
+            if not fn.startswith(_JOB_CLEANUP_PREFIX):
+                continue  # _qa_* · 사람이 만든 폴더 — 절대 안 건드린다
+            path = os.path.join(jobs_dir, fn)
+            try:
+                if os.path.islink(path) or not os.path.isdir(path):
+                    continue
+                if not _is_inside(path, jobs_dir):
+                    continue  # 경로 이탈 방어
+                if os.path.realpath(path) in running:
+                    continue  # 아직 만드는 중
+                if os.path.getmtime(path) > jobs_cutoff:
+                    continue
+                size = _tree_bytes(path)
+                if not dry_run:
+                    shutil.rmtree(path)
+                result["jobs_removed"] += 1
+                result["freed_bytes"] += size
+            except Exception as e:
+                result["errors"].append(f"jobs/{fn}: {type(e).__name__}: {e}")
+
+    return result
+
+
+def prune_finished_jobs(max_age_sec: float = 86400.0) -> int:
+    """완료(done)·실패(error) 후 max_age_sec 이 지난 _JOBS 메모리 항목을 지운다. 반환: 지운 개수.
+
+    왜: _JOBS 는 진행바 폴링용 메모장이라 완료 뒤엔 쓸모가 없는데 지우는 코드가 없어
+    서버를 오래 켜 두면 항목이 계속 쌓였다. 결과 자체는 data/jobs/<id>/job.json 에 있으므로
+    메모리에서 지워도 기록 화면·ZIP 재다운로드는 그대로 된다. running 은 절대 안 지운다.
+    """
+    cutoff = time.time() - max_age_sec
+    removed = 0
+    with _JOBS_LOCK:
+        for job_id in list(_JOBS.keys()):
+            j = _JOBS[job_id]
+            if j.get("status") not in ("done", "error"):
+                continue
+            finished = j.get("finished_at") or j.get("started_at") or 0
+            if finished < cutoff:
+                del _JOBS[job_id]
+                removed += 1
+    return removed
+
+
+# ── 정리 실행 결과(관리자 화면 표시용) ───────────────────────────────────────
+# main.py 의 청소 스레드가 한 바퀴 돌 때마다 여기에 마지막 결과·다음 예정 시각을 적는다.
+# GET /api/maintenance/status 가 이걸 그대로 돌려준다(값 복사본).
+_MAINT: Dict[str, Any] = {
+    "enabled": True,          # GRADER_CLEANUP_DISABLED=1 이면 False
+    "runs": 0,                # 지금까지 돈 횟수
+    "last_run": None,         # 마지막 실행 시각(ISO)
+    "last_result": None,      # cleanup_old_files 결과 + jobs_pruned
+    "last_error": None,       # 마지막 실행이 통째로 실패했으면 사유
+    "next_run": None,         # 다음 예정 시각(ISO)
+}
+_MAINT_LOCK = threading.Lock()
+
+
+def record_maintenance(**fields: Any) -> None:
+    """정리 상태 일부 필드를 갱신한다(자물쇠로 보호)."""
+    with _MAINT_LOCK:
+        _MAINT.update(fields)
+
+
+def get_maintenance_status() -> Dict[str, Any]:
+    """정리 상태 사본을 돌려준다(호출자가 만져도 안전)."""
+    with _MAINT_LOCK:
+        return json.loads(json.dumps(_MAINT, ensure_ascii=False, default=str))
