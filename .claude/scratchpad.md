@@ -38,6 +38,17 @@
 | **TOP7 #2·#5·#6** | 콜드스타트 거짓표시 3종(목록 실패 구분·서버 핀 4상태·등록 실패 한글) | ✅ a2f2d08 (tester 59항목) |
 | **TOP7 #3·#4·#7 + XSS + ZIP탐색** | 패턴 삭제(_trash)·정직 안내·백업 상태 UI·toast 이스케이프·_find_job_dir 정확일치 | ✅ 2f316c8 (tester 52/52) |
 
+## 구현 기록 (developer · 2026-09-22 ZIP 주문요약 동봉)
+- **api.py**: `create_job_endpoint` 가 job 폴더에 `order_rows.json`(name/number/size/qty) 저장(try/except) · `_build_manifest_rows(job_dir,data)`=outputs+summary.skipped+order_rows 합침(주문서 순서, skip 행 원자리, 구 job 은 수량 빈칸·사이즈는 사유문에서 복원) · `주문요약.csv`(UTF-8 BOM·CRLF·합계행)+`주문요약.xlsx`(openpyxl, 제외행 PatternFill) 를 `job_zip` 루트에 동봉(각각 try/except) · `GET /jobs/{id}/manifest` JSON. engine 무수정.
+- **work.html** fmtNote: 요약표 동봉 안내 1줄(항상 표시).
+- 검증(TestClient 실주문 38행): manifest/csv/xlsx 행 38=생성33+제외5(3XL), 수량합 87=원본 87, 이해솔 L=4, 구 폴더 ffcc664 zip both 정상(수량 빈칸). selftest PASS. 만든 job/uploads 삭제.
+- tester 참고: 구 job 의 제외 행은 **배번 빈칸**(skipped 기록에 number 없음) — 신 job 은 order_rows 로 채워짐.
+
+## 테스트 결과 (tester · 2026-09-22 ZIP 주문요약)
+- **판정: 통과(기능 70/70·회귀 0) + 수정 권장 1(csv/xlsx 인젝션)**. 정적 3종 OK. e2e 38행 both: pdf/·eps/ 33+33 + 루트 csv/xlsx · CSV BOM·CRLF·38+합계1 · **수량 합 87 = 엑셀 21~58행 "N장" 직접 계산** · 이해솔 L=4 · 제외 5행 전부 3XL(배번 채움) · 생성 33행 PDF/EPS ↔ ZIP 1:1 · 순번·순서·행별 수량 = 엑셀 · xlsx 40행·합 87·제외행만 배경·CSV 와 동일 · /manifest totals {33,5,87=79+8} 동일.
+- 회귀: zip pdf(기본)·eps 정상 · 구 폴더 ffc664 zip/manifest 정상(has_qty False·수량 빈칸·3XL 복원·제외 순번 4/13/20/27/36) · 없는 job 404 · `web_26` 404(정확일치 유지) · format 오류 400 · **json.dump 예외 주입에도 POST /jobs 200·done**(0바이트 order_rows.json 잔존→`_load_order_rows` None, 수량 빈칸) · engine/auth/gdrive/storage_backup diff 0 · ZIP 경로 이탈 없음.
+- **⚠ 수정 권장**: 이름 `=1+1` → CSV 원문 그대로, **xlsx 는 openpyxl 이 수식 셀('f')로 저장**해 엑셀이 경고 없이 실행(errors.md). 성능: 생성 **38.1s** · zip both 응답 10.35s(28MB) 중 요약표 **19ms**(나머지는 TestClient 스트리밍, 구 job 도 9.4s). 만든 job·uploads 삭제 완료.
+
 ## 백로그 (차단 아님, 후속)
 - **[Phase B: 등록패턴 파일 영속화]** Render 임시디스크→재배포 시 등록 preset 소실(현 repo커밋 2개만 잔존). 복구=재스캔등록(같은이름이면 메타 자동재적용). preset 20~88KB 소형→Supabase Storage 백업/복원 별도 승인단위로.
 - **[즐겨찾기/분류 후속]** updated_by 프론트 미전송(SQL nullable이라 OK). 별표 이중클릭 debounce 없음(멱등). 카테고리 라벨 정규화 목록(PM_KNOWN_CATEGORIES) 조정 여지.
@@ -80,14 +91,14 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 | 요청자 | 대상 | 문제 | 상태 |
 |--------|------|------|------|
 | reviewer/tester | 3XL.ai | 원본이 5XL과 동일(자산결함) | 비활성·재확보 대기 |
-| tester | stiz-*.json 키 | gitignore 누락(유출위험) | ✅해결 07-06: .gitignore stiz-*.json 추가 |
-| debugger | webapp/storage_backup.py | **[Phase B 백업 조용히 실패=근본원인 확정]** Supabase Storage 가 오브젝트 키의 **한글(비ASCII)을 400 InvalidKey 로 거부**(괄호·공백은 무해, 한글만 원인·실측). httpx 퍼센트인코딩해도 서버가 디코딩 후 재검증→소용없음(`%`도 거부). 모든 패턴명이 한글이라 백업 100% 실패, degrade 가 조용히 숨김. **수정안**: 오브젝트 키를 ASCII 가역 인코딩(hex 또는 base64url, 둘 다 실측 통과+가역)으로 — backup_pattern 인코딩/restore_missing 디코딩 일치. 로컬 폴더명은 한글 유지. 기존 백업0=마이그레이션 불필요. errors.md 상세 기록. | ✅ developer 수정완료 07-09(hex 인코딩·py_compile OK·라운드트립 단위검증 PASS) — tester+reviewer 검증 후 PM 커밋 |
 | tester | webapp/static/screens/patterns.html regFailMsg(≈1180) | [TOP7 #6 회귀] 502/503/504 에서 body.error(서버 JSON, 예: from-drive "Drive 접근 실패: …")가 있어도 "서버가 깨어나는 중"으로 덮음 → 드라이브 권한 문제를 콜드스타트로 오안내. 수정안: body.error 있으면 그걸 우선, 없을 때(HTML 게이트웨이 응답)만 깨우는중 문구 | 대기 |
-| tester | patterns.html toast(561)·work.html toast | [기존 약점·권장] toast body 를 innerHTML 로 넣어 서버 body.error 의 HTML이 실행됨. 수정안: toast 안에서 title/body 이스케이프(또는 textContent) | ✅해결 09-22: 두 화면 toast title/body 이스케이프(driveEsc/esc), tester 재검증 통과 |
+| tester | webapp/api.py `_manifest_table`(≈1290)·`_manifest_xlsx_bytes` | [수정 권장·회귀 아님] 주문요약 인젝션 — `=1+1` 이 CSV 그대로, xlsx 는 openpyxl 수식 셀('f'). 수정안: `=+-@\t\r` 접두 문자열에 `'` 접두 + xlsx `data_type='s'` | 대기 |
 
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 | 결과 |
 |------|---------|------|------|
+| 2026-09-22 | tester | [ZIP 주문요약 검증] 정적 3종·e2e 38행 both·csv/xlsx/manifest 대조·회귀·주입·인젝션 | 기능 70/70 통과 · 수정 권장 1(csv/xlsx 인젝션) · errors.md 1건 |
+| 2026-09-22 | developer | [ZIP 주문요약] order_rows.json 보존 · 주문요약.csv/xlsx 동봉 · /manifest API · work 안내 1줄 | e2e 38행 수량합 87 일치 · selftest PASS · 커밋 대기(PM) |
 | 2026-09-22 | pm | scratchpad 100KB→정리(완료 섹션 삭제, 로그 요약) · 실사용 e2e 검증 · Render suspended 발견 · 개선 제안 | 커밋 docs |
 | 2026-09-22 | dev+tester | [TOP7 #3·#4·#7 + toast XSS + _find_job_dir] | 2f316c8 · tester 52/52 · engine diff 0 · errors.md 17항목 |
 | 2026-09-22 | dev+tester+pm | [TOP7 #2·#5·#6] 콜드스타트 거짓표시 3종 | a2f2d08 · tester 57/59→PM 수정(502 원문 유지)→통과 |
@@ -96,5 +107,3 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 | 2026-07-09 | 전원 | [Phase B] 등록패턴 Storage 백업/복원 완료·실서버 e2e | 한글키→hex. 커밋 82c3364~7e47bf1 |
 | 2026-07-07 | dev+tester | 번호·이름 위치 구멍 1~4단계(piece_id 자동·완성본/글리프셋 선택) | run_job e2e FIXED · tester 43+8 |
 | 2026-07-07 | dev/tester/rev | 즐겨찾기+자동분류(pattern_meta, RLS) + 별 골드 | 27b96db·e27ac16 |
-| 2026-07-06 | dev | Drive 자동스캔(/drive/scan 카드그리드) · SSL 스레드로컬 수정 | f3b3257·25f490c·4783a12 |
-| 2026-06-29 | dev | 배포 Phase1 Docker+Render+introspection admin 게이트 | d0c4284·0b8f4e9 |

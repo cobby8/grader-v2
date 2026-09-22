@@ -1067,9 +1067,10 @@ function renderReview() {
     </div>
     <button class="btn btn--primary" id="zipBtn"><span class="material-symbols-outlined">download</span>ZIP 다운로드(${outFmt()})</button>`;
 
-  // 둘 다(both)일 때 ZIP 하위폴더 안내 (의뢰 6)
-  $("#fmtNote").innerHTML = outFmtKey() === "both" ? `
-    <div class="note" style="padding:0;"><span class="material-symbols-outlined">folder_zip</span>두 형식을 함께 출력합니다. ZIP 안에서 <span class="mono">pdf/</span> · <span class="mono">eps/</span> 하위폴더로 분리됩니다.</div>` : "";
+  // 둘 다(both)일 때 ZIP 하위폴더 안내 (의뢰 6) + 주문요약표 동봉 안내(항상)
+  $("#fmtNote").innerHTML = (outFmtKey() === "both" ? `
+    <div class="note" style="padding:0;"><span class="material-symbols-outlined">folder_zip</span>두 형식을 함께 출력합니다. ZIP 안에서 <span class="mono">pdf/</span> · <span class="mono">eps/</span> 하위폴더로 분리됩니다.</div>` : "") + `
+    <div class="note" style="padding:0;"><span class="material-symbols-outlined">table</span>ZIP 에 <span class="mono">주문요약.csv</span> · <span class="mono">주문요약.xlsx</span>(이름·배번·사이즈·수량·제외 사유)가 함께 들어갑니다.</div>`;
 
   // 건너뜀 N건 배너 (의뢰 3)
   const skipTotal = SKIPPED.reduce((a, s) => a + s.count, 0);

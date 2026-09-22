@@ -862,6 +862,20 @@ async def create_job_endpoint(payload: Dict[str, Any] = Body(...)) -> Dict[str, 
     os.makedirs(out_dir, exist_ok=True)
     state.update_job(job_id, out_dir=os.path.abspath(out_dir))
 
+    # 주문 행(이름·배번·사이즈·수량)을 결과 폴더에 그대로 남긴다 — order_rows.json.
+    # 왜: engine 의 job.json outputs 에는 '수량(qty)' 이 없다(엔진은 선수당 파일 1개만 만든다).
+    # 공장은 "L 4장" 같은 수량이 필요하므로, ZIP 요약표(주문요약.csv/xlsx)가 이 파일에서 수량을
+    # 되찾아 붙인다. 저장 실패는 생성을 막지 않는다(요약표 수량만 빈칸이 된다).
+    # 임시 파일에 다 쓴 뒤 이름을 바꾼다 — 쓰다 실패해도 0바이트 파일이 남지 않는다.
+    try:
+        _final = os.path.join(out_dir, "order_rows.json")
+        _tmp = _final + ".tmp"
+        with open(_tmp, "w", encoding="utf-8") as f:
+            json.dump(rows, f, ensure_ascii=False, indent=1)
+        os.replace(_tmp, _final)
+    except Exception as e:
+        print(f"[job {job_id}] order_rows.json 저장 실패(무시, 요약표 수량 빈칸): {e}")
+
     # 백그라운드 스레드로 run_job 실행(daemon: 서버 종료 시 함께 정리).
     t = threading.Thread(
         target=_run_job_thread,
@@ -1081,6 +1095,277 @@ def _collect_zip_files(job_dir: str, data: Dict[str, Any],
     return pairs
 
 
+# ════════════════════════════════════════════════════════════════════════════
+#  주문 요약표(공장용) — ZIP 에 동봉하는 주문요약.csv / 주문요약.xlsx
+# ════════════════════════════════════════════════════════════════════════════
+#  왜 필요한가: ZIP 만 열면 선수별 PDF/EPS 만 있고 «몇 장인지»·«왜 빠졌는지» 가 없다.
+#  (2026-09-22 실측: 연세대 38행 중 3XL 5명이 자산 결함으로 skip 됐는데 ZIP 만 보면 그냥 없다.)
+#  재료 셋을 합친다 — engine 은 건드리지 않는다:
+#    ① job.json outputs      : 생성된 선수(size/name/number/pdf/eps/verify_pass)
+#    ② job.json summary.skipped : 제외된 행(row 인덱스/name/reason)
+#    ③ order_rows.json         : 주문 행 원본(qty 포함) — 신규 job 만 있다(구 job 은 수량 빈칸)
+#  outputs 는 order_rows 순서대로(skip 행만 빠진 채) 쌓이므로, 행 인덱스로 원래 자리를 복원한다.
+
+_MANIFEST_HEADER = ["순번", "이름", "배번", "사이즈", "수량", "상태", "사유",
+                    "PDF 파일명", "EPS 파일명", "검사"]
+
+
+def _row_key(name: Any, number: Any, size: Any) -> tuple:
+    """(이름, 배번, 사이즈) 매칭 열쇠 — 공백·형 차이를 지운다."""
+    return (str(name or "").strip(), str(number or "").strip(), str(size or "").strip())
+
+
+def _load_order_rows(job_dir: str) -> Optional[List[dict]]:
+    """order_rows.json 을 읽는다. 없거나 깨졌으면 None(구 job 호환 — 수량 빈칸으로 진행)."""
+    path = os.path.join(job_dir, "order_rows.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            rows = json.load(f)
+        return rows if isinstance(rows, list) else None
+    except Exception as e:
+        print(f"[manifest] order_rows.json 읽기 실패(수량 빈칸으로 진행): {e}")
+        return None
+
+
+def _output_verify_label(o: Dict[str, Any]) -> str:
+    """job_result 와 같은 기준: PDF 검사 + EPS 검사 둘 다 통과해야 '통과'."""
+    ok = bool(o.get("verify_pass"))
+    ce = o.get("checks_eps")
+    if isinstance(ce, list) and ce:
+        ok = ok and all(c.get("ok", True) for c in ce)
+    return "통과" if ok else "확인필요"
+
+
+def _build_manifest_rows(job_dir: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """요약표 행 목록과 합계를 만든다.
+
+    반환: {"rows": [ {seq,name,number,size,qty,status,reason,pdf,eps,verify}, ... ],
+           "totals": {produced, skipped, qty, qty_produced, qty_skipped, has_qty}}
+      - status : "생성" | "제외"
+      - qty    : int, 또는 "" (order_rows.json 이 없는 구 job)
+      - 정렬   : 주문서 순서. skip 행도 원래 자리에 둔다.
+    """
+    outputs = list(data.get("outputs", []) or [])
+    summary = data.get("summary", {}) or {}
+    skipped = summary.get("skipped", []) or []
+    order_rows = _load_order_rows(job_dir)
+
+    # 제외 행: row 인덱스 → 사유. (row 가 없는 옛 형식이면 이름으로라도 붙인다.)
+    skip_by_row: Dict[int, dict] = {}
+    skip_no_row: List[dict] = []
+    for s in skipped:
+        r = s.get("row")
+        if isinstance(r, int):
+            skip_by_row[r] = s
+        else:
+            skip_no_row.append(s)
+
+    # 열쇠별 수량(같은 열쇠가 여러 행이면 합산) — 인덱스로 못 맞출 때의 폴백.
+    qty_by_key: Dict[tuple, int] = {}
+    if order_rows:
+        for r in order_rows:
+            k = _row_key(r.get("name"), r.get("number"), r.get("size"))
+            try:
+                q = int(r.get("qty") or 0)
+            except (TypeError, ValueError):
+                q = 0
+            qty_by_key[k] = qty_by_key.get(k, 0) + q
+
+    def _qty_of(order_row: Optional[dict], key: tuple) -> Any:
+        """수량: 주문 행이 있으면 그 행 값, 없으면 열쇠 합산, 그것도 없으면 빈칸."""
+        if order_rows is None:
+            return ""
+        if order_row is not None:
+            try:
+                return int(order_row.get("qty") or 0)
+            except (TypeError, ValueError):
+                return ""
+        return qty_by_key.get(key, "")
+
+    def _produced_row(seq: int, o: Dict[str, Any], order_row: Optional[dict]) -> dict:
+        key = _row_key(o.get("name"), o.get("number"), o.get("size"))
+        pdf_rel = _output_file_rel(job_dir, o, "pdf")
+        eps_rel = _output_file_rel(job_dir, o, "eps")
+        return {
+            "seq": seq, "name": key[0], "number": key[1], "size": key[2],
+            "qty": _qty_of(order_row, key),
+            "status": "생성", "reason": "",
+            "pdf": os.path.basename(pdf_rel) if pdf_rel else "",
+            "eps": os.path.basename(eps_rel) if eps_rel else "",
+            "verify": _output_verify_label(o),
+        }
+
+    def _skipped_row(seq: int, s: Dict[str, Any], order_row: Optional[dict]) -> dict:
+        name = (order_row or {}).get("name") or s.get("name") or ""
+        number = (order_row or {}).get("number") or ""
+        size = (order_row or {}).get("size") or ""
+        reason = str(s.get("reason") or "")
+        if not size:
+            # 구 job(order_rows 없음): 사유 문장의 "사이즈 '3XL'" 에서 사이즈를 건진다.
+            import re as _re
+            m = _re.search(r"사이즈 '([^']+)'", reason)
+            if m:
+                size = m.group(1)
+        key = _row_key(name, number, size)
+        return {
+            "seq": seq, "name": key[0], "number": key[1], "size": key[2],
+            "qty": _qty_of(order_row, key),
+            "status": "제외", "reason": reason,
+            "pdf": "", "eps": "", "verify": "",
+        }
+
+    rows: List[dict] = []
+    pending = outputs[:]          # 아직 자리를 못 찾은 출력(앞에서부터 소비)
+
+    def _take_output(key: Optional[tuple]) -> Optional[dict]:
+        """열쇠가 맞는 첫 출력을 꺼낸다. 열쇠가 None 이면 맨 앞 것을 꺼낸다."""
+        if not pending:
+            return None
+        if key is None:
+            return pending.pop(0)
+        for i, o in enumerate(pending):
+            if _row_key(o.get("name"), o.get("number"), o.get("size")) == key:
+                return pending.pop(i)
+        return None
+
+    if order_rows:
+        # 신 job: 주문서 순서 그대로 한 행씩. skip 이면 제외, 아니면 열쇠가 맞는 출력을 붙인다.
+        for idx, r in enumerate(order_rows):
+            key = _row_key(r.get("name"), r.get("number"), r.get("size"))
+            if idx in skip_by_row:
+                rows.append(_skipped_row(idx + 1, skip_by_row[idx], r))
+                continue
+            o = _take_output(key)
+            if o is not None:
+                rows.append(_produced_row(idx + 1, o, r))
+            else:
+                # 출력도 skip 기록도 없는 행(비정상) — 숨기지 않고 '제외' 로 드러낸다.
+                rows.append(_skipped_row(idx + 1, {"reason": "결과 파일을 찾지 못함(작업 기록 불일치)"}, r))
+    else:
+        # 구 job(order_rows 없음): outputs 는 skip 행만 빠진 주문 순서이므로 인덱스로 복원한다.
+        total = len(outputs) + len(skip_by_row)
+        for idx in range(total):
+            if idx in skip_by_row:
+                rows.append(_skipped_row(idx + 1, skip_by_row[idx], None))
+            else:
+                o = _take_output(None)
+                if o is None:
+                    break
+                rows.append(_produced_row(idx + 1, o, None))
+
+    # 남은 것들(자리를 못 찾은 출력·row 없는 skip)은 맨 뒤에 붙인다 — 누락 금지.
+    seq = len(rows)
+    for o in pending:
+        seq += 1
+        rows.append(_produced_row(seq, o, None))
+    for s in skip_no_row:
+        seq += 1
+        rows.append(_skipped_row(seq, s, None))
+
+    produced = sum(1 for r in rows if r["status"] == "생성")
+    skipped_n = len(rows) - produced
+    qty_produced = sum(r["qty"] for r in rows if r["status"] == "생성" and isinstance(r["qty"], int))
+    qty_skipped = sum(r["qty"] for r in rows if r["status"] != "생성" and isinstance(r["qty"], int))
+    return {
+        "rows": rows,
+        "totals": {
+            "produced": produced, "skipped": skipped_n,
+            "qty": qty_produced + qty_skipped,
+            "qty_produced": qty_produced, "qty_skipped": qty_skipped,
+            "has_qty": order_rows is not None,
+        },
+    }
+
+
+def _safe_cell(v: Any) -> Any:
+    """엑셀 수식 주입 방어 — 문자열이 = + - @ 탭 CR 로 시작하면 앞에 ' 를 붙여 글자로 고정한다.
+
+    주문서 이름은 고객이 적는 값이라 외부 입력이다. "=1+1" 같은 이름이 CSV/XLSX 에
+    그대로 들어가면 엑셀이 수식으로 실행한다(2026-09-22 tester 재현). 숫자·빈값은 그대로.
+    """
+    if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + v
+    return v
+
+
+def _manifest_table(manifest: Dict[str, Any]) -> List[List[Any]]:
+    """헤더 + 본문 + 합계 행을 2차원 표로 만든다(CSV·XLSX 공용)."""
+    t = manifest["totals"]
+    table: List[List[Any]] = [list(_MANIFEST_HEADER)]
+    for r in manifest["rows"]:
+        table.append([_safe_cell(x) for x in
+                      (r["seq"], r["name"], r["number"], r["size"], r["qty"],
+                       r["status"], r["reason"], r["pdf"], r["eps"], r["verify"])])
+    # 합계 1줄: 생성 N명·제외 M명·총 수량 Q장 (수량이 없는 구 job 이면 수량 칸 빈칸).
+    qty_cell = t["qty"] if t["has_qty"] else ""
+    qty_note = (f"생성분 {t['qty_produced']}장 · 제외분 {t['qty_skipped']}장"
+                if t["has_qty"] else "수량 정보 없음(구 작업)")
+    table.append(["합계", f"생성 {t['produced']}명 · 제외 {t['skipped']}명", "", "",
+                  qty_cell, "", qty_note, "", "", ""])
+    return table
+
+
+def _manifest_csv_bytes(manifest: Dict[str, Any]) -> bytes:
+    """주문요약.csv — UTF-8 BOM(엑셀에서 한글 안 깨짐) + CRLF 줄바꿈."""
+    import csv
+    sio = io.StringIO()
+    w = csv.writer(sio, lineterminator="\r\n")
+    for row in _manifest_table(manifest):
+        w.writerow(row)
+    return sio.getvalue().encode("utf-8-sig")
+
+
+def _manifest_xlsx_bytes(manifest: Dict[str, Any]) -> bytes:
+    """주문요약.xlsx — 열 너비 지정, 제외 행은 연한 배경(openpyxl PatternFill)."""
+    from openpyxl import Workbook
+    from openpyxl.styles import PatternFill, Font
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "주문요약"
+    table = _manifest_table(manifest)
+    for row in table:
+        ws.append(row)
+    # openpyxl 은 '=' 로 시작하는 문자열을 수식 셀로 저장한다 → 문자열 셀은 전부 글자('s')로 고정.
+    for row_cells in ws.iter_rows():
+        for c in row_cells:
+            if isinstance(c.value, str):
+                c.data_type = "s"
+    bold = Font(bold=True)
+    for c in ws[1]:
+        c.font = bold
+    fill_skip = PatternFill("solid", start_color="FFF3E0", end_color="FFF3E0")   # 연한 살구색
+    for i, r in enumerate(manifest["rows"], start=2):    # 2행부터 본문
+        if r["status"] != "생성":
+            for c in ws[i]:
+                c.fill = fill_skip
+    for c in ws[len(table)]:                             # 마지막 = 합계 행
+        c.font = bold
+    widths = [6, 12, 6, 8, 6, 6, 60, 34, 34, 9]
+    for col, wdt in zip("ABCDEFGHIJ", widths):
+        ws.column_dimensions[col].width = wdt
+    ws.freeze_panes = "A2"
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
+@router.get("/jobs/{job_id}/manifest")
+def job_manifest(job_id: str) -> Dict[str, Any]:
+    """주문 요약표 미리보기(JSON) — ZIP 의 주문요약.csv/xlsx 와 같은 내용.
+
+    반환: {job_id, rows:[{seq,name,number,size,qty,status,reason,pdf,eps,verify}],
+           totals:{produced,skipped,qty,qty_produced,qty_skipped,has_qty}}
+    """
+    job_dir = _find_job_dir(job_id)
+    if not job_dir:
+        return JSONResponse(status_code=404, content={"error": "작업을 찾을 수 없습니다."})
+    data = _load_job_json(job_dir)
+    manifest = _build_manifest_rows(job_dir, data)
+    return {"job_id": job_id, **manifest}
+
+
 @router.get("/jobs/{job_id}/zip")
 def job_zip(job_id: str, format: str = "pdf"):
     """선택한 형식의 출력 파일들을 ZIP 으로 묶어 내려준다.
@@ -1108,6 +1393,22 @@ def job_zip(job_id: str, format: str = "pdf"):
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for src, arc in pairs:
             zf.write(src, arc)
+        # 공장용 주문 요약표를 ZIP 루트에 동봉한다(csv + xlsx). 어느 쪽이 실패해도
+        # ZIP 자체는 나가야 하므로 각각 try/except — 실패는 서버 콘솔에만 남긴다.
+        try:
+            manifest = _build_manifest_rows(job_dir, data)
+        except Exception as e:
+            manifest = None
+            print(f"[zip {job_id}] 주문요약 생성 실패(ZIP 은 계속): {e}")
+        if manifest is not None:
+            try:
+                zf.writestr("주문요약.csv", _manifest_csv_bytes(manifest))
+            except Exception as e:
+                print(f"[zip {job_id}] 주문요약.csv 실패(ZIP 은 계속): {e}")
+            try:
+                zf.writestr("주문요약.xlsx", _manifest_xlsx_bytes(manifest))
+            except Exception as e:
+                print(f"[zip {job_id}] 주문요약.xlsx 실패(ZIP 은 계속): {e}")
     buf.seek(0)
     folder_name = os.path.basename(os.path.normpath(job_dir))
     zip_name = f"{folder_name}_{fmt}.zip"
