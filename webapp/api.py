@@ -388,14 +388,20 @@ def _job_summary(job_dir: str) -> Dict[str, Any] | None:
     """작업 폴더 1개의 job.json 을 읽어 기록 목록용 요약 dict 로 만든다(실패 시 None).
 
     화면(history.html)의 JOBS 한 줄과 모양을 맞춘다:
-      {id, date, name, pattern, count, status}
+      {id, date, name, pattern, format, design, count, skipped, has_files, status}
 
     구·신 경로/스키마 모두 방어적으로 읽는다(키가 없어도 안 죽게):
       - id      : 폴더명(예: web_260620_120000_ab12cd / 260620_연세대V넥_빈본체).
       - date    : job.json 의 생성시각(created/finished) 또는 폴더 수정시각.
       - name    : summary.order_name 또는 주문서 파일명 → 없으면 폴더명.
-      - pattern : summary.preset_name(preset 이름) → 없으면 "-".
+      - pattern : job_meta.json 의 pattern_id(2026-09-22 부터 생성 시 저장) →
+                  summary.preset_name → 없으면 "-"(구 job 은 그대로 "-").
+      - format  : job_meta.json 의 out_format → summary.format(engine 이 남김) → "".
+      - design  : job_meta.json 의 design_name(업로드 원본 파일명) → "".
       - count   : produced(생성 수) 또는 outputs 길이.
+      - skipped : summary.skipped(제외 행) 개수. 없으면 0.
+      - has_files : output/ 폴더가 실제로 있는지. Render 는 재배포 때 data/jobs 가 지워져
+                  '기록은 보이는데 파일은 없는' 행이 생길 수 있어 화면이 버튼을 잠근다.
       - status  : verify_fail 0 이면 done, 1개라도 있으면 warn.
     """
     job_json = os.path.join(job_dir, "job.json")
@@ -432,13 +438,37 @@ def _job_summary(job_dir: str) -> Dict[str, Any] | None:
     if not name:
         name = folder  # 끝까지 없으면 폴더명으로 표시(빈칸 방지).
 
-    pattern = (summary.get("preset_name") or summary.get("pattern")
+    # 작업 메타(job_meta.json): 생성 시 create_job_endpoint 가 남긴 패턴·디자인·형식.
+    # 구 job 에는 없다 → 빈 dict 로 두고 아래 폴백(summary)이 채운다. 깨져도 목록은 살린다.
+    meta: Dict[str, Any] = {}
+    meta_path = os.path.join(job_dir, "job_meta.json")
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f) or {}
+            if not isinstance(meta, dict):
+                meta = {}
+        except Exception:
+            meta = {}
+
+    pattern = (meta.get("pattern_id")
+               or summary.get("preset_name") or summary.get("pattern")
                or data.get("preset_name") or "-")
+    # 출력 형식: 메타 우선, 없으면 engine 이 summary 에 남긴 format(구 job 도 있다).
+    out_format = str(meta.get("out_format") or summary.get("format") or "").lower()
+    design = str(meta.get("design_name") or "")
 
     # 파일 수: produced(생성 수) → 없으면 outputs 길이.
     count = summary.get("produced")
     if count is None:
         count = len(outputs)
+
+    # 제외 행 수: summary.skipped 는 제외 행 목록(list). 형이 다르면 0.
+    skipped_list = summary.get("skipped")
+    skipped = len(skipped_list) if isinstance(skipped_list, list) else 0
+
+    # 실제 파일 존재 여부: output/ 폴더가 있어야 ZIP 을 만들 수 있다.
+    has_files = os.path.isdir(os.path.join(job_dir, "output"))
 
     # 상태: verify 실패가 1건이라도 있으면 '확인 필요(warn)', 없으면 '완료(done)'.
     fail = summary.get("verify_fail", 0) or 0
@@ -449,7 +479,11 @@ def _job_summary(job_dir: str) -> Dict[str, Any] | None:
         "date": str(date_raw),
         "name": str(name),
         "pattern": str(pattern),
+        "format": out_format,
+        "design": design,
         "count": int(count or 0),
+        "skipped": int(skipped),
+        "has_files": bool(has_files),
         "status": status,
     }
 
@@ -458,7 +492,7 @@ def _job_summary(job_dir: str) -> Dict[str, Any] | None:
 def list_jobs() -> List[Dict[str, Any]]:
     """완료된 작업 기록 목록. data/jobs/*/job.json 을 스캔한다.
 
-    반환: [{id, date, name, pattern, count, status}, ...]
+    반환: [{id, date, name, pattern, format, design, count, skipped, has_files, status}, ...]
       최신 폴더가 위로 오도록 폴더 수정시각 내림차순 정렬.
     """
     base = state.get_jobs_dir()
@@ -751,6 +785,20 @@ def _resolve_design_path(token: Optional[str], explicit: Optional[str]) -> str:
     raise ValueError("디자인이 지정되지 않았습니다(design_token 또는 design 필요).")
 
 
+def _design_display_name(token: Optional[str], explicit: Optional[str]) -> str:
+    """작업 기록에 보여줄 디자인 파일명(사람이 올린 원본 이름)을 뽑는다.
+
+    업로드 토큰은 '1782095292_772d8f6b__연세대_V넥_빈템플릿_본체포함_XL.ai' 꼴이라
+    '__' 뒤가 원본 이름이다. 명시 경로(design)면 파일명만. 둘 다 없으면 빈 문자열.
+    """
+    if token:
+        base = os.path.basename(str(token))
+        return base.split("__", 1)[1] if "__" in base else base
+    if explicit:
+        return os.path.basename(str(explicit))
+    return ""
+
+
 def _preset_path_for(pattern_id: str) -> str:
     """patternId(폴더명) → data/patterns/{id}/preset.json 절대경로."""
     safe = os.path.basename(pattern_id or "")
@@ -875,6 +923,27 @@ async def create_job_endpoint(payload: Dict[str, Any] = Body(...)) -> Dict[str, 
         os.replace(_tmp, _final)
     except Exception as e:
         print(f"[job {job_id}] order_rows.json 저장 실패(무시, 요약표 수량 빈칸): {e}")
+
+    # 작업 메타(패턴·디자인 파일명·출력 형식·시각·행 수)를 결과 폴더에 남긴다 — job_meta.json.
+    # 왜: engine 의 job.json summary 에는 '어떤 패턴으로 만들었는지' 가 없어 작업 기록 화면의
+    # 패턴 칸이 전부 "-" 였다(2026-09-22 실측). 생성 시점에 우리가 아는 값을 그대로 적어 둔다.
+    # 저장 실패는 생성을 막지 않는다(기록 화면 패턴 칸만 "-" 로 남는다). order_rows.json 과 같은
+    # 방식(임시파일 → os.replace)이라 쓰다 실패해도 0바이트 파일이 남지 않는다.
+    try:
+        _meta = {
+            "pattern_id": str(pattern_id),
+            "design_name": _design_display_name(payload.get("design_token"), payload.get("design")),
+            "out_format": out_format,
+            "created": _t.strftime("%Y-%m-%dT%H:%M:%S"),
+            "total": len(rows),
+        }
+        _final = os.path.join(out_dir, "job_meta.json")
+        _tmp = _final + ".tmp"
+        with open(_tmp, "w", encoding="utf-8") as f:
+            json.dump(_meta, f, ensure_ascii=False, indent=1)
+        os.replace(_tmp, _final)
+    except Exception as e:
+        print(f"[job {job_id}] job_meta.json 저장 실패(무시, 기록 화면 패턴 칸 '-'): {e}")
 
     # 백그라운드 스레드로 run_job 실행(daemon: 서버 종료 시 함께 정리).
     t = threading.Thread(

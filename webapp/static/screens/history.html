@@ -51,6 +51,15 @@
   .helpmodal__body li { font: var(--text-sm); color: var(--text-body); margin-bottom: 4px; line-height: 1.5; }
   .helpmodal__body p { font: var(--text-sm); color: var(--text-body); margin: 0 0 4px; }
   .helpmodal__body strong { color: var(--text-strong); }
+
+  /* ===== 작업 기록: 행 아래 접이식 요약표(주문요약.csv 와 같은 내용) =====
+     디자인 변수만 사용. 본 표(.dtable) 안에 작은 표를 한 번 더 넣는다. */
+  .jobdetail > td { background: var(--surface-sunken); padding: 10px 14px; }
+  .jobdetail__note { font: var(--text-caption); color: var(--text-muted); margin-bottom: 6px; }
+  .jobdetail .dtable th, .jobdetail .dtable td { font: var(--text-caption); padding: 4px 8px; }
+  .jobdetail .is-skipped td { color: var(--text-muted); }
+  .job-sub { font: var(--text-caption); color: var(--text-muted); }
+  .job-actions { display: inline-flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
 </style>
 </head>
 <body>
@@ -200,6 +209,14 @@ let JOBS = [];
 const $ = (s) => document.querySelector(s);
 let tab = "all";
 
+// 외부값(주문명·패턴명·디자인 파일명·서버 오류문)을 글자로만 보이게 하는 이스케이프(work.html 과 동일).
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;" }[c]));
+
+// 출력 형식 코드(pdf|eps|both) → 화면 표기. 모르면 "-"(구 서버·정보 없음).
+function fmtLabel(f) {
+  return ({ pdf: "PDF", eps: "EPS", both: "PDF+EPS" })[f] || "-";
+}
+
 // 날짜 표기를 화면 스타일(2026·06·20)로 다듬는다(서버는 "2026-06-20 14:03").
 function fmtDate(raw) {
   if (!raw) return "";
@@ -224,9 +241,14 @@ function loadJobs() {
     .then((r) => r.ok ? r.json() : Promise.reject())
     .then((list) => {
       // 서버 행을 화면이 쓰는 모양으로 정리(날짜 표기만 다듬음).
+      //  · format/design/skipped/has_files 는 2026-09-22 에 추가된 칸 — 없는(구) 서버면 안전값.
+      //  · has_files 가 아예 없으면 true 로 본다(버튼은 두고, 404 면 토스트로 안내).
       JOBS = (Array.isArray(list) ? list : []).map((j) => ({
         id: j.id, date: fmtDate(j.date), name: j.name,
-        pattern: j.pattern, count: j.count, status: j.status,
+        pattern: j.pattern || "-", format: j.format || "", design: j.design || "",
+        count: j.count, skipped: j.skipped || 0,
+        hasFiles: j.has_files !== false,
+        status: j.status,
       }));
       updateTabCounts();
       render();
@@ -258,37 +280,165 @@ function render() {
       </div>`;
     return;
   }
+  // 행마다 버튼 3개(PDF ZIP · EPS ZIP · 요약표) + 그 아래 접이식 요약표 행(처음엔 숨김).
+  //  · 파일이 없는 작업(has_files=false, Render 재배포로 지워짐)은 ZIP 버튼을 잠그고 사유를 적는다.
+  //    요약표는 job.json 만으로 만들 수 있어 그대로 열어 둔다(누가 몇 장인지는 여전히 볼 수 있다).
+  //  · 형식을 아는 작업은 없는 형식의 버튼을 잠근다(PDF 만 만든 작업의 EPS ZIP 등).
+  //    형식을 모르면(구 서버) 버튼은 두고, 404 가 오면 토스트로 안내한다.
+  const zipBtn = (j, fmt, label) => {
+    const known = !!j.format;
+    const lacks = known && j.format !== "both" && j.format !== fmt;
+    let title = "";
+    if (!j.hasFiles) title = "파일 없음(재배포로 삭제됨)";
+    else if (lacks) title = `이 작업은 ${fmtLabel(j.format)} 만 생성됨`;
+    const off = !j.hasFiles || lacks;
+    return `<button class="btn btn--sm btn--secondary" data-act="zip" data-fmt="${fmt}" data-id="${esc(j.id)}"
+              ${off ? "disabled" : ""} ${title ? `title="${esc(title)}"` : ""}>${label}</button>`;
+  };
   slot.innerHTML = `
     <div class="tablewrap tablewrap--lg">
       <table class="dtable">
         <thead><tr>
-          <th>날짜</th><th>주문명</th><th>패턴</th><th class="num">파일</th><th>상태</th><th class="num">작업</th>
+          <th>날짜</th><th>주문명</th><th>패턴</th><th>형식</th><th class="num">파일</th><th>상태</th><th class="num">작업</th>
         </tr></thead>
         <tbody>
           ${rows.map((j) => `
-            <tr class="row-hover">
-              <td class="muted mono">${j.date}</td>
-              <td class="name-strong">${j.name}</td>
-              <td>${j.pattern}</td>
-              <td class="num">${j.count}</td>
+            <tr class="row-hover" data-row="${esc(j.id)}">
+              <td class="muted mono">${esc(j.date)}</td>
+              <td class="name-strong">${esc(j.name)}${j.design ? `<div class="job-sub">${esc(j.design)}</div>` : ""}</td>
+              <td>${esc(j.pattern)}</td>
+              <td>${esc(fmtLabel(j.format))}</td>
+              <td class="num">${esc(j.count)}${j.skipped ? `<span class="job-sub"> · 제외 ${esc(j.skipped)}</span>` : ""}</td>
               <td>${j.status === "done"
                 ? '<span class="badge badge--pass badge--sm"><span class="material-symbols-outlined">check_circle</span>완료</span>'
                 : '<span class="badge badge--warn badge--sm"><span class="material-symbols-outlined">warning</span>확인 필요</span>'}</td>
               <td class="num">
-                <span class="row" style="display:inline-flex; gap:2px;">
-                  <button class="icon-btn icon-btn--sm" data-act="download" data-name="${j.name}" aria-label="재다운로드"><span class="material-symbols-outlined">download</span></button>
-                  <button class="icon-btn icon-btn--sm" data-act="regen" data-name="${j.name}" aria-label="같은 설정으로 재생성"><span class="material-symbols-outlined">refresh</span></button>
-                  <button class="icon-btn icon-btn--sm" aria-label="더보기"><span class="material-symbols-outlined">more_vert</span></button>
+                <span class="job-actions">
+                  ${zipBtn(j, "pdf", "PDF ZIP")}
+                  ${zipBtn(j, "eps", "EPS ZIP")}
+                  <button class="btn btn--sm btn--ghost" data-act="manifest" data-id="${esc(j.id)}">요약표</button>
                 </span>
+                ${!j.hasFiles ? '<div class="job-sub">파일 없음(재배포로 삭제됨)</div>' : ""}
               </td>
-            </tr>`).join("")}
+            </tr>
+            <tr class="jobdetail hidden" data-detail="${esc(j.id)}"><td colspan="7"></td></tr>`).join("")}
         </tbody>
       </table>
     </div>`;
   slot.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => {
-    if (b.dataset.act === "download") toast("info", "download", "ZIP 다운로드 준비 중", `${b.dataset.name} · 잠시만 기다리세요`);
-    else toast("info", "refresh", "같은 설정으로 재생성", `${b.dataset.name} · 작업 화면으로 이동합니다`);
+    if (b.dataset.act === "zip") downloadJobZip(b, b.dataset.id, b.dataset.fmt);
+    else toggleManifest(b, b.dataset.id);
   }));
+}
+
+// ── 서버 오류 응답(JSON {error}) 에서 한국어 사유를 꺼낸다. JSON 이 아니면 빈 문자열. ──
+async function apiErrorText(res) {
+  try { const j = await res.json(); return j && j.error ? String(j.error) : ""; } catch (e) { return ""; }
+}
+
+// ── Content-Disposition 에서 파일명을 꺼낸다. filename*(UTF-8, 한글 원본명) 우선 → filename 폴백. ──
+function fileNameFrom(disp) {
+  if (!disp) return "";
+  const m = /filename\*=UTF-8''([^;]+)/i.exec(disp);
+  if (m) { try { return decodeURIComponent(m[1].trim()); } catch (e) {} }
+  const m2 = /filename="?([^";]+)"?/i.exec(disp);
+  return m2 ? m2[1].trim() : "";
+}
+
+// ── 예전 작업의 ZIP 재다운로드 — work.html 의 downloadZip 과 같은 방식. ──
+// apiFetch 로 blob 을 받아 <a download> 로 내려준다(<a href> 직접 요청은 토큰이 안 붙어
+// 배포 인증 모드에서 401 이 나므로). 요청 중엔 버튼을 잠가 연타를 막는다.
+const zipBusy = new Set();
+async function downloadJobZip(btn, id, fmt) {
+  const key = id + ":" + fmt;
+  if (zipBusy.has(key)) return;
+  zipBusy.add(key);
+  btn.disabled = true;
+  const url = "/api/jobs/" + encodeURIComponent(id) + "/zip?format=" + encodeURIComponent(fmt);
+  try {
+    const res = await apiFetch(url);
+    if (res.status === 404) {
+      // Render 는 재배포 때 data/jobs 가 사라진다 — 기록 행은 남는데 파일만 없는 경우.
+      const why = await apiErrorText(res);
+      toast("warn", "folder_off", "파일이 없어요", "서버 재배포로 지워졌을 수 있어요." + (why ? " " + why : ""));
+      return;
+    }
+    if (!res.ok) {
+      const why = await apiErrorText(res);
+      toast("fail", "error", "다운로드 실패", why || ("서버 응답 " + res.status + " · 잠시 후 다시 시도해 주세요."));
+      return;
+    }
+    const blob = await res.blob();
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objUrl;
+    // 서버가 정한 이름(폴더명_형식.zip)을 그대로 쓴다. 못 읽으면 같은 규칙으로 만든다.
+    a.download = fileNameFrom(res.headers.get("Content-Disposition")) || (id + "_" + fmt + ".zip");
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(objUrl), 4000);   // 메모리 누수 방지
+    toast("pass", "download", "다운로드 시작", a.download);
+  } catch (e) {
+    // apiFetch 가 401 이면 로그인 화면으로 넘기며 throw 한다 — 그 경우는 조용히. 그 외(네트워크)는 안내.
+    if (!/로그인/.test(String(e && e.message))) {
+      toast("fail", "error", "다운로드 실패", "서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+    }
+  } finally {
+    zipBusy.delete(key);
+    btn.disabled = false;
+  }
+}
+
+// ── 요약표(GET /api/jobs/{id}/manifest) 를 행 아래에 접이식으로 펼친다. 한 번 받으면 캐시. ──
+const MANIFEST_CACHE = {};
+function manifestHtml(m) {
+  const t = m.totals || {};
+  const rows = Array.isArray(m.rows) ? m.rows : [];
+  const qtyNote = t.has_qty ? ` · 총 수량 ${esc(t.qty)}장(생성분 ${esc(t.qty_produced)} · 제외분 ${esc(t.qty_skipped)})`
+                            : " · 수량 정보 없음(구 작업)";
+  const statusBadge = (r) => r.status === "생성"
+    ? '<span class="badge badge--pass badge--sm">생성</span>'
+    : '<span class="badge badge--warn badge--sm">제외</span>';
+  return `
+    <div class="jobdetail__note">생성 ${esc(t.produced || 0)}명 · 제외 ${esc(t.skipped || 0)}명${qtyNote} — ZIP 안의 주문요약.csv/xlsx 와 같은 내용</div>
+    <table class="dtable">
+      <thead><tr><th class="num">순번</th><th>이름</th><th>배번</th><th>사이즈</th><th class="num">수량</th><th>상태</th><th>사유</th></tr></thead>
+      <tbody>${rows.map((r) => `
+        <tr class="${r.status === "생성" ? "" : "is-skipped"}">
+          <td class="num muted mono">${esc(r.seq)}</td><td>${esc(r.name)}</td><td class="mono">${esc(r.number)}</td>
+          <td>${esc(r.size)}</td><td class="num">${esc(r.qty)}</td><td>${statusBadge(r)}</td><td class="muted">${esc(r.reason)}</td>
+        </tr>`).join("")}
+      </tbody>
+    </table>`;
+}
+async function toggleManifest(btn, id) {
+  const tr = Array.from(document.querySelectorAll("tr[data-detail]")).find((t) => t.dataset.detail === id);
+  if (!tr) return;
+  if (!tr.classList.contains("hidden")) {        // 열려 있으면 닫기만
+    tr.classList.add("hidden");
+    btn.textContent = "요약표";
+    return;
+  }
+  if (!MANIFEST_CACHE[id]) {
+    btn.disabled = true;                           // 요청 중 연타 방지
+    try {
+      const res = await apiFetch("/api/jobs/" + encodeURIComponent(id) + "/manifest");
+      if (!res.ok) {
+        const why = await apiErrorText(res);
+        toast(res.status === 404 ? "warn" : "fail", "error", "요약표를 불러오지 못했어요",
+              why || ("서버 응답 " + res.status));
+        return;
+      }
+      MANIFEST_CACHE[id] = await res.json();
+    } catch (e) {
+      if (!/로그인/.test(String(e && e.message))) toast("fail", "error", "요약표를 불러오지 못했어요", "서버에 연결하지 못했습니다.");
+      return;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  tr.querySelector("td").innerHTML = manifestHtml(MANIFEST_CACHE[id]);
+  tr.classList.remove("hidden");
+  btn.textContent = "요약표 닫기";
 }
 
 $("#tabs").querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => {
@@ -300,7 +450,8 @@ $("#tabs").querySelectorAll(".tab").forEach((t) => t.addEventListener("click", (
 function toast(tone, icon, title, body) {
   const el = document.createElement("div");
   el.className = "toast toast--" + tone;
-  el.innerHTML = `<span class="material-symbols-outlined toast__icon">${icon}</span><div><div class="toast__title">${title}</div><div class="toast__body">${body}</div></div>`;
+  // title/body 에 서버 오류문·파일명이 올 수 있어 esc 로 글자로만 보이게 한다(icon 은 고정 문자열).
+  el.innerHTML = `<span class="material-symbols-outlined toast__icon">${icon}</span><div><div class="toast__title">${esc(title)}</div><div class="toast__body">${esc(body)}</div></div>`;
   $("#toaster").appendChild(el);
   setTimeout(() => el.remove(), 3200);
 }

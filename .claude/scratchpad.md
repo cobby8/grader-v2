@@ -38,16 +38,24 @@
 | **TOP7 #2·#5·#6** | 콜드스타트 거짓표시 3종(목록 실패 구분·서버 핀 4상태·등록 실패 한글) | ✅ a2f2d08 (tester 59항목) |
 | **TOP7 #3·#4·#7 + XSS + ZIP탐색** | 패턴 삭제(_trash)·정직 안내·백업 상태 UI·toast 이스케이프·_find_job_dir 정확일치 | ✅ 2f316c8 (tester 52/52) |
 
-## 구현 기록 (developer · 2026-09-22 ZIP 주문요약 동봉)
-- **api.py**: `create_job_endpoint` 가 job 폴더에 `order_rows.json`(name/number/size/qty) 저장(try/except) · `_build_manifest_rows(job_dir,data)`=outputs+summary.skipped+order_rows 합침(주문서 순서, skip 행 원자리, 구 job 은 수량 빈칸·사이즈는 사유문에서 복원) · `주문요약.csv`(UTF-8 BOM·CRLF·합계행)+`주문요약.xlsx`(openpyxl, 제외행 PatternFill) 를 `job_zip` 루트에 동봉(각각 try/except) · `GET /jobs/{id}/manifest` JSON. engine 무수정.
-- **work.html** fmtNote: 요약표 동봉 안내 1줄(항상 표시).
-- 검증(TestClient 실주문 38행): manifest/csv/xlsx 행 38=생성33+제외5(3XL), 수량합 87=원본 87, 이해솔 L=4, 구 폴더 ffcc664 zip both 정상(수량 빈칸). selftest PASS. 만든 job/uploads 삭제.
-- tester 참고: 구 job 의 제외 행은 **배번 빈칸**(skipped 기록에 number 없음) — 신 job 은 order_rows 로 채워짐.
+## 구현 기록 (developer · 2026-09-22 ZIP 주문요약 동봉 — 완료·커밋 37498cc)
+- api.py `order_rows.json` 저장 · `_build_manifest_rows` · 주문요약.csv/xlsx ZIP 동봉 · `GET /jobs/{id}/manifest` · work.html 안내 1줄. 상세는 커밋 37498cc + 아래 tester 결과. 구 job 제외 행은 배번 빈칸.
 
-## 테스트 결과 (tester · 2026-09-22 ZIP 주문요약)
-- **판정: 통과(기능 70/70·회귀 0) + 수정 권장 1(csv/xlsx 인젝션)**. 정적 3종 OK. e2e 38행 both: pdf/·eps/ 33+33 + 루트 csv/xlsx · CSV BOM·CRLF·38+합계1 · **수량 합 87 = 엑셀 21~58행 "N장" 직접 계산** · 이해솔 L=4 · 제외 5행 전부 3XL(배번 채움) · 생성 33행 PDF/EPS ↔ ZIP 1:1 · 순번·순서·행별 수량 = 엑셀 · xlsx 40행·합 87·제외행만 배경·CSV 와 동일 · /manifest totals {33,5,87=79+8} 동일.
-- 회귀: zip pdf(기본)·eps 정상 · 구 폴더 ffc664 zip/manifest 정상(has_qty False·수량 빈칸·3XL 복원·제외 순번 4/13/20/27/36) · 없는 job 404 · `web_26` 404(정확일치 유지) · format 오류 400 · **json.dump 예외 주입에도 POST /jobs 200·done**(0바이트 order_rows.json 잔존→`_load_order_rows` None, 수량 빈칸) · engine/auth/gdrive/storage_backup diff 0 · ZIP 경로 이탈 없음.
-- **⚠ 수정 권장**: 이름 `=1+1` → CSV 원문 그대로, **xlsx 는 openpyxl 이 수식 셀('f')로 저장**해 엑셀이 경고 없이 실행(errors.md). 성능: 생성 **38.1s** · zip both 응답 10.35s(28MB) 중 요약표 **19ms**(나머지는 TestClient 스트리밍, 구 job 도 9.4s). 만든 job·uploads 삭제 완료.
+## 구현 기록 (developer · 2026-09-22 제안④ 이력 화면 재다운로드 + 패턴 표시)
+- **api.py**: `create_job_endpoint`(~896) 가 `job_meta.json`{pattern_id,design_name(토큰 `__` 뒤 원본명),out_format,created,total} 저장(임시파일→os.replace·실패 무시) · `_design_display_name()` 신설 · `_job_summary`/`GET /jobs` 에 `format`(meta→summary.format 폴백, 구 job 도 채워짐)·`design`·`skipped`(summary.skipped 길이)·`has_files`(output/ 존재) 추가. 구 job 은 pattern "-" 유지·정렬 그대로.
+- **history.html**: esc 헬퍼+toast 이스케이프 · 헤더 형식 칸 · 행마다 `PDF ZIP`·`EPS ZIP`(형식상 없는 쪽 disabled+title, has_files=false 면 둘 다 잠금+"파일 없음(재배포로 삭제됨)")·`요약표`(GET /manifest → 행 아래 접이식 표, 캐시) · 다운로드=apiFetch→blob→a[download](Content-Disposition filename* 존중)·연타 방지·404 토스트. 가짜 재생성/더보기 버튼 제거.
+- 검증: py_compile·vm.Script OK · TestClient 새 job(연세대 3행·V넥·both) pattern/format/design/has_files ✓, 구 ffc664 "-"/both/skipped 5 ✓, output 이름변경→has_files false→원복 ✓, zip pdf/eps 200+CD ✓ · 브라우저 :8000 버튼·요약표 38행 펼침·잠금 행 ✓, 콘솔 404 1건은 외부(fonts) 기존 · selftest PASS · 만든 job·업로드 삭제(PM 0125* 2개 보존).
+- tester 참고: 주문명 칸은 여전히 폴더명(job.json 에 주문서명이 없고 POST /jobs 도 안 받음) — 이번 범위 밖.
+
+## 테스트 결과 (tester · 2026-09-22 ZIP 주문요약 — 커밋 37498cc)
+- 통과 70/70·회귀 0. 수정 권장 1(csv/xlsx `=1+1` 인젝션 → 수정 요청표·errors.md).
+
+## 테스트 결과 (tester · 2026-09-22 제안④ 이력 재다운로드 + 패턴 표시)
+- **판정: 통과 — TestClient 46 · 인증 ON 4 · 브라우저 DOM · 안전 4, 실패 0.** 정적 3종 OK. 새 job(연세대 3행·V넥·both, 4.5s): `/jobs` 첫 항목 pattern 농구_V넥_양면·both·design 원본명·has_files true·skipped 0·count 3 · `job_meta.json` 5키 정확·.tmp 없음 · zip pdf/eps/both 200 + `filename*=UTF-8''` · 구 ffc664 "-"·both·skipped 5 · output 개명→has_files false·zip 404·manifest 200→원복 ✓ · 깨진 meta 5종(배열·깨진JSON·빈·null·HTML) 폴백 "-"/both/"" 목록 200.
+- 회귀: id/date/name/count/status 유지 · mtime 내림차순 · **`/jobs` 34개 45ms**(manifest 재조립 없음). 인증 ON 별도 프로세스: `/api/jobs`·zip·manifest 토큰 없이 **401**(health 200) · apiFetch Bearer 부착·401→login(코드 정독).
+- 브라우저(:8000 내가 띄운 PID→종료): 헤더 7칸(형식) · dadbbf "33 · 제외 5"·PDF·EPS ZIP disabled(title) · 요약표 38행 펼침/닫기/재펼침(캐시) ✓ · PDF ZIP→서버 200·토스트 파일명 `web_…_pdf.zip` · PM job PDF ZIP **3연타→서버 요청 1회** · EPS ZIP 200 · 파일 없는 행 잠금+문구 · job_meta `<b>`·`<img onerror>`·사유 `<b>` 전부 글자(b/img 요소 0) · toast 주입도 글자 · 콘솔 앱 에러 0(외부 Pretendard 404·내가 낸 EPS 404 뿐).
+- 안전: diff 내 하드코딩 색 0 · _handoff/engine/auth/gdrive/storage_backup diff 0 · `_design_display_name` 은 basename+`__` 뒤만 표시용(`../../x/y__z.ai`→`z.ai`), 파일 접근은 `_resolve_design_path` 별도 ✓. 만든 job·uploads·임시 폴더 삭제, PM 0125* 2개 보존, ffc664 폴더 mtime 을 job.json 시각으로 복원.
+- 참고(차단 아님): ① 형식 모르는 구 행의 없는 형식 ZIP 404 토스트가 "재배포로 지워졌을 수…"로 시작(사유는 뒤에 붙음) ② 정렬·날짜=폴더 mtime 이라 폴더를 건드리면 맨 위로 튐(기존) ③ 26MB ZIP 은 버튼만 잠긴 채 ~10초.
 
 ## 백로그 (차단 아님, 후속)
 - **[Phase B: 등록패턴 파일 영속화]** Render 임시디스크→재배포 시 등록 preset 소실(현 repo커밋 2개만 잔존). 복구=재스캔등록(같은이름이면 메타 자동재적용). preset 20~88KB 소형→Supabase Storage 백업/복원 별도 승인단위로.
@@ -97,6 +105,8 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 | 결과 |
 |------|---------|------|------|
+| 2026-09-22 | tester | [제안④ 검증] 정적 3종·TestClient 46·인증 ON 401·브라우저 DOM(연타 1회·HTML 이스케이프·잠금)·안전 4 | **통과** 실패 0 · 참고 3(토스트 문구·mtime 정렬·대용량 대기) · 정리 완료 |
+| 2026-09-22 | developer | [제안④ 이력 재다운로드] job_meta.json · /jobs format/design/skipped/has_files · history 버튼 3개+접이식 요약표 | TestClient 15/15 · 브라우저 확인 · selftest PASS · 커밋 대기(PM) |
 | 2026-09-22 | tester | [ZIP 주문요약 검증] 정적 3종·e2e 38행 both·csv/xlsx/manifest 대조·회귀·주입·인젝션 | 기능 70/70 통과 · 수정 권장 1(csv/xlsx 인젝션) · errors.md 1건 |
 | 2026-09-22 | developer | [ZIP 주문요약] order_rows.json 보존 · 주문요약.csv/xlsx 동봉 · /manifest API · work 안내 1줄 | e2e 38행 수량합 87 일치 · selftest PASS · 커밋 대기(PM) |
 | 2026-09-22 | pm | scratchpad 100KB→정리(완료 섹션 삭제, 로그 요약) · 실사용 e2e 검증 · Render suspended 발견 · 개선 제안 | 커밋 docs |
@@ -105,5 +115,3 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 | 2026-07-16 | developer | [TOP7 #1] 데모 ORDER 48명 제거 + step2 게이트 | 0ae5f26 · tester 5/5 |
 | 2026-07-16 | planner-architect | [실사용 전체진단] TOP7 도출(코드정독, 수정 0) | 안전지대: engine/auth/gdrive/비밀키/hex백업 |
 | 2026-07-09 | 전원 | [Phase B] 등록패턴 Storage 백업/복원 완료·실서버 e2e | 한글키→hex. 커밋 82c3364~7e47bf1 |
-| 2026-07-07 | dev+tester | 번호·이름 위치 구멍 1~4단계(piece_id 자동·완성본/글리프셋 선택) | run_job e2e FIXED · tester 43+8 |
-| 2026-07-07 | dev/tester/rev | 즐겨찾기+자동분류(pattern_meta, RLS) + 별 골드 | 27b96db·e27ac16 |
