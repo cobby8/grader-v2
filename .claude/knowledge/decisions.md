@@ -2,6 +2,12 @@
 <!-- 담당: planner-architect | 최대 30항목 -->
 <!-- "왜 A 대신 B를 선택했는지" 기술 결정의 배경과 이유를 기록 -->
 
+### [2026-09-22] 패턴 삭제 «묘비(tombstone)» 규약: Storage zip 삭제는 best effort, 부활 차단은 묘비 파일이 책임진다
+- **분류**: decision
+- **발견자**: developer
+- **내용**: `DELETE /api/patterns/{id}` 는 ① `_trash/` 이동 ② `_trash/.tombstones.json` 에 `{id: ISO시각}` 기록(임시파일→`os.replace` 원자 쓰기) ③ 창고 zip 삭제(`storage_backup.delete_backup`, 기존 backup_pattern 과 같은 **요청자 admin JWT 릴레이**·비밀키 0) 순서로 간다. **순서가 핵심**: 묘비를 창고 삭제보다 먼저 적어, 네트워크·RLS·미설정으로 창고 삭제가 실패해도 재배포 startup `restore_missing()` 이 그 id 를 건너뛴다(가드 1줄: 로컬 존재 체크 직후 `pid in _load_tombstones()`). 묘비 해제는 오직 **같은 id 재등록**(`create_pattern` 백업 훅 안 `_clear_tombstone`) — from-drive 도 create_pattern 을 거치므로 자동. 404 판정: Supabase 는 RLS 로 안 보이는 오브젝트도 404 를 주므로, 404 면 anon 목록을 한 번 더 읽어 **아직 있으면 «권한 없음» 실패**, 없으면 «이미 없음» 멱등 성공. 창고에만 남은 zip 은 `DELETE /api/patterns/backup/{name}`(admin) 으로 정리하되 **로컬에 살아 있는 패턴이면 409** — 살아 있는 백업을 지우면 재배포 때 그 패턴이 사라진다. **대안 기각**: (a) 창고 삭제 실패 시 삭제 자체를 롤백 — 관리자가 지우려는 의도를 네트워크 사정이 뒤집음 (b) `_trash/` 폴더 존재로 판단 — TTL 정리 시 함께 사라져 부활함 (c) Storage 메타(파일 태그)로 표시 — 삭제 실패 = 태그도 실패. **한계**: 묘비 파일도 Render 임시디스크라 재배포 시 사라진다 → 그때는 창고 zip 이 이미 지워져 있어야 안전. 창고 삭제가 끝내 실패한 상태로 재배포하면 부활한다(백업 상태 화면의 «창고에서 삭제» 로 재시도). 묘비 읽기는 복원 루프 안에서 파일을 매번 읽지만 항목 수가 수십 개라 무시 가능.
+- **참조횟수**: 0
+
 ### [2026-09-22] 패턴 등록 B/C 편집기 좌표 전송 규약: 화면은 «정규화 좌표(0~1·좌상단 원점)»만 보내고 서버가 pt(좌하단 원점)로 환산 — 손댄 항목만 전송, 나머지 자동 추정
 - **분류**: decision
 - **발견자**: developer

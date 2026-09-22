@@ -199,9 +199,10 @@ def patterns() -> List[Dict[str, Any]]:
 # ══════════════════════════════════════════════════════════════════════════
 # 패턴 삭제(TOP7 #3) + 백업 상태 가시화(TOP7 #7) — 전부 관리자 전용
 #   · 삭제는 '하드 삭제' 가 아니라 data/patterns/_trash/{id}_{시각}/ 으로 옮긴다(복구 가능).
-#   · ⚠️ Storage(Supabase) 백업본은 건드리지 않는다. 그래서 재배포 때 startup 복원이
-#     "로컬에 없는 것" 으로 보고 그 패턴을 다시 살려 낼 수 있다. storage_backup 은
-#     수정 금지 영역이라 여기서는 응답에 그 사실을 적어 관리자가 알게만 한다(백로그).
+#   · [제안⑥ 2026-09-22] 삭제 시 Storage 백업 zip 도 지우고(delete_backup, admin JWT 릴레이) 묘비
+#     (_trash/.tombstones.json)를 남긴다 → 창고 삭제가 실패해도 startup 복원이 그 id 를 건너뛴다.
+#     같은 이름을 다시 등록하면 create_pattern 이 묘비를 걷는다. _RESTORE_WARNING 은 창고 삭제
+#     실패 응답과 backup-status 안내에만 남는다.
 # ══════════════════════════════════════════════════════════════════════════
 _TRASH_DIRNAME = "_trash"
 _RESTORE_WARNING = (
@@ -282,14 +283,49 @@ def patterns_backup_status() -> Dict[str, Any]:
             in_storage.append(pid)
     storage_set = set(in_storage)
     local_set = set(local)
+    only = sorted(storage_set - local_set)
     return {
         "ok": True,
         "configured": True,
         "backed_up": [p for p in local if p in storage_set],
         "missing_backup": [p for p in local if p not in storage_set],
-        "only_in_storage": sorted(storage_set - local_set),
+        "only_in_storage": only,
+        # [제안⑥] 창고에만 있는 것 중 묘비가 있는 id — 재배포 때도 되살아나지 않는다(화면이 표시 구분).
+        "tombstoned": [p for p in only if storage_backup.is_tombstoned(p)],
         "restore_warning": _RESTORE_WARNING,
     }
+
+
+@router.delete("/patterns/backup/{name}", dependencies=[Depends(admin_required)])
+def pattern_backup_delete(name: str, request: Request) -> Any:
+    """[관리자·제안⑥] 창고(Storage)에만 남은 백업 zip 하나를 지운다. name = 디코딩된 패턴명(한글).
+
+    ⚠️ 로컬에 살아 있는 패턴의 백업은 지우지 않는다(409) — 그걸 지우면 재배포 때 그 패턴이 사라진다.
+    삭제에 성공(또는 이미 없음)하면 묘비에도 적어 둔다(창고 목록 지연·재업로드 사고 대비).
+    400: 이름이 안전하지 않음 / 409: 로컬에 존재 / 그 외 200 + storage:{ok,status,reason}.
+    라우트 충돌 없음: /patterns/{pattern_id} 는 한 조각만 받아 'backup/xxx' 두 조각과 겹치지 않는다.
+    """
+    folder = _resolve_pattern_dir(name)
+    if folder is None:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "패턴 이름이 올바르지 않아요."})
+    if os.path.isdir(folder):
+        return JSONResponse(status_code=409, content={
+            "ok": False, "error": "이 패턴은 서버에 살아 있어요. 살아 있는 패턴의 백업은 지울 수 없어요(먼저 패턴을 삭제하세요)."})
+    if not storage_backup.is_enabled():
+        return {"ok": False, "storage": {"ok": False, "status": None, "reason": "미설정"},
+                "reason": "Supabase Storage 미설정(env 없음) — 지울 창고가 없어요."}
+    try:
+        storage = storage_backup.delete_backup(name, _extract_bearer_token(request))
+    except Exception as e:
+        storage = {"ok": False, "status": None, "reason": f"예외 {type(e).__name__}"}
+    tombstoned = False
+    if storage.get("ok"):
+        try:
+            tombstoned = bool(storage_backup.add_tombstone(name))
+        except Exception:
+            tombstoned = False
+    return {"ok": bool(storage.get("ok")), "pattern_id": name, "storage": storage, "tombstoned": tombstoned,
+            "reason": None if storage.get("ok") else f"창고 삭제 실패({storage.get('reason')})"}
 
 
 @router.post("/patterns/{pattern_id}/backup", dependencies=[Depends(admin_required)])
@@ -320,12 +356,16 @@ def pattern_backup_now(pattern_id: str, request: Request) -> Any:
 
 
 @router.delete("/patterns/{pattern_id}", dependencies=[Depends(admin_required)])
-def delete_pattern(pattern_id: str) -> Any:
+def delete_pattern(pattern_id: str, request: Request) -> Any:
     """[관리자] 패턴을 휴지통(data/patterns/_trash/{id}_{YYYYMMDD-HHMMSS}/)으로 옮긴다.
 
     하드 삭제가 아니라 '이동' 이라 서버 파일을 만질 수 있는 사람은 되돌릴 수 있다.
     404: 폴더 없음 / 400: 이름이 안전하지 않음 / 500: 이동 실패(권한·잠금 등).
-    응답의 restore_warning 은 Storage 백업본이 남아 재배포 때 되살아날 수 있다는 안내.
+
+    [제안⑥] 휴지통 이동 뒤 두 가지를 더 한다(둘 다 best effort — 실패해도 삭제는 성공):
+      ① 묘비(_trash/.tombstones.json)에 id 를 적는다 → 재배포 때 restore_missing 이 이 id 를 건너뛴다.
+      ② 창고(Storage)의 zip 도 지운다(요청자 admin JWT 릴레이, 비밀키 없음).
+    응답: storage:{ok,status,reason} · tombstoned:bool. 창고 삭제가 실패했을 때만 restore_warning 을 넣는다.
     """
     import shutil
     from datetime import datetime
@@ -349,12 +389,30 @@ def delete_pattern(pattern_id: str) -> Any:
         return JSONResponse(status_code=500,
                             content={"error": "패턴을 휴지통으로 옮기지 못했어요. 서버 로그를 확인해 주세요."})
 
-    return {
+    # ① 묘비 — 창고 삭제 성공 여부와 무관하게 먼저 적는다(창고 삭제가 실패해도 부활은 막힌다).
+    try:
+        tombstoned = bool(storage_backup.add_tombstone(pattern_id))
+    except Exception as e:
+        tombstoned = False
+        print(f"[delete_pattern] 묘비 기록 예외: {type(e).__name__}")
+    # ② 창고 zip 삭제 — 미설정/토큰 없음/네트워크 실패는 사유만 돌려준다(예외 없음, 삭제는 이미 성공).
+    try:
+        storage = storage_backup.delete_backup(pattern_id, _extract_bearer_token(request))
+    except Exception as e:
+        storage = {"ok": False, "status": None, "reason": f"예외 {type(e).__name__}"}
+
+    out: Dict[str, Any] = {
         "ok": True,
         "pattern_id": pattern_id,
         "trashed_to": os.path.relpath(dest, state.PROJECT_ROOT).replace("\\", "/"),
-        "restore_warning": _RESTORE_WARNING,
+        "storage": storage,
+        "tombstoned": tombstoned,
     }
+    if not storage.get("ok"):
+        # 창고에 zip 이 남았다. 묘비가 있으면 부활은 막히지만, 창고 정리는 '백업 상태' 에서 다시 시도해야 한다.
+        out["restore_warning"] = (_RESTORE_WARNING if not tombstoned
+                                  else "창고에 백업 zip 이 남아 있어요. 묘비로 부활은 막았으니 '백업 상태' 에서 창고 삭제를 다시 시도하세요.")
+    return out
 
 
 @router.get("/settings")
@@ -2174,6 +2232,7 @@ async def create_pattern(
     #   비밀키 규칙: 요청자(admin) JWT 를 릴레이(SERVICE_ROLE 미사용). 토큰 로그 금지.
     try:
         user_jwt = _extract_bearer_token(request)  # 없으면 None → backup 이 알아서 skip
+        storage_backup._clear_tombstone(pattern_id)  # [제안⑥] 같은 이름을 다시 등록하면 묘비를 걷는다(복원 대상으로 복귀)
         storage_backup.backup_pattern(pattern_id, user_jwt)
     except Exception as e:
         # 백업은 '있으면 좋은' 부가기능 — 실패해도 등록 성공은 그대로 반환한다.

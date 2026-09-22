@@ -450,6 +450,7 @@ def restore_missing() -> int:
             # 로컬에 이미 있으면 skip(로컬 우선 - 덮어쓰기 금지).
             if os.path.isdir(local_dir):
                 continue
+            if pid in _load_tombstones(): print(f"[storage_backup] 묘비 있음(화면에서 삭제한 패턴) - 복원 건너뜀: {pid}"); continue  # 묘비 가드(제안⑥): 창고 삭제가 실패해도 부활 금지
             # 다운로드는 창고에 저장된 실제 키(원본 obj_name = hex.zip)로 하고,
             # 압축은 디코딩한 한글 폴더(local_dir)에 푼다.
             data = _download_zip(base, publishable, obj_name)
@@ -465,3 +466,150 @@ def restore_missing() -> int:
 
     print(f"[storage_backup] 복원 완료: {restored}개")
     return restored
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  4) [제안⑥ 신규] 창고 zip 삭제 + 묘비(tombstone)
+#     왜 필요한가: 화면에서 패턴을 지우면 로컬 폴더만 _trash/ 로 옮겨지고 창고의
+#     zip 은 남는다. 그러면 재배포 때 restore_missing() 이 "로컬에 없네?" 하고
+#     지운 패턴을 되살린다. 그래서 ① 창고 zip 도 지우고(요청자 admin JWT 릴레이),
+#     ② 창고 삭제가 실패하더라도 부활하지 않게 '묘비' 파일에 이름을 적어 둔다.
+#     (묘비 = 무덤 앞 비석. "이 이름은 일부러 지운 것" 이라는 표식.)
+#     기존 함수(backup/list/restore)는 본문을 바꾸지 않았고, restore_missing 안에
+#     묘비 가드 한 줄만 들어갔다.
+# ══════════════════════════════════════════════════════════════════════════
+import json as _json
+import time as _time
+
+# 묘비 파일: data/patterns/_trash/.tombstones.json  → {"패턴id": "삭제한 ISO 시각", ...}
+_TRASH_DIRNAME = "_trash"
+_TOMBSTONE_FILE = ".tombstones.json"
+
+
+def _tombstone_path() -> str:
+    """묘비 파일의 절대경로(휴지통 폴더 안)."""
+    return os.path.join(state.get_patterns_dir(), _TRASH_DIRNAME, _TOMBSTONE_FILE)
+
+
+def _load_tombstones() -> dict:
+    """묘비 파일을 읽어 {pattern_id: ISO시각} dict 로 돌려준다.
+
+    파일이 없거나 깨졌거나(JSON 아님·dict 아님) 읽기 실패면 {} — 어떤 경우에도
+    예외를 던지지 않는다(복원 루프 안에서 불리므로 부팅을 막으면 안 된다).
+    """
+    path = _tombstone_path()
+    try:
+        if not os.path.isfile(path):
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_tombstones(data: dict) -> bool:
+    """묘비 dict 를 원자적으로 저장한다(임시파일에 쓰고 os.replace 로 교체).
+
+    원자적 = 쓰다가 서버가 죽어도 '반쯤 쓰인 파일' 이 남지 않는다(옛 파일 또는 새 파일 둘 중 하나).
+    """
+    path = _tombstone_path()
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            _json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
+        os.replace(tmp, path)
+        return True
+    except Exception as e:
+        print(f"[storage_backup] 묘비 저장 실패: {type(e).__name__}")
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+        return False
+
+
+def add_tombstone(pattern_id: str) -> bool:
+    """패턴 id 를 묘비에 적는다(삭제 시각 ISO). 이미 있으면 시각만 갱신. 성공 True."""
+    pid = _sanitize_pattern_id(pattern_id)
+    if not pid:
+        return False
+    data = _load_tombstones()
+    data[pid] = _time.strftime("%Y-%m-%dT%H:%M:%S")
+    return _save_tombstones(data)
+
+
+def _clear_tombstone(pattern_id: str) -> bool:
+    """패턴 id 를 묘비에서 지운다(같은 이름으로 다시 등록할 때 create_pattern 이 부른다).
+
+    묘비에 없으면 아무 것도 안 하고 True. 저장 실패면 False(등록은 막지 않는다).
+    """
+    pid = _sanitize_pattern_id(pattern_id)
+    if not pid:
+        return False
+    data = _load_tombstones()
+    if pid not in data:
+        return True
+    del data[pid]
+    return _save_tombstones(data)
+
+
+def is_tombstoned(pattern_id: str) -> bool:
+    """묘비에 적혀 있는 id 인지(백업 상태 화면 표시용)."""
+    pid = _sanitize_pattern_id(pattern_id)
+    return bool(pid) and pid in _load_tombstones()
+
+
+def delete_backup(pattern_id: str, user_jwt: Optional[str]) -> dict:
+    """창고(Storage)의 `{hex}.zip` 하나를 지운다. 예외를 던지지 않는다.
+
+    반환: {"ok": bool, "status": int|None, "reason": str|None}
+      - 미설정(env 없음)      → ok False, reason "미설정"
+      - 토큰 없음(로컬 무인증) → ok False, reason "토큰 없음"
+      - 200                   → ok True
+      - 404(이미 없음)        → ok True (멱등) … 단, 목록에 아직 있으면 RLS 가 막은 것 → ok False "권한 없음"
+      - 그 밖의 status        → ok False, reason 에 status 만(본문·키·토큰 미포함)
+      - 네트워크 예외         → ok False, reason 에 예외 종류만
+
+    REST: DELETE {base}/storage/v1/object/{bucket}/{hex}.zip
+          헤더 apikey=공개키 · Authorization=Bearer {요청자 admin JWT}  (backup_pattern 과 동일 릴레이)
+    """
+    base, publishable = _config()
+    if not base or not publishable:
+        return {"ok": False, "status": None, "reason": "미설정"}
+    if not user_jwt:
+        return {"ok": False, "status": None, "reason": "토큰 없음"}
+    safe_id = _sanitize_pattern_id(pattern_id)
+    if not safe_id:
+        return {"ok": False, "status": None, "reason": "패턴 이름이 비었거나 안전하지 않음"}
+
+    obj_name = _encode_object_name(safe_id)
+    url = _object_url(base, obj_name)
+    try:
+        resp = httpx.delete(
+            url,
+            headers={
+                "apikey": publishable,                   # 공개키만(비밀키 금지)
+                "Authorization": f"Bearer {user_jwt}",   # 요청자 admin JWT 릴레이
+            },
+            timeout=_HTTP_TIMEOUT,
+        )
+    except Exception as e:
+        print(f"[storage_backup] 창고 삭제 실패(네트워크): {safe_id} - {type(e).__name__}")
+        return {"ok": False, "status": None, "reason": f"네트워크 {type(e).__name__}"}
+
+    if resp.status_code == 200:
+        print(f"[storage_backup] 창고 삭제 성공: {safe_id}.zip")
+        return {"ok": True, "status": 200, "reason": None}
+    if resp.status_code == 404:
+        # Supabase 는 '권한이 없어 안 보이는 것' 도 404 로 답할 수 있다(RLS 필터). 목록(anon 읽기 개방)에
+        # 그 zip 이 아직 있으면 지워진 게 아니라 권한에 막힌 것이므로 실패로 돌린다.
+        if obj_name in list_backups():
+            print(f"[storage_backup] 창고 삭제 거부(권한/RLS): {safe_id}")
+            return {"ok": False, "status": 404, "reason": "권한 없음(창고 RLS 가 삭제를 막음)"}
+        print(f"[storage_backup] 창고에 이미 없음(멱등 성공): {safe_id}.zip")
+        return {"ok": True, "status": 404, "reason": "이미 없음"}
+    print(f"[storage_backup] 창고 삭제 실패(status {resp.status_code}): {safe_id}")
+    return {"ok": False, "status": resp.status_code, "reason": f"status {resp.status_code}"}

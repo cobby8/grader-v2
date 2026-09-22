@@ -685,8 +685,8 @@ function renderPatternGrid() {
 
 // ── 패턴 삭제(TOP7 #3) ────────────────────────────────────────────────────────
 //   confirm → DELETE /api/patterns/{id} → 성공이면 목록 다시 로드 + 토스트.
-//   서버는 하드 삭제가 아니라 data/patterns/_trash/ 로 옮긴다(복구 가능). 다만 Storage 백업본은
-//   그대로라 재배포 때 되살아날 수 있어, 서버가 준 restore_warning 을 그대로 보여준다.
+//   서버는 하드 삭제가 아니라 data/patterns/_trash/ 로 옮긴다(복구 가능). [제안⑥] 이어서 Storage 백업 zip 도
+//   지우고 묘비를 남긴다 → 응답 storage.ok 로 창고 삭제 결과를, tombstoned 로 부활 차단 여부를 알려 준다.
 let deleting = false;   // 이중 클릭 방어
 function deletePattern(id, name, btn) {
   if (deleting) return;
@@ -707,7 +707,15 @@ function deletePattern(id, name, btn) {
         return;
       }
       toast("pass", "delete", "패턴을 삭제했어요", `${name} · 휴지통(${body.trashed_to || "data/patterns/_trash"})으로 옮겼어요.`);
-      if (body.restore_warning) toast("warn", "cloud_sync", "참고", body.restore_warning);
+      // [제안⑥] 창고(Storage) zip 삭제 결과. 성공이면 안심 문구, 실패면 사유 + "묘비로 부활은 막았다" 안내.
+      //   (묘비 = 서버가 _trash/.tombstones.json 에 적어 두는 표식. 재배포 복원이 이 이름을 건너뛴다.)
+      const st = body.storage || {};
+      if (st.ok) {
+        toast("pass", "cloud_done", "백업 창고에서도 지웠어요", st.reason === "이미 없음" ? "창고에 백업 zip 이 없었어요(재배포로 되살아나지 않아요)." : "재배포해도 되살아나지 않아요.");
+      } else {
+        const guard = body.tombstoned ? "묘비로 부활은 막았어요. 백업 상태에서 다시 시도하세요." : (body.restore_warning || "");
+        toast("warn", "cloud_sync", `창고 삭제 실패(${st.reason || "알 수 없음"})`, guard);
+      }
       loadPatternList();          // 목록 다시 로드(카드 사라짐). work.html 도 같은 API 라 자동 반영.
       pmBackupStatusLoad();       // 창고에만 남은 백업이 있으면 상태에 표시된다.
     })
@@ -2573,8 +2581,14 @@ function pmBackupStatusRender(st) {
     const missing = st.missing_backup || [];
     const only = st.only_in_storage || [];
     const backed = st.backed_up || [];
+    // [제안⑥] 창고에만 있는 백업: 묘비 여부를 표시하고, 항목마다 "창고에서 삭제" 버튼을 둔다.
+    //   묘비 있음 = 화면에서 지운 패턴(재배포 때 안 살아남) / 묘비 없음 = 재배포 때 되살아날 수 있음.
+    const tomb = new Set(st.tombstoned || []);
+    const onlyRows = only.map((id) => `<div class="row-between" style="margin-top:6px;"><span>${driveEsc(id)}
+          <span style="color:var(--text-muted); font-size:12px;">${tomb.has(id) ? "· 묘비 있음(되살아나지 않아요)" : "· 묘비 없음(재배포 때 되살아나요)"}</span></span>
+          <button type="button" class="btn btn--ghost btn--sm" data-bk-del="${driveEsc(id)}"><span class="material-symbols-outlined">delete_sweep</span>창고에서 삭제</button></div>`).join("");
     const onlyLine = only.length
-      ? `<div class="note" style="padding:0; margin-top:6px;"><span class="material-symbols-outlined">cloud_sync</span>창고에만 있는 백업 ${only.length}개(${driveEsc(only.join(", "))}) — 삭제한 패턴이면 재배포 때 되살아나요.</div>`
+      ? `<div class="note" style="padding:0; margin-top:6px;"><span class="material-symbols-outlined">cloud_sync</span>창고에만 있는 백업 ${only.length}개 — 삭제한 패턴의 흔적이에요. 창고에서 지우면 재배포 때 되살아나지 않아요.</div>${onlyRows}`
       : "";
     if (!missing.length) {
       box.innerHTML = `<div class="alert alert--pass"><span class="material-symbols-outlined alert__icon">cloud_done</span><div>
@@ -2591,6 +2605,21 @@ function pmBackupStatusRender(st) {
   const rb = box.querySelector("[data-bk-retry]");
   if (rb) rb.addEventListener("click", () => { rb.disabled = true; pmBackupStatusLoad(0); });
   box.querySelectorAll("[data-bk-now]").forEach((b) => b.addEventListener("click", () => pmBackupNow(b.dataset.bkNow, b)));
+  box.querySelectorAll("[data-bk-del]").forEach((b) => b.addEventListener("click", () => pmBackupDelete(b.dataset.bkDel, b)));
+}
+// [제안⑥] "창고에서 삭제": confirm → DELETE /api/patterns/backup/{name} → 토스트 → 상태 다시 확인.
+//   서버는 로컬에 살아 있는 패턴이면 409 로 거절한다(살아 있는 패턴의 백업을 지우면 재배포 때 사라지므로).
+function pmBackupDelete(id, btn) {
+  if (!confirm(`'${id}' 백업 zip 을 창고(Storage)에서 지울까요?\n(서버에 없는 패턴의 흔적만 지워요. 되돌릴 수 없어요.)`)) return;
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="material-symbols-outlined">hourglass_top</span>지우는 중…'; }
+  apiFetch(`/api/patterns/backup/${encodeURIComponent(id)}`, { method: "DELETE" })
+    .then((r) => r.json().catch(() => ({})).then((j) => ({ ok: r.ok, status: r.status, body: j || {} })))
+    .then(({ ok, status, body }) => {
+      if (ok && body.ok) toast("pass", "delete_sweep", "창고에서 지웠어요", `${id} · 재배포해도 되살아나지 않아요.`);
+      else toast("warn", "error", "창고 삭제 실패", body.reason || body.error || regFailMsg(status, body));
+    })
+    .catch(() => toast("warn", "error", "창고 삭제 실패", REG_NET_FAIL_MSG))
+    .finally(() => pmBackupStatusLoad(0));
 }
 // "지금 백업": POST /api/patterns/{id}/backup → 결과 토스트 → 상태 다시 확인.
 function pmBackupNow(id, btn) {

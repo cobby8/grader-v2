@@ -44,6 +44,13 @@
 - 검증: py_compile·vm.Script·selftest PASS. TestClient (a) a273ff2 워크트리 vs 현재, layout 없이 등록 → preset·응답 **완전 동일**(layout_applied 만 추가) (b) pieces 1·areas 2 → 해당 키만 변경·수동 계산 일치 (c) JSON 깨짐·범위 밖·없는 piece·비dict → 200+경고+auto 와 동일 (d) from-drive 코드 정독 무영향 (e) 임시 패턴 2개로 run_job 1행 각각 8/8 PASS, 미리보기 PNG 에서 번호·이름이 layout 대로 이동 확인. 브라우저 :8000 — 시드 미전송·드래그 후 등록 → 서버 preset front/band/back_number 정확, back 자동 유지, 토스트 "맞춘 위치 3개 저장". 임시 패턴 8개·job 2개·uploads 15개·워크트리 정리(PM 0125* 보존).
 - tester 참고: 화면 3번째 조각 id 는 'sleeve'(서버 'band' 는 index 2 로 매칭). C 캔버스 = 뒤판이라 앞번호는 항상 자동. 브라우저 드래그는 pointer 합성 이벤트로 검증(실 OS 드래그는 tester 확인 권장).
 
+## 구현 기록 (developer · 2026-09-22 제안⑥ 삭제 시 Storage zip 삭제 + 묘비)
+- **storage_backup.py**(기존 함수 본문 무수정·삭제 0줄): 신설 `delete_backup(id, jwt)`→`{ok,status,reason}`(DELETE /storage/v1/object/pattern-presets/{hex}.zip · apikey=publishable · Bearer=요청 JWT · 200 ok · 404 는 목록 재확인 후 «이미 없음» ok / 목록에 남았으면 «권한 없음(RLS)» 실패 · 그 외 status·네트워크 예외 실패) · 묘비 `_trash/.tombstones.json`{id:ISO} — `_load_tombstones`(없음/깨짐→{})·`_save_tombstones`(tmp→os.replace)·`add_tombstone`·`_clear_tombstone`·`is_tombstoned`. `restore_missing` 에 가드 **1줄**(로컬 존재 체크 직후 `if pid in _load_tombstones(): … continue`).
+- **api.py**: `delete_pattern(request)` — _trash 이동 후 묘비 기록 → `delete_backup` best effort → 응답 `storage:{ok,status,reason}`·`tombstoned`·(실패 시만)`restore_warning`. backup-status 에 `tombstoned:[…]`. 신설 `DELETE /patterns/backup/{name}`(admin · 이름 불안전 400 · 로컬 존재 409 · 미설정 200 ok:false · 성공 시 묘비 기록). `create_pattern` 백업 훅 안에 `_clear_tombstone` 1줄(재등록=묘비 해제).
+- **patterns.html**: 삭제 토스트 «백업 창고에서도 지웠어요» / «창고 삭제 실패(사유) — 묘비로 부활은 막았어요…» · 백업 상태 only_in_storage 행마다 묘비 여부 + «창고에서 삭제» 버튼(`pmBackupDelete`, confirm·409 문구 그대로). driveEsc·CSS 변수만.
+- 검증: py_compile 3·vm.Script·selftest PASS · monkeypatch 40항목(200/404×2/500/예외/토큰없음/미설정, 헤더 SECRET 미포함, 묘비 가드로 복원 0→해제 후 복원 대상, 깨진 묘비, TestClient 삭제→묘비→같은 id 재등록(U넥 SVG)→묘비 제거, 409/400) · 인증 ON: 새 DELETE backup·backup-status 토큰 없이 401 · 브라우저 :8000 실클릭 삭제 → 토스트 «창고 삭제 실패(미설정) / 묘비로 부활은 막았어요», 백업 상태 행·버튼 렌더(가짜 payload)·`<img onerror>` 글자화·DELETE URL 인코딩 확인. 임시 패턴·_trash·묘비 정리, 실패턴 2개 보존, 서버 PID 단독 종료.
+- tester 참고: 로컬은 미설정이라 delete_backup 실경로(200/404/RLS)는 monkeypatch 로만 검증 — 실서버(Render+Supabase) 에서 삭제 후 backup-status 의 only_in_storage 에서 빠지는지 1회 확인 권장. 인증 ON+잘못된 토큰은 기존 엔드포인트와 같이 500(auth.py introspection, 범위 밖).
+
 ## 구현 기록 (developer · 2026-09-22 ZIP 주문요약 동봉 — 완료·커밋 37498cc)
 - api.py `order_rows.json` 저장 · `_build_manifest_rows` · 주문요약.csv/xlsx ZIP 동봉 · `GET /jobs/{id}/manifest` · work.html 안내 1줄. 상세는 커밋 37498cc + 아래 tester 결과. 구 job 제외 행은 배번 빈칸.
 
@@ -52,6 +59,11 @@
 - **history.html**: esc 헬퍼+toast 이스케이프 · 헤더 형식 칸 · 행마다 `PDF ZIP`·`EPS ZIP`(형식상 없는 쪽 disabled+title, has_files=false 면 둘 다 잠금+"파일 없음(재배포로 삭제됨)")·`요약표`(GET /manifest → 행 아래 접이식 표, 캐시) · 다운로드=apiFetch→blob→a[download](Content-Disposition filename* 존중)·연타 방지·404 토스트. 가짜 재생성/더보기 버튼 제거.
 - 검증: py_compile·vm.Script OK · TestClient 새 job(연세대 3행·V넥·both) pattern/format/design/has_files ✓, 구 ffc664 "-"/both/skipped 5 ✓, output 이름변경→has_files false→원복 ✓, zip pdf/eps 200+CD ✓ · 브라우저 :8000 버튼·요약표 38행 펼침·잠금 행 ✓, 콘솔 404 1건은 외부(fonts) 기존 · selftest PASS · 만든 job·업로드 삭제(PM 0125* 2개 보존).
 - tester 참고: 주문명 칸은 여전히 폴더명(job.json 에 주문서명이 없고 POST /jobs 도 안 받음) — 이번 범위 밖.
+
+## 테스트 결과 (tester · 2026-09-22 제안⑥ 삭제→창고 zip 삭제+묘비)
+- **판정: 통과 — 자동 68/68 · 브라우저 실클릭 · 실패 0.** 회귀: 8c29327 대비 함수 단위 AST 비교 → restore_missing 외 전부 바이트 동일·삭제 0줄·가드 1줄이 `isdir(local_dir)…continue` 직후. restore(가짜 httpx): 창고 A·B/로컬 A→B만 · 묘비 B→0(다운로드 0) · 묘비 깨짐/list/없음→기존 · 묘비 A(로컬)→무영향 · 미설정 0.
+- delete_backup 200/404(목록 없음 ok·있음 RLS 실패)/500/예외/토큰없음/미설정/불안전 이름 규약대로 · 헤더 apikey=공개키·Bearer=요청 JWT·SECRET/SERVICE_ROLE 센티널 미포함 · URL hex.zip ASCII. api: 순서 _trash→묘비→delete_backup(예외여도 200·묘비 잔존) · 재등록(U넥 XS.svg)→묘비 제거 · backup/{name} 409/400/미설정 ok:false/성공 시 묘비·'backup' 패턴 있어도 라우트 충돌 0 · backup-status tombstoned · GET /patterns·local 에 _trash 없음 · 인증 ON 무토큰 401×3.
+- 브라우저(:8000 내 PID 종료): 삭제 토스트 «창고 삭제 실패(미설정)/묘비로 부활은 막았어요» · 가짜 payload 행+«창고에서 삭제» 실클릭 confirm→DELETE(URL 인코딩)→토스트 · `<img onerror>` 글자화·불안전 이름 400 토스트 · 하드코딩 색 0 · 콘솔 앱 에러 0(외부 Pretendard·/favicon.ico 404 기존). selftest PASS · engine/auth/gdrive/main/_handoff diff 0. 정리: 임시 패턴·_trash·묘비 삭제, 실패턴 2 보존.
 
 ## 테스트 결과 (tester · 2026-09-22 제안⑤ B/C 편집기 좌표 실제 저장)
 - **판정: 통과 — 회귀 0 증명·layout 환산·오류 6종+폭탄·엔진 반영·브라우저 실마우스·안전, 실패 0.** ① 회귀: `git worktree add … a273ff2` 로 옛 코드 트리 → 같은 V넥 SVG 12개로 layout 없이 등록(완성본 없음/있음 2벌) → preset.json 키정렬 비교 **완전 동일**, 응답도 `layout_applied` 제외 동일, 폴더 파일 목록 동일. from-drive 정독: layout 인자 자체를 안 넘김(무영향).
@@ -64,17 +76,13 @@
 - 통과 70/70·회귀 0. 수정 권장 1(csv/xlsx `=1+1` 인젝션 → 수정 요청표·errors.md).
 
 ## 테스트 결과 (tester · 2026-09-22 제안④ 이력 재다운로드 + 패턴 표시)
-- **판정: 통과 — TestClient 46 · 인증 ON 4 · 브라우저 DOM · 안전 4, 실패 0.** 정적 3종 OK. 새 job(연세대 3행·V넥·both, 4.5s): `/jobs` 첫 항목 pattern 농구_V넥_양면·both·design 원본명·has_files true·skipped 0·count 3 · `job_meta.json` 5키 정확·.tmp 없음 · zip pdf/eps/both 200 + `filename*=UTF-8''` · 구 ffc664 "-"·both·skipped 5 · output 개명→has_files false·zip 404·manifest 200→원복 ✓ · 깨진 meta 5종(배열·깨진JSON·빈·null·HTML) 폴백 "-"/both/"" 목록 200.
-- 회귀: id/date/name/count/status 유지 · mtime 내림차순 · **`/jobs` 34개 45ms**(manifest 재조립 없음). 인증 ON 별도 프로세스: `/api/jobs`·zip·manifest 토큰 없이 **401**(health 200) · apiFetch Bearer 부착·401→login(코드 정독).
-- 브라우저(:8000 내가 띄운 PID→종료): 헤더 7칸(형식) · dadbbf "33 · 제외 5"·PDF·EPS ZIP disabled(title) · 요약표 38행 펼침/닫기/재펼침(캐시) ✓ · PDF ZIP→서버 200·토스트 파일명 `web_…_pdf.zip` · PM job PDF ZIP **3연타→서버 요청 1회** · EPS ZIP 200 · 파일 없는 행 잠금+문구 · job_meta `<b>`·`<img onerror>`·사유 `<b>` 전부 글자(b/img 요소 0) · toast 주입도 글자 · 콘솔 앱 에러 0(외부 Pretendard 404·내가 낸 EPS 404 뿐).
-- 안전: diff 내 하드코딩 색 0 · _handoff/engine/auth/gdrive/storage_backup diff 0 · `_design_display_name` 은 basename+`__` 뒤만 표시용(`../../x/y__z.ai`→`z.ai`), 파일 접근은 `_resolve_design_path` 별도 ✓. 만든 job·uploads·임시 폴더 삭제, PM 0125* 2개 보존, ffc664 폴더 mtime 을 job.json 시각으로 복원.
-- 참고(차단 아님): ① 형식 모르는 구 행의 없는 형식 ZIP 404 토스트가 "재배포로 지워졌을 수…"로 시작(사유는 뒤에 붙음) ② 정렬·날짜=폴더 mtime 이라 폴더를 건드리면 맨 위로 튐(기존) ③ 26MB ZIP 은 버튼만 잠긴 채 ~10초.
+- **통과(커밋 a273ff2)** — TestClient 46·인증 ON 401·브라우저 DOM·안전 4, 실패 0. `/jobs` 34개 45ms · 깨진 meta 5종 폴백 · `<img onerror>` 글자화 · 하드코딩 색 0. 참고(차단 아님): ① 형식 모르는 구 행의 ZIP 404 토스트 문구 순서 ② 정렬=폴더 mtime(기존) ③ 26MB ZIP ~10초 버튼 잠금. (상세는 2026-09-22 tester 로그·git)
 
 ## 백로그 (차단 아님, 후속)
 - **[Phase B: 등록패턴 파일 영속화]** Render 임시디스크→재배포 시 등록 preset 소실(현 repo커밋 2개만 잔존). 복구=재스캔등록(같은이름이면 메타 자동재적용). preset 20~88KB 소형→Supabase Storage 백업/복원 별도 승인단위로.
 - **[즐겨찾기/분류 후속]** updated_by 프론트 미전송(SQL nullable이라 OK). 별표 이중클릭 debounce 없음(멱등). 카테고리 라벨 정규화 목록(PM_KNOWN_CATEGORIES) 조정 여지.
 - **[Drive UI 후속]** DRIVE_SIZE_ORDER=백엔드 _SIZE_TOKENS 프론트복제(동기화 의무). glyph_file_id/reference_file_id 미노출(서버지원). 카드 **수정** 무동작(disabled "준비 중" — 수정 API 없음).
-- **[패턴 삭제 후속 · 2026-09-22]** 삭제는 `_trash/` 이동만이라 **Storage 백업 zip 은 남는다** → 재배포 startup `restore_missing`(로컬에 없는 것만 복원)이 지운 패턴을 되살린다. 막으려면 storage_backup 에 삭제(DELETE object) 추가 필요(금지영역이라 미구현, UI·응답에 경고만). `_trash/` 영구 정리(TTL) 없음. pattern_meta(즐겨찾기) 행은 삭제 시 안 지움. B/C 편집기 좌표 실제 전송(create_pattern 인자 확장)은 여전히 미구현.
+- **[패턴 삭제 후속 · 2026-09-22]** ~~Storage zip 잔존→재배포 부활~~ 제안⑥으로 해결(delete_backup+묘비). 남은 것: `_trash/` 영구 정리(TTL) 없음 · pattern_meta(즐겨찾기) 행은 삭제 시 안 지움 · 묘비 파일도 임시디스크라 창고 삭제가 끝내 실패한 채 재배포하면 부활(백업 상태 «창고에서 삭제» 로 재시도).
 - **[_handoff 비대칭]** apiFetch·인증·계정·도움말·drive·pm(즐겨찾기) JS 전부 webapp/static에만 → _handoff 재복사 시 소실 위험(conventions.md).
 - **[인증/자산]** auth.py 토큰캐시 만료정리. design_XL.ai 로컬부재. hide_design_cutline_layer V넥한정. 3XL.ai 재확보. job.py:732 _auto_bleed svg_index 가드.
 
@@ -118,6 +126,8 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 | 결과 |
 |------|---------|------|------|
+| 2026-09-22 | developer | [제안⑥ 삭제→Storage zip 삭제+묘비] delete_backup(JWT 릴레이)·.tombstones.json·restore 가드 1줄·DELETE /patterns/backup/{name}·UI 토스트/버튼 | 단위 40/40 · 인증 ON 401 · 브라우저 실클릭 · selftest PASS · storage_backup 삭제줄 0 · 커밋 대기(PM) |
+| 2026-09-22 | tester | [제안⑥ 검증] storage_backup 함수 단위 회귀 0 · restore 묘비 가드 5시나리오 · delete_backup 8갈래+헤더 비밀키 0 · api 순서/재등록/backup 삭제/401 · 브라우저 실클릭 | **통과** 68/68 · 실패 0 · 정리 완료 |
 | 2026-09-22 | tester | [제안⑤ 검증] a273ff2 워크트리 회귀 diff 0 · layout 환산 손계산 · 오류 6종+폭탄 · run_job 픽셀 측정 · 브라우저 실마우스 2회 · 안전 | **통과** 실패 0 · 참고 4(UI 는 소매 필수라 layout 없는 등록 불가 등) · 정리 완료 |
 | 2026-09-22 | developer | [제안⑤ B/C 좌표 저장] layout 폼 필드(정규화→pt 서버 환산) · touched 만 전송 · 배너/토스트 갱신 | (a)회귀 diff 0 (b)(c)(e) 통과 · 브라우저 확인 · decisions 1건 · 커밋 대기(PM) |
 | 2026-09-22 | tester | [제안④ 검증] 정적 3종·TestClient 46·인증 ON 401·브라우저 DOM(연타 1회·HTML 이스케이프·잠금)·안전 4 | **통과** 실패 0 · 참고 3(토스트 문구·mtime 정렬·대용량 대기) · 정리 완료 |
