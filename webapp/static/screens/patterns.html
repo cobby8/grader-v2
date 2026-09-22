@@ -315,13 +315,14 @@
         <!-- Substep B · 디자인↔조각 매핑 (신규) -->
         <div id="subB" class="hidden" style="display:grid; grid-template-columns:340px 1fr; gap:24px; align-items:start;">
           <div class="stack-5">
-            <!-- 정직한 안내(TOP7 #4): 이 편집기의 좌표는 아직 서버로 전송되지 않는다(savePattern 은 이름·기준사이즈·파일만 보냄).
-                 실제 조각 영역은 서버가 페이지 균등분할로 추정한다. 좌표 전송은 후속 작업. -->
-            <div class="alert alert--warn" data-honest-banner>
+            <!-- 2026-09-22: 이 편집기에서 '직접 그리거나 옮긴' 조각 영역은 savePattern 이 layout(정규화 좌표)으로 보내
+                 서버가 design_region_pt(pt)로 환산해 preset.json 에 저장한다. 손대지 않은(자동 시드) 항목은 안 보내
+                 → 서버 자동 추정(페이지 균등분할) 유지. -->
+            <div class="alert alert--info" data-honest-banner>
               <span class="material-symbols-outlined alert__icon">info</span>
               <div>
-                <div class="alert__title">이 화면의 위치 조정은 미리보기용이에요</div>
-                <div class="alert__body">실제 조각 위치는 서버가 자동 추정하며, 정밀 조정은 등록 후 preset.json(design_region_pt)에서 합니다.</div>
+                <div class="alert__title">여기서 맞춘 위치가 등록 시 저장돼요</div>
+                <div class="alert__body">직접 그리거나 옮긴 조각 영역은 preset.json(design_region_pt)에 저장됩니다. 손대지 않은 항목은 서버가 자동 추정합니다.</div>
               </div>
             </div>
             <div>
@@ -353,25 +354,26 @@
               <span class="origin-tag" style="left:6px; bottom:6px;">pt 원점 (0,0) · 좌하단</span>
               <span class="origin-tag" style="left:6px; top:6px;">이미지 원점 · 좌상단</span>
             </div>
-            <div class="note" style="margin-top:8px;"><span class="material-symbols-outlined">swap_vert</span><span id="mapHint">미리보기용 영역입니다(저장되지 않음). 실제 위치는 서버가 자동 추정하며 preset.json 에서 조정합니다.</span></div>
+            <div class="note" style="margin-top:8px;"><span class="material-symbols-outlined">swap_vert</span><span id="mapHint">직접 그리거나 옮긴 영역은 등록 시 저장됩니다. 손대지 않은 항목은 서버가 자동 추정합니다.</span></div>
           </div>
         </div>
 
         <!-- Substep C · 배번 / 이름 영역 (기존) -->
         <div id="subC" class="hidden" style="display:grid; grid-template-columns:340px 1fr; gap:24px; align-items:start;">
           <div class="stack-5">
-            <!-- 정직한 안내(TOP7 #4): 드래그로 맞춘 번호·이름 영역도 서버로 전송되지 않는다.
-                 실제 영역은 '완성본 1장' 을 올리면 서버가 자동 추출(reference)하고, 그 외엔 preset.json 에서 조정한다. -->
-            <div class="alert alert--warn" data-honest-banner>
+            <!-- 2026-09-22: 이 캔버스(뒤판 미리보기)에서 '직접 그리거나 옮긴' 배번·이름 영역은 savePattern 이
+                 layout.areas(뒤판 조각 상대 정규화 좌표)로 보내 서버가 back_number_area/back_name_area(pt)로 환산해 저장한다.
+                 손대지 않은(자동 시드) 항목은 안 보내 → 완성본 자동 추출 또는 자동 추정 유지. 앞 번호는 이 화면에 없다(자동). -->
+            <div class="alert alert--info" data-honest-banner>
               <span class="material-symbols-outlined alert__icon">info</span>
               <div>
-                <div class="alert__title">이 화면의 위치 조정은 미리보기용이에요</div>
-                <div class="alert__body">실제 번호·이름 위치는 완성본에서 서버가 자동 추출하며, 정밀 조정은 등록 후 preset.json 에서 합니다.</div>
+                <div class="alert__title">여기서 맞춘 위치가 등록 시 저장돼요</div>
+                <div class="alert__body">직접 그리거나 옮긴 뒤판 배번·이름 영역은 preset.json 에 저장됩니다. 손대지 않은 항목은 완성본에서 자동 추출하거나 서버가 자동 추정합니다.</div>
               </div>
             </div>
             <div>
               <div class="field__label" style="margin-bottom:4px;">배번 · 이름 위치</div>
-              <div class="section-sub">완성본 1장을 올리면 위치·크기·자간을 자동 인식해 저장합니다. 직접 드래그는 미리보기 전용(저장 안 됨)입니다.</div>
+              <div class="section-sub">완성본 1장을 올리면 위치·크기·자간을 자동 인식해 저장합니다. 직접 드래그로 맞춘 뒤판 영역도 등록 시 함께 저장됩니다.</div>
             </div>
             <div class="seg" id="methodTabs" style="width:100%;">
               <button data-method="auto" class="is-active" style="flex:1;">완성본에서 자동 추출 (권장)</button>
@@ -398,7 +400,7 @@
               </div>
               <div class="coord" id="optRel">rel_bbox —</div>
             </div>
-            <div class="note"><span class="material-symbols-outlined">drag_indicator</span><span id="rgnHint">영역을 끌어 옮기거나 모서리로 크기를 조절하세요. (미리보기 전용 — 이 값은 저장되지 않아요)</span></div>
+            <div class="note"><span class="material-symbols-outlined">drag_indicator</span><span id="rgnHint">영역을 끌어 옮기거나 모서리로 크기를 조절하세요. 손댄 영역은 등록 시 저장돼요.</span></div>
             </div>
           </div>
           <div>
@@ -920,15 +922,17 @@ function armPiece(id) {
   mapCanvas.classList.toggle("is-drawing", !!armedPiece);
   $("#mapHint").textContent = armedPiece
     ? `${PIECES.find((p) => p.id === armedPiece).name} 영역을 디자인 위에 드래그하세요.`
-    : "미리보기용 영역입니다(저장되지 않음). 실제 위치는 서버가 자동 추정하며 preset.json 에서 조정합니다.";   // 거짓 고지("pt로 환산되어 저장") 정정
+    : "직접 그리거나 옮긴 영역은 등록 시 저장됩니다. 손대지 않은 항목은 서버가 자동 추정합니다.";
   renderPieceList();
 }
-function drawPieceRegion(p, x, y, w, h) {
+// touched: 직원이 직접 그린(true) / 자동 시드(false). 시드는 등록 때 보내지 않는다(서버 자동 추정 유지).
+//   시드된 영역이라도 끌어 옮기거나 크기를 바꾸면(onChange) 그 순간 '손댄 것'으로 바뀐다.
+function drawPieceRegion(p, x, y, w, h, touched) {
   if (pieceRegions[p.id]) pieceRegions[p.id].remove();
   const el = addRegion(mapCanvas, {
     cls: "region--piece", color: p.color, x, y, w, h,
-    label: p.name, data: { piece: p.id }, deletable: true,
-    onChange: () => { renderPieceList(); recomputeContentBox(false); },
+    label: p.name, data: { piece: p.id, touched: touched ? "1" : "0" }, deletable: true,
+    onChange: (r) => { r.dataset.touched = "1"; renderPieceList(); recomputeContentBox(false); },
     onDelete: () => { delete pieceRegions[p.id]; renderPieceList(); recomputeContentBox(false); validateMap(); },
   });
   pieceRegions[p.id] = el;
@@ -981,7 +985,7 @@ mapCanvas.addEventListener("pointerdown", (e) => {
   if (!armedPiece || e.target.closest(".region")) return;
   const p = PIECES.find((x) => x.id === armedPiece);
   const start = relPct(mapCanvas, e.clientX, e.clientY);
-  drawPieceRegion(p, start.x, start.y, 0.1, 0.1);
+  drawPieceRegion(p, start.x, start.y, 0.1, 0.1, true);   // 직원이 직접 그림 → 등록 시 전송
   const el = pieceRegions[p.id];
   const move = (ev) => {
     const cur = relPct(mapCanvas, ev.clientX, ev.clientY);
@@ -1005,7 +1009,7 @@ $("#cbAuto").addEventListener("click", () => { cbManual = false; recomputeConten
 
 // seed mapping (front + back mapped, sleeve unmapped → warning)
 function seedMap() {
-  PIECES.forEach((p) => { if (p.seed) drawPieceRegion(p, p.seed.x, p.seed.y, p.seed.w, p.seed.h); });
+  PIECES.forEach((p) => { if (p.seed) drawPieceRegion(p, p.seed.x, p.seed.y, p.seed.w, p.seed.h, false); });   // 시드 = 미전송
   renderPieceList(); recomputeContentBox(true); validateMap();
 }
 
@@ -1036,11 +1040,12 @@ function showRgnOpts(el) {
   $("#optRel").textContent = "rel_bbox [" + relBbox(el).join(", ") + "]";
   $("#optAlign").querySelectorAll("button").forEach((b) => b.classList.toggle("is-active", b.dataset.align === el.dataset.align));
 }
-function makeRgn(kind, x, y, w, h, align) {
+// touched: 직접 그린(true) / 자동 시드(false) — 시드는 등록 때 보내지 않는다. 옮기거나 크기 변경(onChange) 시 손댄 것으로 승격.
+function makeRgn(kind, x, y, w, h, align, touched) {
   return addRegion(rgnCanvas, {
     cls: "region--" + kind, x, y, w, h, align: align || "center",
-    label: LABELS[kind], sample: SAMPLE[kind], data: { kind }, deletable: true,
-    onChange: (el) => { if (el === rgnSelected) showRgnOpts(el); },
+    label: LABELS[kind], sample: SAMPLE[kind], data: { kind, touched: touched ? "1" : "0" }, deletable: true,
+    onChange: (el) => { el.dataset.touched = "1"; if (el === rgnSelected) showRgnOpts(el); },
     onDelete: (el) => { if (el === rgnSelected) { rgnSelected = null; showRgnOpts(null); } },
   });
 }
@@ -1059,7 +1064,7 @@ rgnCanvas.addEventListener("pointerdown", (e) => {
     return;
   }
   const start = relPct(rgnCanvas, e.clientX, e.clientY);
-  const el = makeRgn(activeTool, start.x, start.y, 0.1, 0.1, "center");
+  const el = makeRgn(activeTool, start.x, start.y, 0.1, 0.1, "center", true);   // 직접 그림 → 등록 시 전송
   rgnCanvas.__ed.select(el);
   const move = (ev) => {
     const p = relPct(rgnCanvas, ev.clientX, ev.clientY);
@@ -1082,8 +1087,37 @@ $("#optAlign").querySelectorAll("button").forEach((b) => b.addEventListener("cli
   rgnSelected.dataset.align = b.dataset.align; fitSample(rgnSelected); showRgnOpts(rgnSelected);
 }));
 function seedRgn() {
-  makeRgn("number", 34, 22, 32, 20, "center");
-  makeRgn("name", 28, 50, 44, 11, "center");
+  makeRgn("number", 34, 22, 32, 20, "center", false);   // 시드 = 미전송(손대면 전송)
+  makeRgn("name", 28, 50, 44, 11, "center", false);
+}
+
+// ── 등록 시 서버로 보낼 layout(화면에서 '손댄' 위치만) ─────────────────────────
+//   규약: 정규화 좌표 0~1 · 좌상단 원점. 서버(_apply_layout)가 디자인 페이지 MediaBox pt 로 환산(y 뒤집기).
+//     · pieces[].region : 디자인 페이지 기준. id 는 서버 조각 id 와 정확일치 우선, index(목록 순번)는 폴백
+//                         (화면의 3번째 조각 id 'sleeve' 는 서버엔 'band' 라 index 로 맞는다).
+//     · areas.back_number / back_name : 이 캔버스가 '뒤판 미리보기' 라 뒤판 조각 상대(piece_id:"back").
+//       같은 종류 영역이 여럿이면 마지막에 손댄 것(=DOM 뒤쪽)을 쓴다. 앞 번호는 화면에 없다(자동).
+//   손대지 않은 항목은 키 자체를 넣지 않는다 → 서버가 그 항목만 자동 추정 유지. 전부 미접촉이면 null(전송 안 함).
+function regionNorm(el) {
+  const x = parseFloat(el.style.left) / 100, y = parseFloat(el.style.top) / 100;
+  const w = parseFloat(el.style.width) / 100, h = parseFloat(el.style.height) / 100;
+  return [x, y, x + w, y + h].map((v) => Math.round(clamp(v, 0, 1) * 10000) / 10000);
+}
+function buildLayoutPayload() {
+  const pieces = [];
+  PIECES.forEach((p, i) => {
+    const el = pieceRegions[p.id];
+    if (el && el.dataset.touched === "1") pieces.push({ id: p.id, index: i, region: regionNorm(el) });
+  });
+  const areas = {};
+  const backIndex = Math.max(0, PIECES.findIndex((p) => p.id === "back"));
+  rgnCanvas.querySelectorAll(".region").forEach((el) => {
+    if (el.dataset.touched !== "1") return;
+    const key = el.dataset.kind === "number" ? "back_number" : el.dataset.kind === "name" ? "back_name" : null;
+    if (key) areas[key] = { piece_id: "back", piece_index: backIndex, bbox: regionNorm(el) };
+  });
+  if (!pieces.length && !Object.keys(areas).length) return null;
+  return { version: 1, origin: "top-left", unit: "norm", page_size_pt: PAGE, pieces, areas };
 }
 
 // =====================================================================
@@ -1280,6 +1314,9 @@ function savePattern() {
   });
   if (REG.glyphFile) fd.append("glyphset", REG.glyphFile, REG.glyphFile.name);
   if (REG.refFile) fd.append("reference", REG.refFile, REG.refFile.name);
+  // B·C 편집기에서 손댄 위치만 layout 으로 동봉(없으면 필드 자체를 안 보내 = 서버 100% 기존 동작).
+  const layout = buildLayoutPayload();
+  if (layout) fd.append("layout", JSON.stringify(layout));
 
   saving = true;
   const btn = $("#regNext");
@@ -1309,8 +1346,10 @@ function savePattern() {
       const dis = (body.disabled_sizes || []).map((d) => d.name);
       const disMsg = dis.length ? ` · 비활성 ${dis.join(",")}` : "";
       const glyphMsg = body.glyph_source ? `글리프셋 ${glyphCount}자` : "기본폰트";
-      // 문구 정직화(TOP7 #4): 화면에서 그린 조각 영역은 전송되지 않으므로 "위치는 자동 추정" 을 명시한다.
-      toast("pass", "check_circle", "패턴이 등록됐어요 (위치는 자동 추정)",
+      // 화면에서 맞춘 위치가 서버에 저장됐으면 그 개수를, 하나도 없으면 "위치는 자동 추정" 을 명시한다.
+      const la = body.layout_applied || {};
+      const laN = (la.pieces || 0) + ((la.areas || []).length);
+      toast("pass", "check_circle", laN ? `패턴이 등록됐어요 (맞춘 위치 ${laN}개 저장)` : "패턴이 등록됐어요 (위치는 자동 추정)",
         `${body.pattern_id} · 조각 ${body.pieces} · 사이즈 ${(body.active_sizes||[]).length}개 · ${glyphMsg}${disMsg}`);
 
       // 경고가 있으면 안내(부분 실패 등).
@@ -1350,6 +1389,11 @@ function resetRegister() {
   REG.sizeFiles = {}; REG.glyphFile = null; REG.refFile = null;
   glyphLoaded = false; glyphCount = 0; extracted = false; areaResult = null;
   seeded = { A: false, B: false, C: false };
+  // 편집기 영역도 비운다 — 안 비우면 지난 등록에서 '손댄' 영역이 남아 다음 등록에 그대로 전송된다.
+  mapCanvas.querySelectorAll(".region").forEach((el) => el.remove());
+  rgnCanvas.querySelectorAll(".region").forEach((el) => el.remove());
+  Object.keys(pieceRegions).forEach((k) => delete pieceRegions[k]);
+  contentRegion = null; cbManual = false; rgnSelected = null;
   renderSizeChips();
 }
 function regBack() {

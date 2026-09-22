@@ -22,7 +22,7 @@
 | 1 | ✅ 0ae5f26 |
 | 2·5·6 | ✅ a2f2d08 |
 | 3 | ✅ 삭제만 2f316c8 (_trash 이동·Storage zip 잔존 경고). 수정은 "준비 중" |
-| 4 | 🟡 정직 안내만 2f316c8 — 좌표 전송은 백로그 |
+| 4 | ✅ 좌표 실제 저장(제안⑤, 커밋 대기) — 2f316c8 정직 안내 → layout 전송 |
 | 7 | ✅ backup-status/backup API + 관리자 UI 2f316c8 |
 
 ## 진행 현황 (완료 — 상세는 git + knowledge)
@@ -38,6 +38,12 @@
 | **TOP7 #2·#5·#6** | 콜드스타트 거짓표시 3종(목록 실패 구분·서버 핀 4상태·등록 실패 한글) | ✅ a2f2d08 (tester 59항목) |
 | **TOP7 #3·#4·#7 + XSS + ZIP탐색** | 패턴 삭제(_trash)·정직 안내·백업 상태 UI·toast 이스케이프·_find_job_dir 정확일치 | ✅ 2f316c8 (tester 52/52) |
 
+## 구현 기록 (developer · 2026-09-22 제안⑤ B/C 편집기 좌표 실제 저장)
+- **api.py**: `create_pattern` 에 `layout: Optional[str] = Form(None)` 추가(from-drive 무수정). 신설 `_apply_layout`·`_layout_page_frame`(design_file MediaBox→완성본→화면 힌트→preset page_size_pt)·`_norm_rect`·`_norm_to_pt`(y 뒤집기)·`_layout_find_piece`(id→index). preset 조립 뒤 «보낸 항목만» `pieces[].design_region_pt`·`back_number_area`·`back_name_area`(·front_number) 덮어쓰기. 전 조각 덮으면 균등분할 경고 제거. 응답 `layout_applied:{pieces,areas}`. 틀린 layout=경고+자동 추정 유지(200).
+- **patterns.html**: B/C 영역에 `dataset.touched`(시드 0 · 직접 그림/이동/리사이즈 1). `buildLayoutPayload()` → 손댄 것만 `layout` JSON(정규화 0~1·좌상단, C 는 뒤판 조각 상대 piece_id:"back"). 배너 «여기서 맞춘 위치가 등록 시 저장돼요»(alert--info)·힌트 문구·성공 토스트 «맞춘 위치 N개 저장». `resetRegister` 가 편집기 영역도 비움(지난 등록의 손댄 영역 재전송 방지).
+- 검증: py_compile·vm.Script·selftest PASS. TestClient (a) a273ff2 워크트리 vs 현재, layout 없이 등록 → preset·응답 **완전 동일**(layout_applied 만 추가) (b) pieces 1·areas 2 → 해당 키만 변경·수동 계산 일치 (c) JSON 깨짐·범위 밖·없는 piece·비dict → 200+경고+auto 와 동일 (d) from-drive 코드 정독 무영향 (e) 임시 패턴 2개로 run_job 1행 각각 8/8 PASS, 미리보기 PNG 에서 번호·이름이 layout 대로 이동 확인. 브라우저 :8000 — 시드 미전송·드래그 후 등록 → 서버 preset front/band/back_number 정확, back 자동 유지, 토스트 "맞춘 위치 3개 저장". 임시 패턴 8개·job 2개·uploads 15개·워크트리 정리(PM 0125* 보존).
+- tester 참고: 화면 3번째 조각 id 는 'sleeve'(서버 'band' 는 index 2 로 매칭). C 캔버스 = 뒤판이라 앞번호는 항상 자동. 브라우저 드래그는 pointer 합성 이벤트로 검증(실 OS 드래그는 tester 확인 권장).
+
 ## 구현 기록 (developer · 2026-09-22 ZIP 주문요약 동봉 — 완료·커밋 37498cc)
 - api.py `order_rows.json` 저장 · `_build_manifest_rows` · 주문요약.csv/xlsx ZIP 동봉 · `GET /jobs/{id}/manifest` · work.html 안내 1줄. 상세는 커밋 37498cc + 아래 tester 결과. 구 job 제외 행은 배번 빈칸.
 
@@ -46,6 +52,13 @@
 - **history.html**: esc 헬퍼+toast 이스케이프 · 헤더 형식 칸 · 행마다 `PDF ZIP`·`EPS ZIP`(형식상 없는 쪽 disabled+title, has_files=false 면 둘 다 잠금+"파일 없음(재배포로 삭제됨)")·`요약표`(GET /manifest → 행 아래 접이식 표, 캐시) · 다운로드=apiFetch→blob→a[download](Content-Disposition filename* 존중)·연타 방지·404 토스트. 가짜 재생성/더보기 버튼 제거.
 - 검증: py_compile·vm.Script OK · TestClient 새 job(연세대 3행·V넥·both) pattern/format/design/has_files ✓, 구 ffc664 "-"/both/skipped 5 ✓, output 이름변경→has_files false→원복 ✓, zip pdf/eps 200+CD ✓ · 브라우저 :8000 버튼·요약표 38행 펼침·잠금 행 ✓, 콘솔 404 1건은 외부(fonts) 기존 · selftest PASS · 만든 job·업로드 삭제(PM 0125* 2개 보존).
 - tester 참고: 주문명 칸은 여전히 폴더명(job.json 에 주문서명이 없고 POST /jobs 도 안 받음) — 이번 범위 밖.
+
+## 테스트 결과 (tester · 2026-09-22 제안⑤ B/C 편집기 좌표 실제 저장)
+- **판정: 통과 — 회귀 0 증명·layout 환산·오류 6종+폭탄·엔진 반영·브라우저 실마우스·안전, 실패 0.** ① 회귀: `git worktree add … a273ff2` 로 옛 코드 트리 → 같은 V넥 SVG 12개로 layout 없이 등록(완성본 없음/있음 2벌) → preset.json 키정렬 비교 **완전 동일**, 응답도 `layout_applied` 제외 동일, 폴더 파일 목록 동일. from-drive 정독: layout 인자 자체를 안 넘김(무영향).
+- ② 적용: pieces 1 + areas 2(정규화) → MediaBox(4478.74×5669.29, pikepdf 로 실제 읽음) y 뒤집기 손계산과 **소수 1자리까지 일치**(front [447.87,566.93,2239.37,2834.64] · back_number center [2239.4,3259.8] cap 283.5 · back_name baseline 2645.7 em 189.0 pitch 270.8=em×1.4326). 손대지 않은 back/band·나머지 키 = 자동본 그대로(바뀐 키 정확히 3개). 조각 3개 전부(+`sleeve`→index 2 폴백)면 균등분할 경고 제거·실 preset 값 왕복 오차 ≤0.2pt · 완성본 있으면 색/폰트 유지·pitch 비율 유지(346.6) · front_number 자동 그대로. 응답 `layout_applied` 수 일치.
+- ③ 오류: JSON 깨짐·범위 밖·x0>x1·없는 piece·문자열 bbox·비dict·NaN → 전부 200 + `[layout]` 경고 + preset = 자동본. 1MB 문자열·`[`×10만·`{"a":`×5만 → 200 경고(서버 생존, health 200). **1MB 초과 JSON 은 starlette 가 400 "Part exceeded maximum size of 1024KB"**(등록 자체 거절, 폴더 없음 — 허용 범위). ④ 엔진: 기준/이동 패턴 각 run_job 1행 XL **8/8 PASS**, 미리보기 PNG 픽셀 측정: 번호 Δ888px(예상 887) · 이름 Δ2449px(예상 2446) · cap 769px(예상 770) — layout 값이 실제 합성에 그대로 먹음.
+- ⑤ 브라우저(:8000 내가 띄운 PID→종료, 실마우스 드래그): 소매 영역 그림 + 배번 영역 아래로 끌기 → FormData `layout` = **손댄 2개만**(sleeve index 2 · back_number) · 시드 front/back·name 미전송 · 서버 preset band/back_number 손계산 일치·front/back 균등분할 유지 · 토스트 «맞춘 위치 2개 저장». 새 등록 시작 → 캔버스 0개·pieceRegions 빈·payload null · 소매만 그리고 등록 → `layout` 1개·«맞춘 위치 1개 저장»(지난 등록의 배번 이동 재전송 없음). 콘솔 새 에러 0(기존 8건은 이전 history 탭 zip 404).
+- ⑥ 안전: layout id/index 로 경로 접근 0(os.path/open 없음) · `../<script>` id → 경고 문구에만 들어가고 toast 는 driveEsc 이스케이프 · 하드코딩 색 0 · engine/auth/gdrive/storage_backup/main/state/_handoff diff 0 · `_find_piece_index` 는 조회만. 참고(차단 아님): (a) UI 는 소매 매핑이 필수라 **layout 없는 등록(«위치는 자동 추정» 토스트)은 화면에선 도달 불가**(from-drive 전용) (b) 시드 front/back 을 안 옮기면 화면엔 «모든 조각 매핑» 인데 저장은 균등분할 추정 — 직원 안내 필요 (c) `pieces:"front"` 같은 타입 틀린 컬렉션은 경고 없이 무시(무해) (d) `#pname` 은 resetRegister 가 안 비움(기존). 정리: 임시 패턴 22·job 2·uploads 268·워크트리 삭제, 실패턴 2·0125* 보존.
 
 ## 테스트 결과 (tester · 2026-09-22 ZIP 주문요약 — 커밋 37498cc)
 - 통과 70/70·회귀 0. 수정 권장 1(csv/xlsx `=1+1` 인젝션 → 수정 요청표·errors.md).
@@ -105,6 +118,8 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 | 결과 |
 |------|---------|------|------|
+| 2026-09-22 | tester | [제안⑤ 검증] a273ff2 워크트리 회귀 diff 0 · layout 환산 손계산 · 오류 6종+폭탄 · run_job 픽셀 측정 · 브라우저 실마우스 2회 · 안전 | **통과** 실패 0 · 참고 4(UI 는 소매 필수라 layout 없는 등록 불가 등) · 정리 완료 |
+| 2026-09-22 | developer | [제안⑤ B/C 좌표 저장] layout 폼 필드(정규화→pt 서버 환산) · touched 만 전송 · 배너/토스트 갱신 | (a)회귀 diff 0 (b)(c)(e) 통과 · 브라우저 확인 · decisions 1건 · 커밋 대기(PM) |
 | 2026-09-22 | tester | [제안④ 검증] 정적 3종·TestClient 46·인증 ON 401·브라우저 DOM(연타 1회·HTML 이스케이프·잠금)·안전 4 | **통과** 실패 0 · 참고 3(토스트 문구·mtime 정렬·대용량 대기) · 정리 완료 |
 | 2026-09-22 | developer | [제안④ 이력 재다운로드] job_meta.json · /jobs format/design/skipped/has_files · history 버튼 3개+접이식 요약표 | TestClient 15/15 · 브라우저 확인 · selftest PASS · 커밋 대기(PM) |
 | 2026-09-22 | tester | [ZIP 주문요약 검증] 정적 3종·e2e 38행 both·csv/xlsx/manifest 대조·회귀·주입·인젝션 | 기능 70/70 통과 · 수정 권장 1(csv/xlsx 인젝션) · errors.md 1건 |

@@ -2,6 +2,12 @@
 <!-- 담당: planner-architect | 최대 30항목 -->
 <!-- "왜 A 대신 B를 선택했는지" 기술 결정의 배경과 이유를 기록 -->
 
+### [2026-09-22] 패턴 등록 B/C 편집기 좌표 전송 규약: 화면은 «정규화 좌표(0~1·좌상단 원점)»만 보내고 서버가 pt(좌하단 원점)로 환산 — 손댄 항목만 전송, 나머지 자동 추정
+- **분류**: decision
+- **발견자**: developer
+- **내용**: savePattern FormData 에 `layout` JSON 1개 추가(`{version:1, origin:"top-left", unit:"norm", page_size_pt:[w,h](힌트), pieces:[{id,index,region:[x0,y0,x1,y1]}], areas:{back_number|back_name|front_number:{piece_id,piece_index,bbox}}}`). **화면이 pt 를 모르게 한 이유**: 캔버스는 mock(aspect 만 4478.74/5669.29)이라 px→pt 환산을 화면에 두면 해상도·페이지 크기 변경에 깨진다. 서버(`_apply_layout`)가 페이지 틀을 고른다 — ① preset design_file MediaBox(pikepdf) ② 완성본 MediaBox ③ 화면 힌트 page_size_pt ④ preset page_size_pt(경고). y 는 뒤집는다(`pt_y = 위 − ny·H`). **B 조각 영역**=디자인 페이지 기준 → `pieces[].design_region_pt`. **C 영역**=캔버스가 «뒤판 미리보기»라 뒤판 조각 상대(piece_id:"back") → 그 조각의 design_region_pt 안에서 환산해 `back_number_area{center,cap_height}`·`back_name_area{center_x,baseline=박스 아래변,em_pt=박스 높이,pitch=기존 비율 유지 or em×1.4326(연세대 실측)}`. 앞번호는 화면에 도구가 없어 자동 유지. 조각 매칭은 `_find_piece_index`(id 정확일치) 우선·목록 순번 index 폴백(화면 3번째 조각 id 'sleeve' ↔ 서버 'band'). **회귀 0 원칙**: 시드(자동 배치) 영역은 `dataset.touched=0` 이라 전송 안 함 → layout 필드 자체가 없으면 `_build_pieces`·완성본 추출 경로가 한 글자도 안 바뀐 채 돈다(a273ff2 워크트리와 preset diff 0 실측). 틀린 값(범위 밖·JSON 깨짐·없는 piece)은 400 이 아니라 경고 + 그 항목만 자동 추정(등록을 막지 않음). from-drive 는 layout 을 안 넘겨 무영향. 응답 `layout_applied:{pieces,areas}` 로 토스트 "맞춘 위치 N개 저장". **대안 기각**: 화면이 pt 환산(toPt 재사용) — 서버 MediaBox 와 어긋날 때 조용히 틀림 / preset.json 에 새 키 추가 — 엔진이 읽는 키만 쓰기로(불변 제약). **남은 한계**: API 등록은 svg_index 를 id 순서(front=0,back=1)로 가정해 실제 V넥(front=svg1,back=svg0)과 다를 수 있음(기존 동작·범위 밖) · 이름 em_pt=박스 높이 근사(잉크≈0.85em).
+- **참조횟수**: 0
+
 ### [2026-07-09] [Phase B] 등록패턴 파일 영속화: 백엔드가 요청자 admin JWT 릴레이로 Storage에 zip 백업(SERVICE_ROLE 없이)·등록직후 자동백업·startup 자동복원(로컬없는것만)
 - **분류**: decision
 - **발견자**: planner-architect

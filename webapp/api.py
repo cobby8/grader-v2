@@ -40,7 +40,7 @@ from engine.flatten import flatten_transparency
 from engine.verify import scan_transparency
 from engine.reference import _collect_fills, build_area_preset
 # 생성 본체. run_job 은 '호출' 만 한다(시그니처·동작 무수정).
-from engine.job import run_job
+from engine.job import run_job, _find_piece_index  # _find_piece_index: layout 조각 매칭 규칙 재사용(읽기 전용)
 # 패턴 등록(2단계 핵심)에서 호출만 하는 엔진 API 들(전부 무수정).
 from engine.svg_normalize import normalize_svg, check_size_monotonicity
 from engine.number_glyphs import extract_number_glyphs, save_glyphset_json
@@ -1622,6 +1622,209 @@ def _build_pieces(svg_index_count: int, page_w: float, page_h: float,
     return pieces
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# 화면 편집기(등록 B·C 단계)에서 맞춘 위치 → preset pt 환산 (layout 폼 필드, 선택)
+#
+#  규약(decisions.md 2026-09-22): 화면은 «정규화 좌표(0~1, 좌상단 원점)» 만 보낸다.
+#    {version:1, origin:"top-left", unit:"norm", page_size_pt:[w,h](힌트),
+#     pieces:[{id:"front", index:0, region:[x0,y0,x1,y1]}],        ← 디자인 페이지 기준
+#     areas:{back_number:{piece_id:"back", piece_index:1, bbox:[x0,y0,x1,y1]},
+#            back_name:{...}, front_number:{...}}}                   ← 조각(design_region_pt) 기준
+#  서버가 «페이지 틀(MediaBox, 좌하단 원점 pt)» 로 바꾼다. y 는 뒤집는다(pt_y = 위 − ny·H).
+#  비유: 직원은 "왼쪽에서 30%, 위에서 10%" 라고만 말하고, 실제 mm 자는 서버가 댄다.
+#
+#  ★ 손대지 않은 항목은 화면이 아예 안 보낸다 → 그 항목은 기존 자동 추정(균등분할·완성본
+#    추출)이 그대로 남는다. 값이 틀려도 400 으로 막지 않고 경고 + 그 항목만 자동 추정 유지.
+# ══════════════════════════════════════════════════════════════════════════
+_LAYOUT_NAME_PITCH_RATIO = 195.4 / 136.4   # 연세대 완성본 실측 pitch/em_pt(음절 간격 기본 비율)
+_LAYOUT_DEFAULT_FONT = "data/fonts/HY헤드라인M.ttf"   # build_area_preset 기본 폰트와 동일
+_LAYOUT_ESTIMATE_WARN_PREFIX = "🟡 디자인↔조각 영역(design_region_pt)은 페이지 균등분할로 추정"
+
+
+def _pdf_page_frame(path: str) -> Optional[List[float]]:
+    """PDF 호환 파일(.ai/.pdf) 1페이지의 MediaBox [x0,y0,x1,y1] pt. 못 읽으면 None."""
+    try:
+        with pikepdf.open(path) as pdf:
+            mb = [float(v) for v in pdf.pages[0].MediaBox]
+        if len(mb) == 4 and mb[2] > mb[0] and mb[3] > mb[1]:
+            return mb
+    except Exception:
+        pass
+    return None
+
+
+def _layout_page_frame(preset: Dict[str, Any], pattern_dir: str,
+                       reference_path: Optional[str], hint: Any,
+                       warnings: List[str]) -> List[float]:
+    """정규화 좌표를 pt 로 바꿀 '페이지 틀'을 고른다(4단계 폴백).
+
+    1) preset design.design_file(엔진이 기본 합성하는 디자인)의 MediaBox — 가장 정확.
+    2) 완성본(reference) MediaBox — 같은 아트보드라 area 추출값과 같은 틀.
+    3) 화면이 그린 틀(layout.page_size_pt 힌트) — 배포 서버엔 .ai 가 없을 수 있어서.
+    4) preset design.page_size_pt — 패턴 아트보드에서 회수한 값이라 디자인과 다를 수 있음 → 경고.
+    """
+    df = (preset.get("design") or {}).get("design_file") or ""
+    if df:
+        p = df if os.path.isabs(df) else os.path.join(pattern_dir, df)
+        if os.path.exists(p):
+            fr = _pdf_page_frame(p)
+            if fr:
+                return fr
+    if reference_path:
+        fr = _pdf_page_frame(reference_path)
+        if fr:
+            return fr
+    try:
+        if hint and len(hint) == 2 and float(hint[0]) > 0 and float(hint[1]) > 0:
+            return [0.0, 0.0, float(hint[0]), float(hint[1])]
+    except Exception:
+        pass
+    ps = (preset.get("design") or {}).get("page_size_pt") or [4478.74, 5669.29]
+    warnings.append(
+        "🟡 [layout] 디자인 페이지 크기를 파일에서 못 읽어 preset 의 page_size_pt 로 환산했습니다. "
+        "합성 결과의 조각 위치를 미리보기에서 확인해 주세요.")
+    return [0.0, 0.0, float(ps[0]), float(ps[1])]
+
+
+def _norm_rect(v: Any) -> Optional[List[float]]:
+    """정규화 사각형 [x0,y0,x1,y1] 검증(숫자 4개 · 0~1 · x0<x1 · y0<y1). 틀리면 None."""
+    try:
+        r = [float(x) for x in v]
+    except Exception:
+        return None
+    if len(r) != 4 or any((x != x) or x < 0.0 or x > 1.0 for x in r):  # x != x 는 NaN
+        return None
+    if not (r[0] < r[2] and r[1] < r[3]):
+        return None
+    return r
+
+
+def _norm_to_pt(rect: List[float], frame: List[float]) -> List[float]:
+    """정규화(좌상단 원점) → pt(좌하단 원점) [x0, y아래, x1, y위]. y 를 뒤집는다.
+
+    frame 은 [x0,y0,x1,y1] pt 사각형 — 페이지(MediaBox)일 수도, 조각(design_region_pt)일 수도 있다.
+    """
+    fx0, fy0, fx1, fy1 = frame
+    w, h = fx1 - fx0, fy1 - fy0
+    x0 = fx0 + rect[0] * w
+    x1 = fx0 + rect[2] * w
+    y_top = fy1 - rect[1] * h      # 화면 위쪽(작은 ny) = pt 큰 y
+    y_bot = fy1 - rect[3] * h
+    return [round(x0, 2), round(y_bot, 2), round(x1, 2), round(y_top, 2)]
+
+
+def _layout_find_piece(pieces: List[Dict[str, Any]], ref_id: Any, ref_index: Any) -> Optional[int]:
+    """조각 매칭: id 정확일치(_find_piece_index 규칙) 우선, 없으면 pieces 목록 순번(index)."""
+    if ref_id is not None and str(ref_id) != "":
+        i = _find_piece_index(pieces, str(ref_id))
+        if i is not None:
+            return i
+    try:
+        i = int(ref_index)
+        if 0 <= i < len(pieces):
+            return i
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _apply_layout(layout_raw: Optional[str], preset: Dict[str, Any], pattern_dir: str,
+                  reference_path: Optional[str], front_pid: str, back_pid: str,
+                  glyph_source: Optional[str], warnings: List[str]) -> Dict[str, Any]:
+    """layout 폼 필드를 해석해 preset 의 해당 키만 덮어쓴다. 반환 {pieces:N, areas:[...]}.
+
+    어떤 오류도 등록을 막지 않는다 — 경고를 남기고 그 항목만 자동 추정을 유지한다.
+    """
+    applied: Dict[str, Any] = {"pieces": 0, "areas": []}
+    if not layout_raw or not str(layout_raw).strip():
+        return applied
+    try:
+        lay = json.loads(layout_raw)
+    except Exception:
+        warnings.append("🟡 [layout] 화면에서 맞춘 위치를 읽지 못해(JSON 형식 오류) 자동 추정을 유지합니다.")
+        return applied
+    if not isinstance(lay, dict):
+        warnings.append("🟡 [layout] 화면에서 맞춘 위치 형식이 잘못돼 자동 추정을 유지합니다.")
+        return applied
+
+    pieces: List[Dict[str, Any]] = preset.get("pieces") or []
+    frame = _layout_page_frame(preset, pattern_dir, reference_path,
+                               lay.get("page_size_pt"), warnings)
+
+    # ── 조각 영역(디자인 페이지 기준) ──
+    items = lay.get("pieces")
+    for item in (items if isinstance(items, list) else []):
+        if not isinstance(item, dict):
+            continue
+        label = item.get("id") if item.get("id") is not None else item.get("index")
+        idx = _layout_find_piece(pieces, item.get("id"), item.get("index"))
+        if idx is None:
+            warnings.append(
+                f"🟡 [layout] 조각 '{label}' 이(가) 이 패턴의 조각 목록에 없어 그 항목은 자동 추정을 유지합니다.")
+            continue
+        rect = _norm_rect(item.get("region"))
+        if rect is None:
+            warnings.append(
+                f"🟡 [layout] 조각 '{label}' 영역 값이 잘못돼(0~1 범위·x0<x1·y0<y1) 자동 추정을 유지합니다.")
+            continue
+        pieces[idx]["design_region_pt"] = _norm_to_pt(rect, frame)
+        applied["pieces"] += 1
+
+    # ── 번호·이름 영역(piece_id 가 있으면 그 조각의 design_region_pt 기준, 없으면 페이지 기준) ──
+    areas = lay.get("areas")
+    areas = areas if isinstance(areas, dict) else {}
+    for key in ("front_number", "back_number", "back_name"):
+        spec = areas.get(key)
+        if spec is None:
+            continue   # 손대지 않은 항목 = 키 생략 → 자동 추정 유지
+        if not isinstance(spec, dict):
+            warnings.append(f"🟡 [layout] 영역 '{key}' 형식이 잘못돼 자동 추정을 유지합니다.")
+            continue
+        rect = _norm_rect(spec.get("bbox"))
+        if rect is None:
+            warnings.append(
+                f"🟡 [layout] 영역 '{key}' 값이 잘못돼(0~1 범위·x0<x1·y0<y1) 자동 추정을 유지합니다.")
+            continue
+        if spec.get("piece_id") is not None or spec.get("piece_index") is not None:
+            idx = _layout_find_piece(pieces, spec.get("piece_id"), spec.get("piece_index"))
+            ref_frame = pieces[idx].get("design_region_pt") if idx is not None else None
+            if idx is None or not (isinstance(ref_frame, list) and len(ref_frame) == 4):
+                warnings.append(
+                    f"🟡 [layout] 영역 '{key}' 의 기준 조각을 찾지 못해 자동 추정을 유지합니다.")
+                continue
+            pid = pieces[idx]["id"]
+        else:
+            ref_frame = frame
+            pid = front_pid if key == "front_number" else back_pid
+        x0, y_bot, x1, y_top = _norm_to_pt(rect, [float(v) for v in ref_frame])
+
+        pkey = key + "_area"
+        # 완성본에서 추출된 값이 있으면 그 위에 위치·크기만 덮어쓴다(색·폰트는 유지).
+        area: Dict[str, Any] = dict(preset.get(pkey) or {})
+        area["piece_id"] = pid
+        area.setdefault("color_cmyk", [0, 0, 0, 0])     # 완성본 없을 때 기본 = 흰색(기존 패턴과 동일)
+        area.setdefault("font", _LAYOUT_DEFAULT_FONT)
+        if key.endswith("number"):
+            # 번호: 잉크 bbox 를 박스에 꽉 채운다(place_number 는 cap_height·center 로 배치).
+            area["center"] = [round((x0 + x1) / 2, 1), round((y_bot + y_top) / 2, 1)]
+            area["cap_height"] = round(y_top - y_bot, 1)
+            if glyph_source:
+                area["glyph_source"] = glyph_source
+        else:
+            # 이름: 박스 아래변 = baseline, 박스 높이 = em_pt(근사). pitch 는 비율 유지.
+            em = round(y_top - y_bot, 1)
+            old_em = float(area.get("em_pt") or 0)
+            old_pitch = float(area.get("pitch") or 0)
+            area["center_x"] = round((x0 + x1) / 2, 1)
+            area["baseline"] = round(y_bot, 1)
+            area["em_pt"] = em
+            area["pitch"] = (round(old_pitch * em / old_em, 1) if (old_em > 0 and old_pitch > 0)
+                             else round(em * _LAYOUT_NAME_PITCH_RATIO, 1))
+        preset[pkey] = area
+        applied["areas"].append(key)
+    return applied
+
+
 def _extract_bearer_token(request: Optional[Request]) -> Optional[str]:
     """요청 헤더 Authorization 에서 Bearer 토큰만 꺼낸다(없으면 None).
 
@@ -1650,6 +1853,7 @@ async def create_pattern(
     glyphset: Optional[UploadFile] = File(None),
     reference: Optional[UploadFile] = File(None),
     files: List[UploadFile] = File(default=[]),
+    layout: Optional[str] = Form(None),   # (선택) 화면 편집기에서 맞춘 위치 JSON — 없으면 100% 기존 동작
 ) -> Dict[str, Any]:
     """패턴 1개를 등록한다(폴더 + preset.json 생성). 핵심 2단계 엔드포인트.
 
@@ -1663,9 +1867,12 @@ async def create_pattern(
       reference   : (선택) 번호·이름 박힌 완성본 1장(.ai/.pdf) — area 자동추출.
       glyph_artbox: (선택) "x0,y0,x1,y1" 글리프 추출영역(미지정 시 엔진 기본값).
       glyph_order : (선택) 글리프 정렬 대응 문자열(미지정 시 "1234567890").
+      layout      : (선택) 등록 화면 B(조각↔디자인)·C(배번/이름)에서 직원이 맞춘 위치 JSON.
+                    정규화 좌표(0~1, 좌상단 원점) — 규약·환산은 _apply_layout 참고.
+                    보낸 항목만 덮어쓰고 나머지는 자동 추정. from-drive 는 보내지 않는다.
 
     반환: {ok, pattern_id, preset_path, sizes, pieces, glyph_source,
-           disabled_sizes, warnings, area}
+           disabled_sizes, warnings, area, layout_applied:{pieces:N, areas:[...]}}
     """
     warnings: List[str] = []
 
@@ -1853,6 +2060,7 @@ async def create_pattern(
     # ── 3) 완성본(선택): area 자동추출(front/back number + back name) ──────
     area_result: Dict[str, Any] = {"used": False}
     areas: Dict[str, Any] = {}
+    rpath: Optional[str] = None   # 완성본 저장 경로 — layout pt 환산의 페이지 틀 폴백(2순위)에도 쓴다
     if reference and reference.filename:
         try:
             rpath = state.save_upload(reference)
@@ -1932,7 +2140,18 @@ async def create_pattern(
     if na:
         na.setdefault("piece_id", back_pid)   # 뒤 이름 → 뒤판 조각과 매칭
         preset["back_name_area"] = na
-    if not (fa or ba):
+
+    # ── 4-b) 화면에서 맞춘 위치(layout, 선택) — 보낸 항목만 자동 추정 위에 덮어쓴다 ──
+    #   layout 이 없으면(로컬 등록에서 손대지 않음 · from-drive) 이 블록은 아무것도 안 한다.
+    layout_applied: Dict[str, Any] = {"pieces": 0, "areas": []}
+    if layout and layout.strip():
+        layout_applied = _apply_layout(layout, preset, pattern_dir, rpath,
+                                       front_pid, back_pid, glyph_source, warnings)
+        # 조각을 전부 화면 값으로 채웠으면 '균등분할 추정' 경고는 더 이상 사실이 아니다 → 뺀다.
+        if pieces and layout_applied["pieces"] >= len(pieces):
+            warnings[:] = [w for w in warnings if not w.startswith(_LAYOUT_ESTIMATE_WARN_PREFIX)]
+
+    if not (preset.get("front_number_area") or preset.get("back_number_area")):
         warnings.append(
             "🟡 번호 영역(front/back_number_area)이 없습니다. 완성본을 올리거나 "
             "preset.json 에 직접 좌표를 넣어야 번호가 합성됩니다.")
@@ -1972,6 +2191,7 @@ async def create_pattern(
         "area": area_result,
         "disabled_sizes": disabled_sizes,
         "warnings": warnings,
+        "layout_applied": layout_applied,   # 화면에서 맞춘 위치가 몇 개 저장됐는지(토스트 문구용)
     }
 
 
