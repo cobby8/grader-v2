@@ -103,6 +103,8 @@ def public_config() -> Dict[str, Any]:
        · auth_required : 인증이 켜져 있는지(꺼져 있으면 로그인 없이 바로 진입).
        · supabase_url  : Supabase 프로젝트 URL(공개).
        · supabase_publishable_key : Supabase 공개키(프런트 노출용으로 설계된 키).
+       · google_client_id : 회사 구글 계정 로그인 버튼의 클라이언트 ID(공개값 — 구글 버튼이 원래 화면에 싣는 값).
+                            비어 있으면 로그인 화면에 구글 버튼이 나오지 않는다(스위치).
     SUPABASE_SECRET_KEY 같은 '비밀키' 는 절대 내보내지 않는다(응답에 키 이름조차 없음).
     """
     from .auth import auth_required
@@ -110,6 +112,7 @@ def public_config() -> Dict[str, Any]:
         "auth_required": auth_required(),
         "supabase_url": os.environ.get("SUPABASE_URL", ""),
         "supabase_publishable_key": os.environ.get("SUPABASE_PUBLISHABLE_KEY", ""),
+        "google_client_id": os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "").strip(),
     }
 
 

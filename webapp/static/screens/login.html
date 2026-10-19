@@ -22,6 +22,11 @@
   .login-msg.is-error { color:var(--danger, #d33); }
   .login-msg.is-ok { color:var(--text-subtle); }
   .login-btn { width:100%; margin-top:8px; }
+  /* 회사 구글 계정 로그인 — 설정(google_client_id)이 있을 때만 보인다 */
+  .google-area { margin-bottom:18px; }
+  .google-btn { display:flex; justify-content:center; min-height:44px; }
+  .login-or { display:flex; align-items:center; gap:10px; margin-top:18px; font-size:12px; color:var(--text-subtle); }
+  .login-or::before, .login-or::after { content:""; flex:1; height:1px; background:var(--border-subtle); }
 </style>
 </head>
 <body>
@@ -33,6 +38,11 @@
     </div>
 
     <h1 class="page-title" style="text-align:center; margin-bottom:18px;">로그인</h1>
+
+    <div class="google-area hidden" id="googleArea">
+      <div class="google-btn" id="googleBtn"></div>
+      <div class="login-or">또는 비밀번호로</div>
+    </div>
 
     <form id="loginForm" autocomplete="on">
       <div class="login-field">
@@ -110,6 +120,116 @@ async function init() {
     }
   } catch (e) {
     // 세션 확인 실패는 치명적이지 않다 — 그냥 로그인 폼을 보여 준다.
+  }
+
+  // 회사 구글 계정 로그인 — 설정이 있을 때만 버튼을 그린다(없으면 비밀번호 로그인만)
+  if (cfg.google_client_id) setupGoogle(cfg.google_client_id);
+}
+
+/* ===== 회사 구글 계정(@stiz.kr)으로 로그인 =====
+   비유: 사원증(구글 계정)을 찍으면 구글이 «이 사람 맞다»는 확인서(ID 토큰)를 주고,
+   Supabase 가 그 확인서를 검사해 «같은 이메일로 이미 등록된 직원 계정»으로 들여보낸다.
+   · 새 가입은 Supabase 에서 막혀 있다 → 등록 안 된 사람은 구글로도 못 들어온다(계정을 만들지 않는다)
+   · 번호표(nonce): 구글에는 SHA-256 으로 바꾼 값을, Supabase 에는 원래 값을 준다(Supabase 문서 방식)
+     — 다른 화면에서 받은 확인서를 가져다 쓰는 것을 막는다. 한 번 쓰면 새로 만든다. */
+const GOOGLE_DOMAIN = "stiz.kr";
+let googleClientId = "", googleNonce = "";
+
+function loadGis() {
+  return new Promise((resolve, reject) => {
+    if (window.google && window.google.accounts && window.google.accounts.id) return resolve();
+    const s = document.createElement("script");
+    s.src = "https://accounts.google.com/gsi/client";
+    s.async = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error("gis"));
+    document.head.appendChild(s);
+  });
+}
+
+async function newNonce() {
+  const raw = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw));
+  const hashed = Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  return { raw, hashed };
+}
+
+async function prepareGoogle() {
+  const n = await newNonce();
+  googleNonce = n.raw;
+  window.google.accounts.id.initialize({
+    client_id: googleClientId,
+    callback: onGoogleCredential,
+    nonce: n.hashed,
+    hd: GOOGLE_DOMAIN,                     // 회사 계정 고르기 힌트 — 실제로 막는 건 «등록된 계정만» 규칙이다
+    ux_mode: "popup",
+    auto_select: false,
+    cancel_on_tap_outside: true,
+    context: "signin",
+  });
+  const box = document.getElementById("googleBtn");
+  box.innerHTML = "";
+  window.google.accounts.id.renderButton(box, {
+    type: "standard", theme: "outline", size: "large", text: "signin_with",
+    shape: "rectangular", logo_alignment: "left", locale: "ko",
+    width: Math.min(box.clientWidth || 320, 400),
+  });
+}
+
+async function setupGoogle(clientId) {
+  googleClientId = clientId;
+  try {
+    await loadGis();
+    document.getElementById("googleArea").classList.remove("hidden");
+    await prepareGoogle();
+  } catch (e) {
+    // 구글 스크립트를 못 불러오면 비밀번호 로그인만 쓴다 — 오류를 띄우지 않는다
+    document.getElementById("googleArea").classList.add("hidden");
+  }
+}
+
+// 구글 확인서 안의 회사 도메인(hd)을 먼저 본다 — 개인 계정이면 Supabase 에 보내기 전에 알려 준다
+function googleDomainOf(credential) {
+  try {
+    const part = credential.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    return String(JSON.parse(decodeURIComponent(escape(atob(part)))).hd || "").toLowerCase();
+  } catch (e) { return ""; }
+}
+
+function googleErrorText(error) {
+  const m = String((error && error.message) || error || "");
+  if (/signups? not allowed|signup is disabled|user not found/i.test(m)) return "등록된 직원 계정이 아닙니다. 관리자에게 그레이더 계정 등록을 요청해 주세요.";
+  if (/provider is not enabled|unsupported provider|not enabled/i.test(m)) return "구글 로그인 설정이 아직 끝나지 않았습니다(관리자에게 문의).";
+  if (/nonce/i.test(m)) return "로그인 확인 시간이 지났습니다. 구글 버튼을 다시 눌러 주세요.";
+  if (/audience|client.?id/i.test(m)) return "구글 로그인 설정이 맞지 않습니다(관리자에게 문의).";
+  return "구글 로그인에 실패했습니다. 잠시 후 다시 시도해 주세요.";
+}
+
+async function onGoogleCredential(response) {
+  const credential = response && response.credential;
+  if (!credential || !supa) { showMsg("구글 로그인 정보를 받지 못했습니다. 다시 시도해 주세요.", "error"); return; }
+  if (googleDomainOf(credential) !== GOOGLE_DOMAIN) {
+    showMsg("회사 구글 계정(@" + GOOGLE_DOMAIN + ")으로만 로그인할 수 있습니다.", "error");
+    await prepareGoogle();
+    return;
+  }
+  btnEl.disabled = true;
+  showMsg("로그인 중…", "ok");
+  try {
+    const { data, error } = await supa.auth.signInWithIdToken({ provider: "google", token: credential, nonce: googleNonce });
+    const token = data && data.session && data.session.access_token;
+    if (error || !token) {
+      showMsg(googleErrorText(error || "no session"), "error");
+      btnEl.disabled = false;
+      await prepareGoogle();                // 번호표는 한 번만 쓴다 — 다시 누를 수 있게 새로 만든다
+      return;
+    }
+    sessionStorage.setItem(TOKEN_KEY, token);
+    location.replace(NEXT);
+  } catch (err) {
+    showMsg(googleErrorText(err), "error");
+    btnEl.disabled = false;
+    try { await prepareGoogle(); } catch (e) {}
   }
 }
 
