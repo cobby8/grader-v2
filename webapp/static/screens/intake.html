@@ -79,6 +79,24 @@
   .ik-chip:disabled { cursor: not-allowed; color: var(--text-subtle); background: transparent; border-style: dashed; }
   .ik-chip small { font-size: 12px; margin-left: 4px; }
   .ik-hint { font: var(--text-caption); color: var(--text-muted); margin-top: 6px; }
+  /* 사진으로 옷 모양 맞추기 (AI) */
+  .ik-ai { margin: 0 0 6px; padding: 14px; border-radius: var(--radius-lg); background: var(--surface-card); border: 1px solid var(--blue-border); display: grid; gap: 10px; }
+  .ik-ai__head { display: flex; align-items: center; gap: 6px; font: var(--text-h3); color: var(--text-strong); }
+  .ik-ai__head .material-symbols-outlined { color: var(--blue-600); font-size: 20px; }
+  .ik-ai__rule { margin: 0; padding: 8px 10px; border-radius: var(--radius-md); background: var(--amber-bg); color: var(--amber-700); font: var(--text-sm); }
+  .ik-ai__rule b { color: var(--text-strong); }
+  .ik-ai__shots { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .ik-ai__shot { display: grid; gap: 6px; min-width: 0; }
+  .ik-ai__ph { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: var(--radius-md); background: var(--ink-50); display: grid; place-items: center; overflow: hidden; }
+  .ik-ai__ph--empty .dg { width: 100%; height: 100%; }
+  .ik-ai__lbl { font: var(--text-sm-strong); color: var(--text-body); text-align: center; }
+  .ik-ai__btns { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
+  .ik-ai__btns .btn { height: 40px; }
+  .ik-ai__msg { font: var(--text-sm); color: var(--text-body); background: var(--ink-50); border-radius: var(--radius-md); padding: 10px 12px; }
+  .ik-ai__spin { width: 14px; height: 14px; border-color: var(--ink-500); border-top-color: var(--paper); }
+  .ik-aitag { display: inline-block; margin-left: 6px; padding: 2px 5px; border-radius: 4px; font: 700 10px/1.2 var(--font-sans); background: var(--blue-600); color: var(--paper); vertical-align: 1px; }
+  .ik-group.is-check { padding: 10px 12px; margin-left: -12px; margin-right: -12px; border-radius: var(--radius-md); background: var(--amber-bg); border: 1px solid var(--amber-border); }
+  .ik-check-note { font: var(--text-sm-strong); color: var(--amber-700); margin-top: 8px; }
   .ik-garment { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .ik-garment figure { margin: 0; background: var(--surface-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 4px; }
   .ik-garment figcaption { text-align: center; font: var(--text-caption); color: var(--text-muted); padding-bottom: 4px; }
@@ -247,6 +265,7 @@ const STATUS = { draft: "작성 중", submitted: "제출", reviewed: "검토 완
 const MAX_PHOTOS = 3;
 
 let CAT = null, BASE = null, store = null;
+let VISION = false;                                     // 서버에 AI 키가 있으면 «사진으로 맞추기» 카드를 보인다
 let cur = null, D = null, R = null;     // 지금 의뢰 · 그 data · 풀린 칸 목록
 let step = 1, readOnly = false;
 
@@ -297,6 +316,9 @@ function RealStore(supa, user) {
     },
     async refresh() {
       try { const { data, error } = await supa.auth.refreshSession(); return !error && !!(data && data.session); } catch (e) { return false; }
+    },
+    async token() {                                     // 그레이더 서버(/api)에 보낼 로그인 토큰
+      try { const { data } = await supa.auth.getSession(); return (data && data.session && data.session.access_token) || ""; } catch (e) { return ""; }
     },
     async upload(path, blob) {
       const { error } = await B().upload(path, blob, { contentType: "image/jpeg", upsert: false });
@@ -353,6 +375,7 @@ function PracticeStore() {
     mode: "practice",
     userId: "practice",
     async refresh() { return true; },
+    async token() { return ""; },
     async list() {
       return load().sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
     },
@@ -439,6 +462,7 @@ async function init() {
   let cfg = null;
   try { const r = await fetch("/api/public-config"); if (r.ok) cfg = await r.json(); } catch (e) {}
   if (!cfg) { $("#main").innerHTML = '<p class="ik-empty">서버에 연결하지 못했어요. 새로고침해 주세요.</p>'; return; }
+  VISION = !!cfg.intake_vision;
   if (cfg.supabase_url && cfg.supabase_publishable_key && window.supabase) {
     const supa = window.supabase.createClient(cfg.supabase_url, cfg.supabase_publishable_key);
     try {
@@ -568,6 +592,10 @@ function questionDone(q) {
 }
 function missing() {
   const out = [];
+  for (const gk of Object.keys(D.aiCheck || {})) {        // AI 가 «확인 필요»로 남긴 묶음
+    const g = gk === "base" ? { name: "기본 형태" } : BASE.groups.find((x) => x.key === gk);
+    if (g) out.push({ step: 1, kind: "check", label: "옷 고르기 · " + g.name + " 확인" });
+  }
   if (!cur.product_name.trim()) out.push({ step: 2, label: "제품 이름" });
   if (!cur.size_label) out.push({ step: 2, label: "실물 사이즈" });
   R.shots.forEach((s, i) => {
@@ -591,8 +619,9 @@ function counts() {
 
 function renderSteps() {
   const c = counts();
-  const extra = ["", "", c.shots + "/" + R.shots.length, c.measures + "/" + R.measures.length, c.questions + "/" + R.questions.length];
-  const done = [true, !!(cur.product_name.trim() && cur.size_label), c.shots === R.shots.length, c.measures === R.measures.length, c.questions === R.questions.length];
+  const nCheck = Object.keys(D.aiCheck || {}).length;
+  const extra = [nCheck ? "확인 " + nCheck : "", "", c.shots + "/" + R.shots.length, c.measures + "/" + R.measures.length, c.questions + "/" + R.questions.length];
+  const done = [!nCheck, !!(cur.product_name.trim() && cur.size_label), c.shots === R.shots.length, c.measures === R.measures.length, c.questions === R.questions.length];
   $("#steps").innerHTML = STEPS.map((name, i) =>
     '<button class="ik-step' + (done[i] ? " is-done" : "") + '" type="button" data-step="' + (i + 1) + '"' + (step === i + 1 ? ' aria-current="step"' : "") + ">" +
       (i + 1) + " " + name + (extra[i] ? " <em>" + extra[i] + "</em>" : "") + "</button>").join("");
@@ -691,23 +720,54 @@ function renderStep() {
   else if (step === 4) main.innerHTML = stepList("measure");
   else main.innerHTML = stepFinish();
   if (readOnly) main.querySelectorAll("input, textarea, select, button[data-edit]").forEach((el) => { el.disabled = true; });
-  if (step === 3) loadThumbs();
+  if (step === 3 || step === 1) loadThumbs();
+}
+
+// «사진으로 옷 모양 맞추기» 카드 — 앞·뒤 전체 사진은 사진 1·2번 칸에 그대로 들어간다
+function aiCard() {
+  if (!VISION || readOnly) return "";
+  const shot = (key, label, view) => {
+    const p = (D.photos[key] || [])[0], busy = uploading[key] || 0;
+    const ph = busy ? '<div class="ik-ai__ph"><div class="spinner"></div></div>'
+      : p ? '<img class="ik-ai__ph" alt="' + label + '" data-thumb="' + esc(p.path) + '">'
+      : '<div class="ik-ai__ph ik-ai__ph--empty">' + K.render(D.sel, { view, frame: ["whole"] }, { label }) + "</div>";
+    return '<div class="ik-ai__shot">' + ph + '<div class="ik-ai__lbl">' + label + (p ? " ✓" : "") + "</div>" +
+      '<div class="ik-ai__btns"><button class="btn btn--secondary btn--sm" type="button" data-edit data-aishot="' + key + '" data-src="cam"><span class="material-symbols-outlined">photo_camera</span>찍기</button>' +
+      '<button class="btn btn--ghost btn--sm" type="button" data-edit data-aishot="' + key + '" data-src="lib">앨범</button></div></div>';
+  };
+  const hasFront = (D.photos.front_out || []).length > 0;
+  return '<section class="ik-ai"><div class="ik-ai__head"><span class="material-symbols-outlined">auto_awesome</span>사진으로 옷 모양 맞추기</div>' +
+    '<p class="ik-ai__rule"><b>소매 끝·밑단까지 전부 화면 안에, 소매는 펴서</b> 위에서 찍어요.</p>' +
+    '<div class="ik-ai__shots">' + shot("front_out", "앞 전체", "front") + shot("back_out", "뒤 전체", "back") + "</div>" +
+    '<button class="btn btn--primary btn--block" type="button" data-edit id="aiRun"' + (!hasFront || aiBusy ? " disabled" : "") + ">" +
+      (aiBusy ? '<span class="spinner ik-ai__spin"></span>옷 모양 보는 중…' : D.ai ? "다시 보기" : "옷 모양 보기") + "</button>" +
+    (aiMsg ? '<div class="ik-ai__msg">' + esc(aiMsg).replace(/\n/g, "<br>") + "</div>" : "") + "</section>";
 }
 
 function stepPick() {
   const sel = D.sel;
-  let h = '<h2 class="ik-h2">옷 고르기</h2>';
+  const ai = (D.ai && D.ai.result) || null, checks = D.aiCheck || {};
+  // AI 가 고른 칩 표시 — 확신 낮음이면 «AI?» (고르지 않고 확인만 부탁한 것)
+  const aiTag = (g, o) => {
+    if (!ai) return "";
+    const hit = g.pick === "many" ? (ai.extras || []).find((e) => e.key === o.key) : ((ai[g.key] || {}).value === o.key ? ai[g.key] : null);
+    return hit ? '<span class="ik-aitag">' + (CONF_OK(hit.confidence) ? "AI" : "AI?") + "</span>" : "";
+  };
+  let h = '<h2 class="ik-h2">옷 고르기</h2>' + aiCard();
   h += '<div class="ik-garment"><figure>' + K.render(sel, { view: "front" }, { label: "앞" }) + "<figcaption>앞</figcaption></figure>" +
     "<figure>" + K.render(sel, { view: "back" }, { label: "뒤" }) + "<figcaption>뒤</figcaption></figure></div>";
-  h += '<div class="ik-group"><div class="ik-group__name">기본 형태</div><div class="ik-chips">' + CAT.bases.map((b) =>
+  const checkNote = (k) => (k in checks ? '<div class="ik-check-note">확인 필요' + (checks[k] ? " · " + esc(checks[k]) : "") + "</div>" : "");
+  h += '<div class="ik-group' + ("base" in checks ? " is-check" : "") + '"><div class="ik-group__name">기본 형태</div><div class="ik-chips">' + CAT.bases.map((b) =>
     '<button class="ik-chip" type="button"' + (b.ready ? ' data-edit data-base="' + b.key + '" aria-pressed="' + (b.key === BASE.key) + '"' : " disabled") + ">" +
-      esc(b.name) + (b.ready ? "" : "<small>준비 중</small>") + "</button>").join("") + '</div><div class="ik-hint">' + esc(BASE.desc || "") + "</div></div>";
+      esc(b.name) + (b.ready ? "" : "<small>준비 중</small>") + (ai && (ai.base || {}).value === b.key ? '<span class="ik-aitag">AI</span>' : "") + "</button>").join("") +
+    '</div><div class="ik-hint">' + esc(BASE.desc || "") + "</div>" + checkNote("base") + "</div>";
   for (const g of BASE.groups) {
     const on = (o) => (g.pick === "many" ? (sel[g.key] || []).includes(o.key) : sel[g.key] === o.key);
     const hints = g.options.filter((o) => o.hint && on(o)).map((o) => o.name + ": " + o.hint).join(" · ");
-    h += '<div class="ik-group"><div class="ik-group__name">' + esc(g.name) + (g.pick === "many" ? " (여러 개)" : "") + '</div><div class="ik-chips">' +
-      g.options.map((o) => '<button class="ik-chip" type="button" data-edit data-g="' + g.key + '" data-o="' + o.key + '" aria-pressed="' + on(o) + '">' + esc(o.name) + "</button>").join("") +
-      "</div>" + (hints ? '<div class="ik-hint">' + esc(hints) + "</div>" : "") + "</div>";
+    h += '<div class="ik-group' + (g.key in checks ? " is-check" : "") + '"><div class="ik-group__name">' + esc(g.name) + (g.pick === "many" ? " (여러 개)" : "") + '</div><div class="ik-chips">' +
+      g.options.map((o) => '<button class="ik-chip" type="button" data-edit data-g="' + g.key + '" data-o="' + o.key + '" aria-pressed="' + on(o) + '">' + esc(o.name) +
+        aiTag(g, o) + "</button>").join("") +
+      "</div>" + (hints ? '<div class="ik-hint">' + esc(hints) + "</div>" : "") + checkNote(g.key) + "</div>";
   }
   h += '<div class="ik-count"><span><b>' + R.shots.length + "</b>사진</span><span><b>" + R.measures.length + "</b>치수</span><span><b>" + R.questions.length + "</b>구조 질문</span></div>";
   return h;
@@ -816,9 +876,19 @@ $("#main").addEventListener("click", async (e) => {
     return;
   }
   if (readOnly) return;
-  if (b.dataset.base) return;                          // 지금은 소매 상의만 열려 있다
+  if (b.dataset.base) {                                // 지금은 소매 상의만 열려 있다 — 누르면 «기본 형태 확인» 만 끝난다
+    if (confirmGroup("base")) { change(); renderSteps(); renderStep(); }
+    return;
+  }
+  if (b.dataset.aishot) {                              // 사진으로 맞추기 카드의 앞/뒤 전체 촬영
+    photoTarget = b.dataset.aishot;
+    $(b.dataset.src === "lib" ? "#fileLib" : "#fileCam").click();
+    return;
+  }
+  if (b.id === "aiRun") { runAi(); return; }
   if (b.dataset.g) {
     const g = BASE.groups.find((x) => x.key === b.dataset.g);
+    confirmGroup(g.key);                               // 이 묶음의 «확인 필요»는 직원이 칩을 누르면 끝난다
     if (g.pick === "many") {
       const list = D.sel[g.key] || [];
       D.sel[g.key] = list.includes(b.dataset.o) ? list.filter((x) => x !== b.dataset.o) : list.concat(b.dataset.o);
@@ -1096,14 +1166,21 @@ async function shrink(file) {
     if (objUrl) URL.revokeObjectURL(objUrl);
   }
 }
+// 사진을 넣을 칸 — 시트에서 누르면 그 칸, 1단계 «사진으로 맞추기» 카드에서 누르면 앞/뒤 전체 칸
+let photoTarget = null;
+function refreshPhotoViews() {
+  if (sheet) renderSheet();
+  if (step === 1 && !sheet) renderStep();
+}
 async function addPhotos(files) {
-  if (!sheet || sheet.kind !== "shot" || readOnly || !files.length) return;
-  const it = R.shots[sheet.i], key = it.key;
+  const key = photoTarget || (sheet && sheet.kind === "shot" && R.shots[sheet.i] ? R.shots[sheet.i].key : null);
+  photoTarget = null;
+  if (!key || readOnly || !files.length) return;
   const room = MAX_PHOTOS - (D.photos[key] || []).length - (uploading[key] || 0);
   const pick = Array.from(files).slice(0, Math.max(0, room));
   if (files.length > pick.length) toast("한 칸에 " + MAX_PHOTOS + "장까지예요");
   uploading[key] = (uploading[key] || 0) + pick.length;
-  renderSheet();
+  refreshPhotoViews();
   for (const f of pick) {
     try {
       const { blob, w, h } = await shrink(f);
@@ -1117,9 +1194,88 @@ async function addPhotos(files) {
       toast("사진을 올리지 못했어요 — " + errText(e));
     } finally {
       uploading[key]--;
-      if (sheet && R.shots[sheet.i] && R.shots[sheet.i].key === key) renderSheet();
+      refreshPhotoViews();
     }
   }
+}
+
+/* ---------- 사진으로 옷 모양 맞추기 (AI) ----------
+   앞·뒤 전체 사진을 서버(/api/intake/classify)에 보내 1단계 선택지를 미리 골라 받는다.
+   · 확신 높음·보통 → 그 칩을 고른다(«AI» 표시) · 낮음·모름 → «확인 필요»(직원이 칩을 눌러 확인해야 사라진다)
+   · AI 가 고른 것은 D.ai 에 그대로 남긴다 — 나중에 «AI 제안 vs 최종 선택»으로 현장 정확도를 잰다 */
+let aiBusy = false, aiMsg = "";
+async function photoBlob(key) {
+  const p = (D.photos[key] || [])[0];
+  if (!p) return null;
+  const res = await fetch(await store.url(p.path));
+  if (!res.ok) throw new Error("사진을 다시 읽지 못했어요");
+  return res.blob();
+}
+async function runAi() {
+  if (aiBusy || readOnly) return;
+  aiBusy = true; aiMsg = ""; renderStep();
+  try {
+    const fd = new FormData();
+    const front = await photoBlob("front_out"), back = await photoBlob("back_out");
+    if (!front) throw new Error("앞 전체 사진을 먼저 찍어 주세요");
+    fd.append("front", front, "front.jpg");
+    if (back) fd.append("back", back, "back.jpg");
+    const token = await store.token();
+    const res = await fetch("/api/intake/classify", { method: "POST", body: fd, headers: token ? { Authorization: "Bearer " + token } : {} });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || (res.status === 401 ? "로그인이 끝났어요. 다시 로그인해 주세요." : "옷 모양을 보지 못했어요"));
+    applyAi(body);
+  } catch (e) {
+    aiMsg = "⚠ " + errText(e);
+  } finally {
+    aiBusy = false;
+    renderSteps(); renderStep();
+  }
+}
+const CONF_OK = (c) => c === "high" || c === "medium";
+const AI_PREFIX = { neck: "목 ", sleeve: "소매 ", cuff: "소매 끝 ", hem: "밑단 " };   // 요약 문장에서 «접어박기» 가 어디 것인지 알게
+function applyAi(body) {
+  const r = body.result || {};
+  const check = {};
+  D.ai = { at: new Date().toISOString(), model: body.model || "", catalog_version: body.catalog_version || "", result: r };
+  const baseV = (r.base || {}).value;
+  if (baseV && baseV !== BASE.key) {
+    const b = CAT.bases.find((x) => x.key === baseV);
+    aiMsg = "AI 는 이 옷을 «" + (b ? b.name : "판단 못 함") + "»(으)로 봤어요" + (b && !b.ready ? " — 아직 준비 중인 형태예요." : ". 맞는지 확인해 주세요.");
+    D.aiCheck = { base: (r.base || {}).reason || "" };
+    change(); return;
+  }
+  const names = [];
+  for (const g of BASE.groups) {
+    if (g.pick === "many") continue;
+    const a = r[g.key] || {};
+    const valid = g.options.some((o) => o.key === a.value);
+    if (valid) D.sel[g.key] = a.value;
+    if (!valid || !CONF_OK(a.confidence)) {
+      check[g.key] = a.value === "other" ? "목록에 없는 모양 — " + (a.note || a.reason || "") : a.value === "unknown" ? "AI 가 판단 못 함 — " + (a.reason || "") : "AI 확신 낮음 — " + (a.reason || "");
+    }
+    if (valid) names.push((AI_PREFIX[g.key] || "") + g.options.find((o) => o.key === a.value).name);
+  }
+  const ex = BASE.groups.find((g) => g.pick === "many");
+  const sure = [], maybe = [];
+  for (const e of r.extras || []) {
+    const o = ex.options.find((x) => x.key === e.key);
+    if (o && CONF_OK(e.confidence)) sure.push(o.key);
+    else maybe.push(o ? o.name + "?" : "목록에 없는 것: " + (e.note || e.reason || ""));
+  }
+  D.sel[ex.key] = Array.from(new Set((D.sel[ex.key] || []).concat(sure)));
+  if (maybe.length) check[ex.key] = "확인해 주세요 — " + maybe.join(" · ");
+  sure.forEach((k) => names.push(ex.options.find((o) => o.key === k).name));
+  D.aiCheck = check;
+  resolveNow();
+  change({ parts: tokensOf(D.sel) });
+  aiMsg = "AI 는 " + names.join(" · ") + "(으)로 봤어요." + (Object.keys(check).length ? " 노란 칸은 확인해 주세요." : "") +
+    (r.photo_notes ? "\n사진 메모: " + r.photo_notes : "");
+}
+// 노란 «확인 필요» 를 직원이 확인했다 — 그 묶음의 칩을 누르면 사라진다
+function confirmGroup(gkey) {
+  if (D.aiCheck && gkey in D.aiCheck) { delete D.aiCheck[gkey]; return true; }
+  return false;
 }
 for (const id of ["fileCam", "fileLib"]) {
   $("#" + id).addEventListener("change", (e) => { const fs = Array.from(e.target.files || []); e.target.value = ""; addPhotos(fs); });

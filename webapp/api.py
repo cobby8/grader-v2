@@ -105,14 +105,17 @@ def public_config() -> Dict[str, Any]:
        · supabase_publishable_key : Supabase 공개키(프런트 노출용으로 설계된 키).
        · google_client_id : 회사 구글 계정 로그인 버튼의 클라이언트 ID(공개값 — 구글 버튼이 원래 화면에 싣는 값).
                             비어 있으면 로그인 화면에 구글 버튼이 나오지 않는다(스위치).
+       · intake_vision : 패턴 의뢰 «사진으로 옷 모양 맞추기» 가 켜져 있는지(참/거짓만 — 키 값은 아님).
     SUPABASE_SECRET_KEY 같은 '비밀키' 는 절대 내보내지 않는다(응답에 키 이름조차 없음).
     """
     from .auth import auth_required
+    from . import garment_vision
     return {
         "auth_required": auth_required(),
         "supabase_url": os.environ.get("SUPABASE_URL", ""),
         "supabase_publishable_key": os.environ.get("SUPABASE_PUBLISHABLE_KEY", ""),
         "google_client_id": os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "").strip(),
+        "intake_vision": garment_vision.enabled(),
     }
 
 
@@ -598,6 +601,35 @@ def list_jobs() -> List[Dict[str, Any]]:
             return 0.0
     rows.sort(key=_mtime, reverse=True)
     return rows
+
+
+# ── 패턴 의뢰: 사진으로 옷 모양 판단 ──────────────────────────────────────
+@router.post("/intake/classify")
+async def intake_classify(front: Optional[UploadFile] = File(None), back: Optional[UploadFile] = File(None)):
+    """앞·뒤 전체 사진(1~2장)을 AI 에 보여 패턴 의뢰 1단계 선택지를 미리 골라 받는다.
+
+    로그인한 직원만(라우터 전역 require_auth) 부를 수 있다 — AI 비용이 새지 않게.
+    반환: {model, catalog_version, result:{base, neck, sleeve, length, cuff, hem, extras[], photo_notes}}
+    실패: {error: 한국어 안내} + 상태 코드
+    """
+    from . import garment_vision as gv
+    if not gv.enabled():
+        return JSONResponse(status_code=503, content={"error": "사진 판단이 꺼져 있습니다(관리자에게 문의)."})
+    images = []
+    for f, label in ((front, "앞 전체 · 겉"), (back, "뒤 전체 · 겉")):
+        if f is None:
+            continue
+        data = await f.read()
+        media_type = (f.content_type or "").lower()
+        if media_type not in gv.ALLOWED_TYPES or not data or len(data) > gv.MAX_IMAGE_BYTES:
+            return JSONResponse(status_code=400, content={"error": "사진은 JPG·PNG·WEBP 로, 한 장 4MB 까지 보낼 수 있습니다."})
+        images.append((data, media_type, label))
+    if not images:
+        return JSONResponse(status_code=400, content={"error": "앞 전체 사진이 필요합니다."})
+    try:
+        return await gv.classify(images)
+    except gv.VisionError as e:
+        return JSONResponse(status_code=e.status, content={"error": e.message})
 
 
 # ── 주문서 파싱 엔드포인트 ────────────────────────────────────────────────
