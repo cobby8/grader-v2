@@ -1,0 +1,1131 @@
+<!-- @dsCard group="grader · 패턴 의뢰" viewport="390x844" name="패턴 의뢰 작성 (폰)" subtitle="실물 옷 사진·치수·구조를 현장에서 모아 올린다 — 옷 고르기 → 기본 정보 → 사진 → 치수 → 구조·제출" -->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>STIZ grader · 패턴 의뢰</title>
+<link rel="icon" href="../assets/logos/stiz-favicon-32.png" />
+<link rel="stylesheet" href="../styles.css" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-25..0" />
+<link rel="stylesheet" href="app.css" />
+<style>
+  /* ===== 패턴 의뢰 — 폰 우선 화면 =====
+     현장 직원이 한 손으로 쓴다: 큰 누름 칸, 위 막대(제목·저장 상태), 단계 띠, 아래 이전/다음.
+     색은 그레이더 디자인 토큰(var(--*))만 쓴다. app.css 의 .row 등과 겹치지 않게 ik- 를 붙인다. */
+  html, body { background: var(--surface-canvas); }
+  body.ik-lock { overflow: hidden; }
+  .ik-wrap { max-width: 640px; margin: 0 auto; }
+
+  .ik-bar { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 6px;
+    min-height: 56px; padding: env(safe-area-inset-top, 0px) max(12px, env(safe-area-inset-right, 0px)) 0 max(6px, env(safe-area-inset-left, 0px));
+    background: var(--surface-card); border-bottom: 1px solid var(--border-subtle); }
+  .ik-bar__back { width: 44px; height: 44px; border: 0; background: none; border-radius: var(--radius-md); cursor: pointer; color: var(--text-strong); display: grid; place-items: center; }
+  .ik-bar__back:hover { background: var(--surface-hover); }
+  .ik-bar__title { flex: 1; min-width: 0; }
+  .ik-bar__title b { display: block; font: var(--text-h3); color: var(--text-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ik-bar__title small { display: block; font: var(--text-caption); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ik-save { flex: none; font: var(--text-caption); color: var(--text-muted); display: flex; align-items: center; gap: 4px; border: 0; background: none; padding: 6px; border-radius: var(--radius-sm); }
+  .ik-save .material-symbols-outlined { font-size: 16px; }
+  .ik-save.is-error { color: var(--red-700); cursor: pointer; font-weight: 600; }
+  .ik-practice { background: var(--amber-bg); color: var(--amber-700); font: var(--text-sm-strong); text-align: center; padding: 6px 12px; border-bottom: 1px solid var(--amber-border); }
+  .ik-ro { background: var(--blue-bg); color: var(--blue-700); font: var(--text-sm-strong); text-align: center; padding: 8px 12px; }
+
+  .ik-main { padding: 16px max(16px, env(safe-area-inset-right, 0px)) 120px max(16px, env(safe-area-inset-left, 0px)); }
+  .ik-h2 { font: var(--text-h2); color: var(--text-strong); margin: 0 0 12px; }
+  .ik-h3 { font: var(--text-h3); color: var(--text-strong); margin: 22px 0 10px; }
+  .ik-muted { color: var(--text-muted); font: var(--text-sm); }
+
+  /* 목록 */
+  .ik-new { width: 100%; height: 56px; font-size: 17px; }
+  .ik-cards { display: grid; gap: 10px; margin-top: 18px; }
+  .ik-card { display: grid; gap: 4px; width: 100%; text-align: left; padding: 14px 16px; border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg); background: var(--surface-card); cursor: pointer; font: var(--text-body); color: var(--text-body); }
+  .ik-card:hover { border-color: var(--border-strong); }
+  .ik-card__top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .ik-card__code { font: var(--text-sm-strong); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  .ik-card__name { font: var(--text-body-strong); color: var(--text-strong); }
+  .ik-card__meta { font: var(--text-caption); color: var(--text-subtle); font-variant-numeric: tabular-nums; }
+  .ik-status { font: 600 12px/1 var(--font-sans); padding: 5px 8px; border-radius: var(--radius-pill); white-space: nowrap; }
+  .ik-status--draft { background: var(--ink-100); color: var(--ink-700); }
+  .ik-status--submitted { background: var(--blue-bg); color: var(--blue-700); }
+  .ik-status--reviewed { background: var(--green-bg); color: var(--green-700); }
+
+  /* 단계 띠 */
+  .ik-steps { position: sticky; top: calc(56px + env(safe-area-inset-top, 0px)); z-index: 20; display: flex; gap: 6px; overflow-x: auto;
+    padding: 10px max(16px, env(safe-area-inset-right, 0px)) 10px max(16px, env(safe-area-inset-left, 0px));
+    background: var(--surface-canvas); border-bottom: 1px solid var(--border-subtle); scrollbar-width: none; }
+  .ik-steps::-webkit-scrollbar { display: none; }
+  .ik-step { flex: none; display: flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px; border-radius: var(--radius-pill);
+    border: 1px solid var(--border-default); background: var(--surface-card); font: var(--text-sm-strong); color: var(--text-body); cursor: pointer; white-space: nowrap; }
+  .ik-step em { font-style: normal; font-weight: 500; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  .ik-step[aria-current="step"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  .ik-step[aria-current="step"] em { color: var(--ink-300); }
+  .ik-step.is-done:not([aria-current="step"]) { border-color: var(--green-border); }
+
+  /* 아래 이전/다음 */
+  .ik-foot { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; background: var(--surface-card); border-top: 1px solid var(--border-subtle);
+    padding: 10px max(16px, env(safe-area-inset-right, 0px)) calc(10px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
+  .ik-foot__in { max-width: 608px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1.6fr; gap: 10px; }
+  .ik-foot .btn { height: 50px; font-size: 16px; }
+
+  /* 고르기 칩 */
+  .ik-group { margin-top: 18px; }
+  .ik-group__name { font: var(--text-sm-strong); color: var(--text-muted); margin-bottom: 8px; }
+  .ik-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .ik-chip { min-height: 42px; padding: 0 14px; border-radius: var(--radius-pill); border: 1px solid var(--border-default); background: var(--surface-card);
+    font: 500 15px/1.2 var(--font-sans); color: var(--text-body); cursor: pointer; }
+  .ik-chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  .ik-chip:disabled { cursor: not-allowed; color: var(--text-subtle); background: transparent; border-style: dashed; }
+  .ik-chip small { font-size: 12px; margin-left: 4px; }
+  .ik-hint { font: var(--text-caption); color: var(--text-muted); margin-top: 6px; }
+  .ik-garment { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .ik-garment figure { margin: 0; background: var(--surface-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 4px; }
+  .ik-garment figcaption { text-align: center; font: var(--text-caption); color: var(--text-muted); padding-bottom: 4px; }
+  .ik-count { display: flex; gap: 16px; margin-top: 18px; padding: 12px 14px; border-radius: var(--radius-md); background: var(--surface-card); border: 1px solid var(--border-subtle); font: var(--text-sm); color: var(--text-muted); }
+  .ik-count b { font: 700 18px/1 var(--font-sans); color: var(--text-strong); margin-right: 3px; font-variant-numeric: tabular-nums; }
+
+  /* 입력 — 폰에서 확대되지 않게 16px */
+  .ik-field { display: grid; gap: 6px; margin-bottom: 16px; }
+  .ik-field label { font: var(--text-sm-strong); color: var(--text-body); }
+  .ik-main .input, .ik-sheet .input { font-size: 16px; height: 46px; }
+  .ik-field textarea.input { height: auto; min-height: 92px; padding: 10px 12px; line-height: 1.5; resize: vertical; }
+  .ik-req { color: var(--red-600); }
+  .ik-danger { margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--border-subtle); }
+  .ik-linkbtn { border: 0; background: none; color: var(--red-700); font: var(--text-sm-strong); padding: 8px 0; cursor: pointer; }
+
+  /* 규칙 상자 */
+  .ik-rules { margin: 0 0 14px; padding: 10px 14px 10px 30px; background: var(--surface-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); font: var(--text-sm); color: var(--text-body); }
+  .ik-rules li + li { margin-top: 2px; }
+
+  /* 칸 목록 */
+  .ik-items { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .ik-item { width: 100%; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 64px;
+    padding: 10px 12px; text-align: left; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--surface-card); cursor: pointer; font: var(--text-body); color: var(--text-body); }
+  .ik-item:hover { border-color: var(--border-strong); }
+  .ik-item__num { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font: 700 13px/1 var(--font-sans); background: var(--ink-100); color: var(--ink-700); font-variant-numeric: tabular-nums; }
+  .ik-item.is-done .ik-item__num { background: var(--green-600); color: var(--paper); }
+  .ik-item.is-skip .ik-item__num { background: var(--amber-500); color: var(--paper); }
+  .ik-item__main { min-width: 0; display: grid; gap: 2px; }
+  .ik-item__main b { font: var(--text-body-strong); color: var(--text-strong); }
+  .ik-item__main small { font: var(--text-caption); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ik-item__state { font: var(--text-sm-strong); color: var(--text-muted); text-align: right; display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+  .ik-item__state img { width: 44px; height: 44px; object-fit: cover; border-radius: var(--radius-sm); background: var(--ink-100); }
+  .ik-item.is-done .ik-item__state { color: var(--green-700); }
+  .ik-item.is-skip .ik-item__state { color: var(--amber-700); }
+
+  /* 구조 질문 · 조각 */
+  .ik-q { padding: 14px; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--surface-card); display: grid; gap: 10px; }
+  .ik-q + .ik-q { margin-top: 10px; }
+  .ik-q__title { font: var(--text-body-strong); color: var(--text-strong); display: flex; gap: 8px; }
+  .ik-q__title span { color: var(--text-subtle); font-variant-numeric: tabular-nums; }
+  .ik-q.is-missing { border-color: var(--red-border); }
+  .ik-extra { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; padding: 14px; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--surface-card); margin-bottom: 10px; }
+  .ik-extra .ik-field { margin: 0; }
+  .ik-extra .ik-full { grid-column: 1 / -1; }
+
+  /* 제출 */
+  .ik-submit { margin-top: 26px; padding: 16px; border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); background: var(--surface-card); display: grid; gap: 12px; }
+  .ik-missing { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+  .ik-missing button { width: 100%; text-align: left; border: 1px solid var(--red-border); background: var(--red-bg); color: var(--red-700); border-radius: var(--radius-md); padding: 10px 12px; font: var(--text-sm-strong); cursor: pointer; }
+  .ik-ok { color: var(--green-700); font: var(--text-body-strong); }
+
+  /* 가이드 시트 */
+  .ik-sheet { position: fixed; inset: 0; z-index: 60; display: flex; align-items: flex-end; justify-content: center; background: rgba(14, 17, 20, .45); }
+  .ik-sheet__panel { width: 100%; max-width: 640px; max-height: 100%; display: flex; flex-direction: column; background: var(--surface-canvas);
+    border-radius: 16px 16px 0 0; box-shadow: var(--shadow-overlay); padding-top: env(safe-area-inset-top, 0px); }
+  .ik-sheet__head { display: flex; align-items: center; gap: 8px; padding: 12px 8px 10px 16px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-card); border-radius: 16px 16px 0 0; }
+  .ik-sheet__head h2 { flex: 1; min-width: 0; margin: 0; font: var(--text-h3); color: var(--text-strong); }
+  .ik-sheet__head .ik-num { font: var(--text-sm-strong); color: var(--text-subtle); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .ik-sheet__body { overflow-y: auto; padding: 14px 16px 20px; display: grid; gap: 14px; overscroll-behavior: contain; }
+  .ik-sheet__foot { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--border-subtle); background: var(--surface-card); }
+  .ik-sheet__foot .btn { height: 48px; }
+  .ik-fig { display: grid; gap: 8px; }
+  .ik-fig.is-two { grid-template-columns: 1fr 1fr; }
+  .ik-fig .dg { background: var(--surface-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); max-height: 46vh; }
+  .ik-mode { display: inline-block; font: 600 12px/1 var(--font-sans); padding: 5px 8px; border-radius: var(--radius-sm); background: var(--ink-100); color: var(--ink-700); }
+  .ik-guide { margin: 0; display: grid; grid-template-columns: 4.6em minmax(0, 1fr); gap: 6px 10px; font: var(--text-body); }
+  .ik-guide dt { color: var(--text-subtle); font: var(--text-sm-strong); padding-top: 2px; }
+  .ik-guide dd { margin: 0; color: var(--text-body); }
+  .ik-guide dd.is-warn { color: var(--red-700); }
+  .ik-ex { display: flex; gap: 8px; overflow-x: auto; }
+  .ik-ex figure { margin: 0; flex: none; width: 140px; position: relative; }
+  .ik-ex img { width: 140px; height: 140px; object-fit: cover; border-radius: var(--radius-md); display: block; }
+  .ik-ex svg { position: absolute; left: 0; top: 0; width: 140px; height: 140px; }
+  .ik-ex line { stroke: var(--stiz-red); stroke-width: 3; vector-effect: non-scaling-stroke; }
+  .ik-ex figcaption { font: var(--text-caption); color: var(--text-muted); margin-top: 4px; }
+
+  .ik-photos { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .ik-ph { position: relative; aspect-ratio: 1; border-radius: var(--radius-md); overflow: hidden; background: var(--ink-100); margin: 0; }
+  .ik-ph img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .ik-ph__del { position: absolute; top: 4px; right: 4px; min-width: 32px; height: 32px; padding: 0 8px; border-radius: var(--radius-pill); border: 0;
+    background: rgba(14, 17, 20, .62); color: var(--paper); font: var(--text-sm-strong); cursor: pointer; display: grid; place-items: center; }
+  .ik-ph__del.is-armed { background: var(--red-600); }
+  .ik-ph--busy { display: grid; place-items: center; gap: 6px; align-content: center; font: var(--text-caption); color: var(--text-muted); }
+  .ik-addrow { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .ik-addrow .btn { height: 50px; font-size: 16px; }
+  .ik-skip { display: grid; gap: 8px; padding: 12px; border-radius: var(--radius-md); background: var(--surface-card); border: 1px solid var(--border-subtle); }
+  .ik-check { display: flex; align-items: center; gap: 8px; font: var(--text-body-strong); color: var(--text-body); }
+  .ik-check input { width: 20px; height: 20px; }
+
+  .ik-vals { display: grid; gap: 12px; }
+  .ik-val { display: grid; gap: 6px; padding: 12px; border-radius: var(--radius-md); background: var(--surface-card); border: 1px solid var(--border-subtle); }
+  .ik-val label { font: var(--text-sm-strong); color: var(--text-body); }
+  .ik-val__row { display: flex; align-items: center; gap: 8px; }
+  .ik-val__row .input { width: 7.5em; text-align: right; font-variant-numeric: tabular-nums; }
+  .ik-val__unit { font: var(--text-body); color: var(--text-muted); }
+  .ik-tgl { height: 40px; padding: 0 12px; border-radius: var(--radius-pill); border: 1px solid var(--border-default); background: var(--surface-card); font: var(--text-sm-strong); color: var(--text-body); cursor: pointer; }
+  .ik-tgl[aria-pressed="true"] { background: var(--amber-bg); border-color: var(--amber-600); color: var(--amber-700); }
+  .ik-val__warn { font: var(--text-caption); color: var(--amber-700); min-height: 0; }
+
+  .ik-toast { position: fixed; left: 50%; bottom: calc(86px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 80;
+    max-width: calc(100% - 32px); padding: 12px 16px; border-radius: var(--radius-md); background: var(--surface-inverse); color: var(--text-inverse);
+    font: var(--text-sm-strong); box-shadow: var(--shadow-lg); }
+  .ik-empty { text-align: center; padding: 40px 0; color: var(--text-muted); font: var(--text-sm); }
+  .ik-center { display: grid; place-items: center; padding: 60px 0; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header class="ik-bar">
+  <button class="ik-bar__back hidden" id="backBtn" type="button" aria-label="의뢰 목록으로"><span class="material-symbols-outlined">arrow_back</span></button>
+  <div class="ik-bar__title"><b id="barTitle">패턴 의뢰</b><small id="barSub"></small></div>
+  <button class="ik-save" id="saveState" type="button" aria-live="polite"></button>
+</header>
+<div class="ik-practice hidden" id="practiceNote">연습 모드 — 이 브라우저에만 저장돼요</div>
+<div class="ik-ro hidden" id="roNote">검토 완료된 의뢰라 고칠 수 없어요</div>
+
+<div class="ik-wrap">
+  <nav class="ik-steps hidden" id="steps" aria-label="단계"></nav>
+  <main class="ik-main" id="main"><div class="ik-center"><div class="spinner"></div></div></main>
+</div>
+
+<div class="ik-foot hidden" id="foot">
+  <div class="ik-foot__in">
+    <button class="btn btn--secondary" type="button" id="prevBtn">이전</button>
+    <button class="btn btn--primary" type="button" id="nextBtn">다음</button>
+  </div>
+</div>
+
+<div class="ik-sheet hidden" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+  <div class="ik-sheet__panel">
+    <div class="ik-sheet__head">
+      <span class="ik-num" id="sheetNum"></span>
+      <h2 id="sheetTitle"></h2>
+      <button class="ik-bar__back" type="button" id="sheetClose" aria-label="닫기"><span class="material-symbols-outlined">close</span></button>
+    </div>
+    <div class="ik-sheet__body" id="sheetBody"></div>
+    <div class="ik-sheet__foot">
+      <button class="btn btn--secondary" type="button" id="sheetPrev">이전 칸</button>
+      <button class="btn btn--primary" type="button" id="sheetNext">다음 칸</button>
+    </div>
+  </div>
+</div>
+
+<div class="ik-toast hidden" id="toast" role="status"></div>
+<input type="file" id="fileCam" accept="image/*" capture="environment" hidden />
+<input type="file" id="fileLib" accept="image/*" multiple hidden />
+
+<!-- Supabase JS SDK(CDN) — 다른 화면과 같은 주소. 빌드 0 원칙. -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../intake/diagram.js?v=2026-10-19"></script>
+<script>
+/* ============================================================
+   패턴 의뢰 작성 화면 — 동작 개요
+   · 저장소 두 가지
+       실제: Supabase 표 pattern_intakes + 비공개 사진 창고 pattern-intake (로그인한 직원 권한으로)
+       연습: 로그인이 없는 로컬(인증 꺼짐)에서만 — 이 브라우저(localStorage·IndexedDB)에만 저장
+   · 칸 목록은 목록 파일(../intake/catalog.json)을 diagram.js 의 resolve 로 풀어 만든다
+   · 고칠 때마다 0.7초 뒤 자동 저장, 사진은 올리자마자 저장
+   · 비밀키는 쓰지 않는다 — 공개키 + 로그인 토큰만 (권한은 DB 규칙이 지킨다)
+   ============================================================ */
+const K = window.PatternIntake;
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const STEPS = ["옷 고르기", "기본 정보", "사진", "치수", "구조·제출"];
+const STATUS = { draft: "작성 중", submitted: "제출", reviewed: "검토 완료" };
+const MAX_PHOTOS = 3;
+
+let CAT = null, BASE = null, store = null;
+let cur = null, D = null, R = null;     // 지금 의뢰 · 그 data · 풀린 칸 목록
+let step = 1, readOnly = false;
+
+/* ---------- 저장소: 실제(Supabase) ---------- */
+function RealStore(supa, user) {
+  const T = () => supa.from("pattern_intakes");
+  const B = () => supa.storage.from("pattern-intake");
+  const urls = new Map();
+  return {
+    mode: "real",
+    userId: user.id,
+    async list() {
+      const { data, error } = await T().select("id,code,product_name,size_label,status,updated_at")
+        .eq("created_by", user.id).order("updated_at", { ascending: false }).limit(50);
+      if (error) throw error;
+      return data;
+    },
+    async create(fields) {
+      const { data, error } = await T().insert(fields).select().single();
+      if (error) throw error;
+      return data;
+    },
+    async get(id) {
+      const { data, error } = await T().select("*").eq("id", id).single();
+      if (error) throw error;
+      return data;
+    },
+    async update(id, patch, since) {
+      // since = 마지막으로 읽은 고친 시각. 그사이 다른 곳에서 고쳤으면 0줄 → single() 이 오류(PGRST116)
+      // 고칠 권한이 없을 때(검토 완료·남의 의뢰)도 같은 0줄이다 — 부르는 쪽이 다시 읽어 가른다
+      let q = T().update(patch).eq("id", id);
+      if (since) q = q.eq("updated_at", since);
+      const { data, error } = await q.select("id,status,updated_at,submitted_at").single();
+      if (error) throw error;
+      return data;
+    },
+    async remove(id) {
+      // 사진 창고 규칙은 «그 의뢰를 고칠 수 있는 사람»만 지우게 한다 → 의뢰 행이 있을 때 사진부터 지운다.
+      // 그 전에 지금도 «내 작성 중» 인지 다시 읽어 확인한다 (다른 기기에서 제출했으면 사진만 사라지는 일 방지)
+      const { data: row, error: e0 } = await T().select("status,created_by").eq("id", id).single();
+      if (e0) throw e0;
+      if (row.status !== "draft" || row.created_by !== user.id) throw new Error("NOEDIT");
+      const { data: files } = await B().list("intakes/" + id, { limit: 1000 });
+      if (files && files.length) await B().remove(files.map((f) => "intakes/" + id + "/" + f.name));
+      const { data, error } = await T().delete().eq("id", id).select("id");
+      if (error) throw error;
+      if (!data || !data.length) throw new Error("NOEDIT");
+    },
+    async refresh() {
+      try { const { data, error } = await supa.auth.refreshSession(); return !error && !!(data && data.session); } catch (e) { return false; }
+    },
+    async upload(path, blob) {
+      const { error } = await B().upload(path, blob, { contentType: "image/jpeg", upsert: false });
+      if (error) throw error;
+    },
+    async removeFile(path) { await B().remove([path]); },
+    async url(path) {                                   // 비공개 창고 — 1시간짜리 열람 주소
+      const hit = urls.get(path);
+      if (hit && hit.until > Date.now()) return hit.url;
+      const { data, error } = await B().createSignedUrl(path, 3600);
+      if (error) throw error;
+      urls.set(path, { url: data.signedUrl, until: Date.now() + 50 * 60 * 1000 });
+      return data.signedUrl;
+    },
+    async examples(itemKey) {
+      const { data, error } = await supa.from("intake_examples").select("storage_path,line,caption").eq("item_key", itemKey).order("sort").limit(4);
+      return error ? [] : data;
+    },
+  };
+}
+
+/* ---------- 저장소: 연습(이 브라우저) ---------- */
+function idb() {
+  const open = () => new Promise((res, rej) => {
+    const r = indexedDB.open("grader-intake-practice", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("files");
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+  const run = async (mode, fn) => {
+    const db = await open();
+    return new Promise((res, rej) => {
+      const t = db.transaction("files", mode);
+      const req = fn(t.objectStore("files"));
+      t.oncomplete = () => res(req && req.result);
+      t.onerror = () => rej(t.error);
+      t.onabort = () => rej(t.error || new Error("브라우저 저장 공간이 부족해요"));
+    });
+  };
+  return {
+    put: (k, v) => run("readwrite", (s) => s.put(v, k)),
+    get: (k) => run("readonly", (s) => s.get(k)),
+    del: (k) => run("readwrite", (s) => s.delete(k)),
+    keys: () => run("readonly", (s) => s.getAllKeys()),
+  };
+}
+function PracticeStore() {
+  const KEY = "grader-intake-practice-v1";
+  const load = () => { try { return JSON.parse(localStorage.getItem(KEY) || "[]"); } catch (e) { return []; } };
+  const save = (rows) => localStorage.setItem(KEY, JSON.stringify(rows));
+  const files = idb(), urls = new Map();
+  const now = () => new Date().toISOString();
+  return {
+    mode: "practice",
+    userId: "practice",
+    async refresh() { return true; },
+    async list() {
+      return load().sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
+    },
+    async create(fields) {
+      const rows = load();
+      const d = new Date(), ymd = String(d.getFullYear()).slice(2) + String(d.getMonth() + 1).padStart(2, "0") + String(d.getDate()).padStart(2, "0");
+      const n = rows.filter((r) => r.code.startsWith("연습-" + ymd)).length + 1;
+      const row = Object.assign({ id: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())), code: "연습-" + ymd + "-" + String(n).padStart(3, "0"),
+        product_name: "", size_label: "", ref_url: "", note: "", status: "draft", data: {}, created_by: "practice", created_at: now(), updated_at: now() }, fields);
+      rows.push(row); save(rows);
+      return row;
+    },
+    async get(id) {
+      const r = load().find((x) => x.id === id);
+      if (!r) throw new Error("의뢰를 찾지 못했어요");
+      return r;
+    },
+    async update(id, patch) {                           // 한 브라우저 안이라 «그사이 고침» 확인은 하지 않는다
+      const rows = load(), r = rows.find((x) => x.id === id);
+      if (!r) throw new Error("의뢰를 찾지 못했어요");
+      if (patch.status === "submitted" && r.status !== "submitted") r.submitted_at = now();
+      Object.assign(r, patch, { updated_at: now() });
+      save(rows);
+      return { id, status: r.status, updated_at: r.updated_at, submitted_at: r.submitted_at };
+    },
+    async remove(id) {
+      save(load().filter((x) => x.id !== id));
+      for (const k of await files.keys()) if (String(k).startsWith("intakes/" + id + "/")) await files.del(k);
+    },
+    async upload(path, blob) { await files.put(path, blob); },
+    async removeFile(path) { await files.del(path); },
+    async url(path) {
+      if (urls.has(path)) return urls.get(path);
+      const b = await files.get(path);
+      if (!b) throw new Error("사진을 찾지 못했어요");
+      const u = URL.createObjectURL(b);
+      urls.set(path, u);
+      return u;
+    },
+    async examples() { return []; },
+  };
+}
+
+/* ---------- 작은 도우미 ---------- */
+let toastTimer = null;
+function toast(msg) {
+  const el = $("#toast");
+  el.textContent = msg; el.classList.remove("hidden");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.add("hidden"), 3200);
+}
+function errText(e) {
+  const m = (e && (e.message || e.error_description || e.error)) || String(e || "");
+  if (isNoRow(e) || m === "NOEDIT") return "이 의뢰는 지금 고칠 수 없어요 (검토 완료됐거나 내 의뢰가 아니에요)";
+  if (/JWT|token|401|expired/i.test(m)) return "로그인이 끝났어요. 다시 로그인해 주세요.";
+  if (/Failed to fetch|NetworkError|network/i.test(m)) return "인터넷 연결을 확인해 주세요.";
+  return m;
+}
+function when(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return (d.getMonth() + 1) + "/" + d.getDate() + " " + String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+}
+const tokensOf = (sel) => Array.from(K.tokens(sel));
+const isNoRow = (e) => !!e && (e.code === "PGRST116" || /0 rows|no\) rows/i.test(e.message || ""));
+// 고칠 수 있는 의뢰인가 — 검토 완료 전 + (실제 저장소면) 내가 만든 것
+const canEdit = (row) => row.status !== "reviewed" && (store.mode !== "real" || row.created_by === store.userId);
+function normData(d) {
+  const out = Object.assign({ sel: null, photos: {}, skipped: {}, measures: {}, answers: {}, extras: [] }, d || {});
+  out.sel = Object.assign(K.defaults(BASE), out.sel || {}, { base: BASE.key });
+  return out;
+}
+
+/* ---------- 시작 ---------- */
+async function init() {
+  const st = document.createElement("style"); st.textContent = K.CSS; document.head.appendChild(st);
+  try {
+    CAT = await (await fetch("../intake/catalog.json", { cache: "no-cache" })).json();
+  } catch (e) {
+    $("#main").innerHTML = '<p class="ik-empty">목록 파일을 읽지 못했어요. 새로고침해 주세요.</p>';
+    return;
+  }
+  // 공개 설정을 못 읽으면 멈춘다 — 짐작으로 연습 모드에 들어가면 운영에서도 그 폰에만 저장된다
+  let cfg = null;
+  try { const r = await fetch("/api/public-config"); if (r.ok) cfg = await r.json(); } catch (e) {}
+  if (!cfg) { $("#main").innerHTML = '<p class="ik-empty">서버에 연결하지 못했어요. 새로고침해 주세요.</p>'; return; }
+  if (cfg.supabase_url && cfg.supabase_publishable_key && window.supabase) {
+    const supa = window.supabase.createClient(cfg.supabase_url, cfg.supabase_publishable_key);
+    try {
+      const { data } = await supa.auth.getSession();
+      const s = data && data.session;
+      if (s) store = RealStore(supa, s.user);
+    } catch (e) {}
+  }
+  if (!store) {
+    if (cfg.auth_required !== false) { location.replace("/static/screens/login.html?next=intake.html"); return; }
+    store = PracticeStore();
+    $("#practiceNote").classList.remove("hidden");
+  }
+  const q = new URLSearchParams(location.search);
+  if (q.get("id")) openIntake(q.get("id"), Math.min(5, Math.max(1, parseInt(q.get("step"), 10) || 1)));
+  else showList();
+}
+
+/* ---------- 목록 ---------- */
+async function showList() {
+  cur = null;
+  $("#backBtn").classList.add("hidden");
+  $("#steps").classList.add("hidden");
+  $("#foot").classList.add("hidden");
+  $("#roNote").classList.add("hidden");
+  $("#barTitle").textContent = "패턴 의뢰";
+  $("#barSub").textContent = "실물 옷 사진·치수 모으기";
+  setSave("");
+  const main = $("#main");
+  main.innerHTML = '<button class="btn btn--primary ik-new" type="button" id="newBtn"><span class="material-symbols-outlined">add</span>새 의뢰 시작</button>' +
+    '<h2 class="ik-h3">내 의뢰</h2><div class="ik-cards" id="cards"><div class="ik-center"><div class="spinner"></div></div></div>';
+  $("#newBtn").addEventListener("click", newIntake);
+  let rows = [];
+  try { rows = await store.list(); }
+  catch (e) { $("#cards").innerHTML = '<p class="ik-empty">목록을 불러오지 못했어요 — ' + esc(errText(e)) + "</p>"; return; }
+  $("#cards").innerHTML = rows.length ? rows.map((r) =>
+    '<button class="ik-card" type="button" data-id="' + esc(r.id) + '">' +
+      '<span class="ik-card__top"><span class="ik-card__code">' + esc(r.code) + '</span><span class="ik-status ik-status--' + esc(r.status) + '">' + esc(STATUS[r.status] || r.status) + "</span></span>" +
+      '<span class="ik-card__name">' + esc(r.product_name || "(제품 이름 없음)") + (r.size_label ? " · " + esc(r.size_label) : "") + "</span>" +
+      '<span class="ik-card__meta">' + esc(when(r.updated_at)) + "</span></button>").join("")
+    : '<p class="ik-empty">아직 의뢰가 없어요.</p>';
+  $("#cards").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-id]");
+    if (b) location.assign("intake.html?id=" + encodeURIComponent(b.dataset.id) + "&step=1");
+  });
+}
+
+async function newIntake() {
+  const btn = $("#newBtn"); btn.disabled = true;
+  const sel = K.defaults(BASE || CAT.bases[0]);
+  try {
+    const row = await store.create({ base_type: "sleeve_top", catalog_version: CAT.version, parts: tokensOf(sel), data: { sel } });
+    location.assign("intake.html?id=" + encodeURIComponent(row.id) + "&step=1");
+  } catch (e) {
+    btn.disabled = false;
+    toast("새 의뢰를 만들지 못했어요 — " + errText(e));
+  }
+}
+
+/* ---------- 의뢰 열기 ---------- */
+async function openIntake(id, s) {
+  try { cur = await store.get(id); }
+  catch (e) { toast("의뢰를 열지 못했어요 — " + errText(e)); showList(); history.replaceState(null, "", "intake.html"); return; }
+  BASE = CAT.bases.find((b) => b.key === (cur.base_type || "sleeve_top")) || CAT.bases[0];
+  D = cur.data = normData(cur.data);
+  cur.product_name = cur.product_name || ""; cur.size_label = cur.size_label || "";
+  readOnly = !canEdit(cur);
+  showRo();
+  $("#backBtn").classList.remove("hidden");
+  $("#steps").classList.remove("hidden");
+  $("#foot").classList.remove("hidden");
+  setSave("saved");
+  restoreBackup();
+  resolveNow();
+  go(s);
+}
+function showRo() {
+  $("#roNote").textContent = cur.status === "reviewed" ? "검토 완료된 의뢰라 고칠 수 없어요" : "다른 사람의 의뢰라 볼 수만 있어요";
+  $("#roNote").classList.toggle("hidden", !readOnly);
+}
+
+/* ---------- 저장 못 한 입력 보관 (폰이 꺼지거나 전파가 끊겨도 이 기기에 남긴다) ---------- */
+const backupKey = () => "grader-intake-unsaved-" + cur.id;
+function backup() { try { localStorage.setItem(backupKey(), JSON.stringify({ at: new Date().toISOString(), patch: pending })); } catch (e) {} }
+function dropBackup() { try { localStorage.removeItem(backupKey()); } catch (e) {} }
+function restoreBackup() {
+  let b = null;
+  try { b = JSON.parse(localStorage.getItem(backupKey()) || "null"); } catch (e) {}
+  if (!b || !b.patch) return;
+  // 서버 쪽이 더 나중에 고쳐졌으면(다른 기기) 이 보관본은 낡았다 — 버린다
+  if (readOnly || (cur.updated_at && Date.parse(cur.updated_at) > Date.parse(b.at))) { dropBackup(); return; }
+  const p = b.patch;
+  delete p.status;                                      // 실패한 제출을 몰래 다시 내지 않는다
+  for (const k of ["product_name", "size_label", "ref_url", "note", "parts"]) if (k in p) cur[k] = p[k];
+  if (p.data) D = cur.data = normData(p.data);
+  pending = Object.assign(p, { data: D });
+  setSave("pending");
+  saveTimer = setTimeout(flush, 300);
+  toast("저장 못 한 입력을 되살렸어요");
+}
+function resolveNow() { R = K.resolve(CAT, BASE.key, D.sel) || { shots: [], measures: [], questions: [] }; }
+
+function go(n) {
+  step = n;
+  history.replaceState(null, "", "intake.html?id=" + encodeURIComponent(cur.id) + "&step=" + n);
+  renderBar(); renderSteps(); renderStep();
+  $("#prevBtn").disabled = n === 1;
+  $("#nextBtn").textContent = n === 5 ? "목록으로" : "다음";
+  window.scrollTo(0, 0);
+}
+function renderBar() {
+  $("#barTitle").textContent = cur.product_name || "새 의뢰";
+  $("#barSub").textContent = cur.code + " · " + (STATUS[cur.status] || cur.status) + (cur.size_label ? " · " + cur.size_label : "");
+}
+
+/* ---------- 채움 판정 ---------- */
+const shotDone = (k) => (D.photos[k] || []).length > 0;
+const shotSkip = (k) => !shotDone(k) && typeof D.skipped[k] === "string" && D.skipped[k].trim() !== "";
+function measureLeft(m) {
+  const e = D.measures[m.key] || {}, v = e.values || {}, sk = e.skip || {};
+  return m.values.filter((x) => !(typeof v[x.key] === "number") && !sk[x.key]);
+}
+const measureDone = (m) => measureLeft(m).length === 0;
+function questionDone(q) {
+  const a = D.answers[q.key] || {};
+  return q.type === "text" ? !!(a.text || "").trim() : !!a.choice;
+}
+function missing() {
+  const out = [];
+  if (!cur.product_name.trim()) out.push({ step: 2, label: "제품 이름" });
+  if (!cur.size_label) out.push({ step: 2, label: "실물 사이즈" });
+  R.shots.forEach((s, i) => {
+    if (shotDone(s.key) || shotSkip(s.key)) return;
+    out.push({ step: 3, kind: "shot", i, label: "사진 " + (i + 1) + " · " + s.title + (s.key in D.skipped ? " (못 찍은 이유)" : "") });
+  });
+  R.measures.forEach((m, i) => {
+    const left = measureLeft(m);
+    if (left.length) out.push({ step: 4, kind: "measure", i, label: "치수 " + (i + 1) + " · " + m.title + (m.values.length > 1 ? " (" + left.map((x) => x.label).join("·") + ")" : "") });
+  });
+  R.questions.forEach((q, i) => { if (!q.optional && !questionDone(q)) out.push({ step: 5, kind: "question", i, key: q.key, label: "질문 " + (i + 1) + " · " + q.title }); });
+  return out;
+}
+function counts() {
+  return {
+    shots: R.shots.filter((s) => shotDone(s.key) || shotSkip(s.key)).length,
+    measures: R.measures.filter(measureDone).length,
+    questions: R.questions.filter((q) => q.optional || questionDone(q)).length,
+  };
+}
+
+function renderSteps() {
+  const c = counts();
+  const extra = ["", "", c.shots + "/" + R.shots.length, c.measures + "/" + R.measures.length, c.questions + "/" + R.questions.length];
+  const done = [true, !!(cur.product_name.trim() && cur.size_label), c.shots === R.shots.length, c.measures === R.measures.length, c.questions === R.questions.length];
+  $("#steps").innerHTML = STEPS.map((name, i) =>
+    '<button class="ik-step' + (done[i] ? " is-done" : "") + '" type="button" data-step="' + (i + 1) + '"' + (step === i + 1 ? ' aria-current="step"' : "") + ">" +
+      (i + 1) + " " + name + (extra[i] ? " <em>" + extra[i] + "</em>" : "") + "</button>").join("");
+  const curBtn = $("#steps [aria-current]");
+  if (curBtn) curBtn.scrollIntoView({ block: "nearest", inline: "center" });
+}
+
+/* ---------- 저장 ---------- */
+let pending = {}, saveTimer = null, inflight = null;
+const deletedPaths = new Set();                         // 이 기기에서 지운 사진 — 합칠 때 되살리지 않는다
+function setSave(state, err) {
+  const el = $("#saveState");
+  el.classList.toggle("is-error", state === "error");
+  el.title = state === "error" && err ? errText(err) : "";
+  el.innerHTML = state === "saved" ? '<span class="material-symbols-outlined">cloud_done</span>저장됨'
+    : state === "saving" || state === "pending" ? '<span class="spinner" style="width:12px;height:12px"></span>저장 중'
+    : state === "error" ? '<span class="material-symbols-outlined">error</span>저장 안 됨 · 다시' : "";
+}
+function change(fields, now) {
+  if (readOnly || !cur) return;
+  Object.assign(pending, fields || {}, { data: D });
+  backup();
+  setSave("pending");
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(flush, now ? 0 : 700);
+}
+// 다른 기기에서 올린 사진은 살린다 (나머지 칸은 이 화면 내용으로 저장)
+function mergePhotos(other) {
+  for (const [k, list] of Object.entries((other && other.photos) || {})) {
+    const mine = D.photos[k] || [];
+    for (const p of list || []) if (p && p.path && !deletedPaths.has(p.path) && !mine.some((x) => x.path === p.path)) mine.push(p);
+    if (mine.length) D.photos[k] = mine;
+  }
+}
+function lockReadOnly(row) {
+  if (row) cur.status = row.status;
+  readOnly = true; pending = {}; dropBackup();
+  showRo(); renderBar(); renderSteps(); renderStep();
+  if (sheet) renderSheet();
+}
+// 저장 — 끝날 때까지 기다리고 성공(true)·실패(false)를 돌려준다. 저장 중이면 그 저장이 끝난 뒤 이어서 한다.
+async function flush() {
+  clearTimeout(saveTimer);
+  while (inflight) { try { await inflight; } catch (e) {} }
+  if (!cur || !Object.keys(pending).length) return true;
+  if (readOnly) { pending = {}; return false; }
+  const patch = pending; pending = {};
+  setSave("saving");
+  inflight = (async () => {
+    try {
+      return await store.update(cur.id, patch, cur.updated_at);
+    } catch (e) {
+      if (!isNoRow(e)) throw e;
+      // 0줄 — 그사이 다른 곳에서 고쳤거나, 이제 고칠 수 없게 됐다. 다시 읽어 가른다
+      const fresh = await store.get(cur.id);
+      if (!canEdit(fresh)) { lockReadOnly(fresh); throw new Error("NOEDIT"); }
+      mergePhotos(fresh.data);
+      cur.updated_at = fresh.updated_at;
+      if (patch.data) patch.data = D;
+      return await store.update(cur.id, patch, cur.updated_at);
+    }
+  })();
+  try {
+    const r = await inflight;
+    cur.status = r.status || cur.status; cur.updated_at = r.updated_at; cur.submitted_at = r.submitted_at || cur.submitted_at;
+    if (Object.keys(pending).length) { setSave("pending"); backup(); } else { setSave("saved"); dropBackup(); }
+    return true;
+  } catch (e) {
+    if (e && e.message === "NOEDIT") { setSave(""); toast(errText(e)); return false; }
+    pending = Object.assign(patch, pending);
+    backup();
+    setSave("error", e);
+    toast("저장하지 못했어요 — " + errText(e));
+    return false;
+  } finally {
+    inflight = null;
+  }
+}
+$("#saveState").addEventListener("click", async () => {
+  if (!$("#saveState").classList.contains("is-error")) return;
+  if (/로그인/.test($("#saveState").title) && !(await store.refresh())) { location.assign("login.html?next=intake.html"); return; }
+  flush();
+});
+async function leave() {                                // 목록으로 — 저장이 안 되면 떠나지 않는다
+  if (await flush()) location.assign("intake.html");
+}
+window.addEventListener("beforeunload", (e) => { if (inflight || Object.keys(pending).length) { flush(); e.preventDefault(); e.returnValue = ""; } });
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flush(); });
+
+/* ---------- 단계 그리기 ---------- */
+function renderStep() {
+  const main = $("#main");
+  if (step === 1) main.innerHTML = stepPick();
+  else if (step === 2) main.innerHTML = stepInfo();
+  else if (step === 3) main.innerHTML = stepList("shot");
+  else if (step === 4) main.innerHTML = stepList("measure");
+  else main.innerHTML = stepFinish();
+  if (readOnly) main.querySelectorAll("input, textarea, select, button[data-edit]").forEach((el) => { el.disabled = true; });
+  if (step === 3) loadThumbs();
+}
+
+function stepPick() {
+  const sel = D.sel;
+  let h = '<h2 class="ik-h2">옷 고르기</h2>';
+  h += '<div class="ik-garment"><figure>' + K.render(sel, { view: "front" }, { label: "앞" }) + "<figcaption>앞</figcaption></figure>" +
+    "<figure>" + K.render(sel, { view: "back" }, { label: "뒤" }) + "<figcaption>뒤</figcaption></figure></div>";
+  h += '<div class="ik-group"><div class="ik-group__name">기본 형태</div><div class="ik-chips">' + CAT.bases.map((b) =>
+    '<button class="ik-chip" type="button"' + (b.ready ? ' data-edit data-base="' + b.key + '" aria-pressed="' + (b.key === BASE.key) + '"' : " disabled") + ">" +
+      esc(b.name) + (b.ready ? "" : "<small>준비 중</small>") + "</button>").join("") + '</div><div class="ik-hint">' + esc(BASE.desc || "") + "</div></div>";
+  for (const g of BASE.groups) {
+    const on = (o) => (g.pick === "many" ? (sel[g.key] || []).includes(o.key) : sel[g.key] === o.key);
+    const hints = g.options.filter((o) => o.hint && on(o)).map((o) => o.name + ": " + o.hint).join(" · ");
+    h += '<div class="ik-group"><div class="ik-group__name">' + esc(g.name) + (g.pick === "many" ? " (여러 개)" : "") + '</div><div class="ik-chips">' +
+      g.options.map((o) => '<button class="ik-chip" type="button" data-edit data-g="' + g.key + '" data-o="' + o.key + '" aria-pressed="' + on(o) + '">' + esc(o.name) + "</button>").join("") +
+      "</div>" + (hints ? '<div class="ik-hint">' + esc(hints) + "</div>" : "") + "</div>";
+  }
+  h += '<div class="ik-count"><span><b>' + R.shots.length + "</b>사진</span><span><b>" + R.measures.length + "</b>치수</span><span><b>" + R.questions.length + "</b>구조 질문</span></div>";
+  return h;
+}
+
+function stepInfo() {
+  const sizes = CAT.sizes || [];
+  let h = '<h2 class="ik-h2">기본 정보</h2>';
+  h += '<div class="ik-field"><label for="fName">제품 이름 <span class="ik-req">*</span></label><input class="input" id="fName" data-f="product_name" autocomplete="off" placeholder="예: 레이지비 럭비 저지" value="' + esc(cur.product_name) + '"></div>';
+  h += '<div class="ik-field"><label for="fSize">실물 사이즈 <span class="ik-req">*</span></label><select class="input" id="fSize" data-f="size_label"><option value="">고르기</option>' +
+    sizes.map((s) => "<option" + (s === cur.size_label ? " selected" : "") + ">" + esc(s) + "</option>").join("") + "</select></div>";
+  h += '<div class="ik-field"><label for="fUrl">판매 링크</label><input class="input" id="fUrl" data-f="ref_url" type="url" inputmode="url" autocomplete="off" placeholder="https://" value="' + esc(cur.ref_url || "") + '"></div>';
+  h += '<div class="ik-field"><label for="fNote">현장 메모</label><textarea class="input" id="fNote" data-f="note" rows="3">' + esc(cur.note || "") + "</textarea></div>";
+  if (cur.status === "draft" && !readOnly) {
+    h += '<div class="ik-danger" id="delZone"><button class="ik-linkbtn" type="button" id="delAsk">이 의뢰 지우기</button></div>';
+  }
+  return h;
+}
+
+function itemState(kind, it) {
+  if (kind === "shot") {
+    const n = (D.photos[it.key] || []).length;
+    if (n) return { cls: "is-done", html: '<img alt="" data-thumb="' + esc(D.photos[it.key][0].path) + '">' + n + "장" };
+    if (shotSkip(it.key)) return { cls: "is-skip", html: "못 찍음" };
+    return { cls: "", html: "" };
+  }
+  const e = D.measures[it.key] || {}, v = e.values || {}, sk = e.skip || {};
+  const parts = it.values.map((x) => (typeof v[x.key] === "number" ? v[x.key] : sk[x.key] || "")).filter((x) => x !== "");
+  if (!parts.length) return { cls: "", html: "" };
+  const allSkip = it.values.every((x) => sk[x.key]);
+  return { cls: measureDone(it) ? (allSkip ? "is-skip" : "is-done") : "", html: esc(parts.join(" / ")) };
+}
+function stepList(kind) {
+  const items = kind === "shot" ? R.shots : R.measures;
+  const rules = kind === "shot" ? CAT.rules.photo : CAT.rules.measure;
+  let h = '<h2 class="ik-h2">' + (kind === "shot" ? "사진" : "치수") + "</h2>";
+  h += '<ul class="ik-rules">' + rules.map((r) => "<li>" + esc(r) + "</li>").join("") + "</ul>";
+  h += '<ol class="ik-items">' + items.map((it, i) => {
+    const s = itemState(kind, it);
+    return '<li><button class="ik-item ' + s.cls + '" type="button" data-open="' + kind + '" data-i="' + i + '">' +
+      '<span class="ik-item__num">' + (i + 1) + "</span>" +
+      '<span class="ik-item__main"><b>' + esc(it.title) + "</b><small>" + esc(it.where) + "</small></span>" +
+      '<span class="ik-item__state">' + s.html + "</span></button></li>";
+  }).join("") + "</ol>";
+  return h;
+}
+async function loadThumbs() {
+  for (const img of document.querySelectorAll("#main img[data-thumb]")) {
+    try { img.src = await store.url(img.dataset.thumb); } catch (e) {}
+  }
+}
+
+function stepFinish() {
+  let h = '<h2 class="ik-h2">구조 질문</h2>';
+  R.questions.forEach((q, i) => {
+    const a = D.answers[q.key] || {};
+    h += '<div class="ik-q" id="q-' + q.key + '"><div class="ik-q__title"><span>' + (i + 1) + "</span>" + esc(q.title) + (q.optional ? ' <small class="ik-muted">(비워도 돼요)</small>' : "") + "</div>";
+    if (q.type === "text") {
+      h += '<input class="input" data-edit data-qtext="' + q.key + '" autocomplete="off" placeholder="' + esc(q.hint || "") + '" value="' + esc(a.text || "") + '">';
+    } else {
+      h += '<div class="ik-chips">' + q.options.map((o) => '<button class="ik-chip" type="button" data-edit data-q="' + q.key + '" data-opt="' + esc(o) + '" aria-pressed="' + (a.choice === o) + '">' + esc(o) + "</button>").join("") + "</div>";
+      if (q.hint) h += '<div class="ik-hint">' + esc(q.hint) + "</div>";
+      h += '<input class="input" data-edit data-qnote="' + q.key + '" autocomplete="off" placeholder="덧붙일 말 (있으면)" value="' + esc(a.note || "") + '">';
+    }
+    h += "</div>";
+  });
+
+  h += '<h2 class="ik-h3">따로 붙은 조각</h2><p class="ik-muted" style="margin:-4px 0 10px">목록에 없는 조각이 있으면 이름·위치·크기를 적어요.</p>';
+  D.extras.forEach((x, i) => {
+    h += '<div class="ik-extra">' +
+      '<div class="ik-field ik-full"><label for="xn' + i + '">이름</label><input class="input" id="xn' + i + '" data-x="' + i + '" data-xf="name" autocomplete="off" placeholder="예: 어깨 덧댐" value="' + esc(x.name || "") + '"></div>' +
+      '<div class="ik-field ik-full"><label for="xw' + i + '">어디에</label><input class="input" id="xw' + i + '" data-x="' + i + '" data-xf="where" autocomplete="off" value="' + esc(x.where || "") + '"></div>' +
+      '<div class="ik-field"><label for="xh' + i + '">높이 (cm)</label><input class="input" id="xh' + i + '" data-x="' + i + '" data-xf="height" inputmode="decimal" autocomplete="off" value="' + esc(x.height == null ? "" : x.height) + '"></div>' +
+      '<div class="ik-field"><label for="xd' + i + '">폭 (cm)</label><input class="input" id="xd' + i + '" data-x="' + i + '" data-xf="width" inputmode="decimal" autocomplete="off" value="' + esc(x.width == null ? "" : x.width) + '"></div>' +
+      '<div class="ik-field ik-full"><button class="ik-linkbtn" type="button" data-edit data-xdel="' + i + '">이 조각 지우기</button></div></div>';
+  });
+  h += '<button class="btn btn--secondary btn--block" type="button" data-edit id="xAdd"><span class="material-symbols-outlined">add</span>조각 추가</button>';
+
+  const miss = missing();
+  h += '<div class="ik-submit" id="submitBox">';
+  if (cur.status === "submitted") {
+    h += '<div class="ik-ok">제출했어요 · ' + esc(when(cur.submitted_at)) + '</div><div class="ik-muted">검토 완료 전까지는 고칠 수 있어요.</div>';
+    if (miss.length) h += '<div class="ik-q__title">제출한 뒤 빈 칸이 생겼어요 · ' + miss.length + "개</div><ul class=\"ik-missing\">" + miss.map((m, k) => '<li><button type="button" data-miss="' + k + '">' + esc(m.label) + "</button></li>").join("") + "</ul>";
+  } else if (cur.status === "reviewed") h += '<div class="ik-ok">검토 완료</div>';
+  if (cur.status === "draft") {
+    if (miss.length) {
+      h += '<div class="ik-q__title">아직 빈 칸 ' + miss.length + "개</div><ul class=\"ik-missing\">" + miss.map((m, k) => '<li><button type="button" data-miss="' + k + '">' + esc(m.label) + "</button></li>").join("") + "</ul>";
+    } else h += '<div class="ik-ok">다 채웠어요.</div>';
+    h += '<button class="btn btn--primary btn--block btn--lg" type="button" data-edit id="submitBtn"' + (miss.length ? " disabled" : "") + ">제출하기</button>";
+  }
+  h += "</div>";
+  return h;
+}
+
+/* ---------- 단계 화면 동작 ---------- */
+$("#main").addEventListener("click", async (e) => {
+  const b = e.target.closest("button");
+  if (!b || !cur) return;
+  if (b.dataset.open) return openSheet(b.dataset.open, +b.dataset.i);
+  if (b.dataset.miss !== undefined) {
+    const m = missing()[+b.dataset.miss];
+    if (!m) return;
+    if (m.kind === "shot" || m.kind === "measure") { go(m.step); openSheet(m.kind, m.i); }
+    else if (m.kind === "question") { const el = document.getElementById("q-" + m.key); if (el) { el.classList.add("is-missing"); el.scrollIntoView({ block: "center" }); } }
+    else go(m.step);
+    return;
+  }
+  if (readOnly) return;
+  if (b.dataset.base) return;                          // 지금은 소매 상의만 열려 있다
+  if (b.dataset.g) {
+    const g = BASE.groups.find((x) => x.key === b.dataset.g);
+    if (g.pick === "many") {
+      const list = D.sel[g.key] || [];
+      D.sel[g.key] = list.includes(b.dataset.o) ? list.filter((x) => x !== b.dataset.o) : list.concat(b.dataset.o);
+    } else D.sel[g.key] = b.dataset.o;
+    resolveNow();
+    change({ parts: tokensOf(D.sel) });
+    renderSteps(); renderStep();
+    return;
+  }
+  if (b.dataset.q) {
+    const a = D.answers[b.dataset.q] = D.answers[b.dataset.q] || {};
+    a.choice = a.choice === b.dataset.opt ? "" : b.dataset.opt;
+    change();
+    b.parentElement.querySelectorAll("[data-q]").forEach((x) => x.setAttribute("aria-pressed", x === b && !!a.choice));
+    b.closest(".ik-q").classList.remove("is-missing");
+    refreshSubmit(); renderSteps();
+    return;
+  }
+  if (b.id === "xAdd") { D.extras.push({ name: "", where: "", height: null, width: null }); change(); renderStep(); return; }
+  if (b.dataset.xdel !== undefined) { D.extras.splice(+b.dataset.xdel, 1); change(); renderStep(); return; }
+  if (b.id === "submitBtn") {
+    if (missing().length) return;
+    b.disabled = true;
+    change({ status: "submitted" }, true);
+    if (await flush()) toast("제출했어요 · " + cur.code);
+    else { delete pending.status; if (Object.keys(pending).length) backup(); }   // 실패한 제출이 다음 저장 때 몰래 들어가지 않게
+    renderBar(); renderSteps(); renderStep();
+    return;
+  }
+  if (b.id === "delAsk") {
+    $("#delZone").innerHTML = '<p class="ik-muted" style="margin:0 0 10px">이 의뢰와 올린 사진을 모두 지울까요? 되돌릴 수 없어요.</p>' +
+      '<div class="ik-addrow"><button class="btn btn--secondary" type="button" id="delNo">그만두기</button><button class="btn btn--danger" type="button" id="delYes">지우기</button></div>';
+    return;
+  }
+  if (b.id === "delNo") { renderStep(); return; }
+  if (b.id === "delYes") {
+    b.disabled = true;
+    clearTimeout(saveTimer); pending = {};
+    try { await store.remove(cur.id); dropBackup(); location.assign("intake.html"); }
+    catch (err) { b.disabled = false; toast("지우지 못했어요 — " + errText(err)); }
+  }
+});
+function refreshSubmit() {
+  const box = $("#submitBox");
+  if (!box || cur.status !== "draft") return;
+  const tmp = document.createElement("div"); tmp.innerHTML = stepFinish();
+  box.replaceWith(tmp.querySelector("#submitBox"));
+}
+$("#main").addEventListener("input", (e) => {
+  const el = e.target;
+  if (!cur || readOnly) return;
+  if (el.dataset.f) {
+    cur[el.dataset.f] = el.value;
+    change({ [el.dataset.f]: el.value });
+    if (el.dataset.f === "product_name" || el.dataset.f === "size_label") { renderBar(); renderSteps(); }
+    return;
+  }
+  if (el.dataset.qtext) { (D.answers[el.dataset.qtext] = D.answers[el.dataset.qtext] || {}).text = el.value; change(); renderSteps(); refreshSubmit(); return; }
+  if (el.dataset.qnote) { (D.answers[el.dataset.qnote] = D.answers[el.dataset.qnote] || {}).note = el.value; change(); return; }
+  if (el.dataset.x !== undefined) {
+    const x = D.extras[+el.dataset.x], f = el.dataset.xf;
+    x[f] = f === "height" || f === "width" ? parseNum(el.value) : el.value;
+    change();
+  }
+});
+$("#main").addEventListener("change", (e) => {           // select 는 input 이벤트가 늦은 기기가 있다
+  const el = e.target;
+  if (el.dataset.f === "size_label" && cur && !readOnly) { cur.size_label = el.value; change({ size_label: el.value }); renderBar(); renderSteps(); }
+});
+$("#steps").addEventListener("click", (e) => { const b = e.target.closest("[data-step]"); if (b) { flush(); go(+b.dataset.step); } });
+$("#prevBtn").addEventListener("click", () => { if (step > 1) { flush(); go(step - 1); } });
+$("#nextBtn").addEventListener("click", () => {
+  if (step < 5) { flush(); go(step + 1); }
+  else leave();
+});
+$("#backBtn").addEventListener("click", leave);
+
+function parseNum(s) {
+  const t = String(s || "").replace(",", ".").replace(/[^0-9.]/g, "");
+  if (!t) return null;
+  const n = parseFloat(t);
+  return isFinite(n) ? Math.round(n * 10) / 10 : null;
+}
+
+/* ---------- 가이드 시트 (사진·치수 칸 하나) ---------- */
+let sheet = null;                                       // { kind, i }
+const uploading = {};
+function openSheet(kind, i) {
+  if (!sheet) history.pushState({ sheet: true }, "");
+  sheet = { kind, i };
+  document.body.classList.add("ik-lock");
+  $("#sheet").classList.remove("hidden");
+  renderSheet();
+  $("#sheetBody").scrollTop = 0;
+}
+function hideSheet() {
+  sheet = null;
+  $("#sheet").classList.add("hidden");
+  document.body.classList.remove("ik-lock");
+  renderSteps(); renderStep();
+}
+function closeSheet() {
+  flush();
+  if (history.state && history.state.sheet) history.back();   // popstate 가 hideSheet 를 부른다
+  else hideSheet();
+}
+window.addEventListener("popstate", () => { if (sheet) hideSheet(); });
+$("#sheetClose").addEventListener("click", closeSheet);
+$("#sheet").addEventListener("click", (e) => { if (e.target.id === "sheet") closeSheet(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && sheet) closeSheet(); });
+$("#sheetPrev").addEventListener("click", () => moveSheet(-1));
+$("#sheetNext").addEventListener("click", () => moveSheet(1));
+function moveSheet(d) {
+  flush();
+  const list = sheet.kind === "shot" ? R.shots : R.measures;
+  const n = sheet.i + d;
+  if (n < 0 || n >= list.length) { closeSheet(); return; }
+  sheet.i = n; renderSheet(); $("#sheetBody").scrollTop = 0;
+}
+
+function guideDl(it) {
+  const rows = [["어디", it.where], ["재는 법", it.how], ["요령", it.tips], ["흔한 실수", it.mistakes, "is-warn"], ["왜", it.why]];
+  return '<dl class="ik-guide">' + rows.filter((r) => r[1] && (!Array.isArray(r[1]) || r[1].length)).map(([k, v, c]) =>
+    "<dt>" + k + "</dt><dd" + (c ? ' class="' + c + '"' : "") + ">" + (Array.isArray(v) ? v.map(esc).join("<br>") : esc(v)) + "</dd>").join("") + "</dl>";
+}
+
+function renderSheet() {
+  if (!sheet) return;
+  const isShot = sheet.kind === "shot";
+  const list = isShot ? R.shots : R.measures;
+  const it = list[sheet.i];
+  if (!it) { closeSheet(); return; }
+  $("#sheetNum").textContent = (isShot ? "사진 " : "치수 ") + (sheet.i + 1) + "/" + list.length;
+  $("#sheetTitle").textContent = it.title;
+  $("#sheetPrev").disabled = sheet.i === 0;
+  $("#sheetNext").textContent = sheet.i === list.length - 1 ? "닫기" : "다음 칸";
+
+  let h = '<div class="ik-fig' + (it.fig.length > 1 ? " is-two" : "") + '">' + it.fig.map((p) => K.render(D.sel, p, { label: it.title })).join("") + "</div>";
+  if (!isShot) h += '<div><span class="ik-mode">' + esc(CAT.modes[it.mode] || "") + "</span></div>";
+  h += guideDl(it);
+  h += '<div class="ik-ex hidden" id="exRow"></div>';
+
+  if (isShot) {
+    const photos = D.photos[it.key] || [], busy = uploading[it.key] || 0;
+    h += '<div class="ik-photos">' + photos.map((p, k) =>
+      '<figure class="ik-ph"><img alt="' + esc(it.title) + " " + (k + 1) + '" data-src="' + esc(p.path) + '">' +
+      (readOnly ? "" : '<button class="ik-ph__del" type="button" data-del="' + k + '" aria-label="사진 지우기">✕</button>') + "</figure>").join("") +
+      Array.from({ length: busy }, () => '<div class="ik-ph ik-ph--busy"><div class="spinner"></div>올리는 중</div>').join("") + "</div>";
+    if (!readOnly && photos.length + busy < MAX_PHOTOS) {
+      h += '<div class="ik-addrow"><button class="btn btn--primary" type="button" id="addCam"><span class="material-symbols-outlined">photo_camera</span>사진 찍기</button>' +
+        '<button class="btn btn--secondary" type="button" id="addLib"><span class="material-symbols-outlined">photo_library</span>앨범에서</button></div>';
+    }
+    if (!photos.length && !busy) {
+      const on = it.key in D.skipped;
+      h += '<div class="ik-skip"><label class="ik-check"><input type="checkbox" id="skipChk"' + (on ? " checked" : "") + (readOnly ? " disabled" : "") + "> 못 찍음</label>" +
+        (on ? '<input class="input" id="skipWhy" autocomplete="off" placeholder="이유 (예: 라벨이 잘려 있음)" value="' + esc(D.skipped[it.key]) + '"' + (readOnly ? " disabled" : "") + ">" : "") + "</div>";
+    }
+  } else {
+    const e = D.measures[it.key] || {}, v = e.values || {}, sk = e.skip || {};
+    h += '<div class="ik-vals">' + it.values.map((x) => {
+      const id = "mv-" + x.key, val = typeof v[x.key] === "number" ? v[x.key] : "";
+      return '<div class="ik-val">' + (x.label ? '<label for="' + id + '">' + esc(x.label) + "</label>" : "") +
+        '<div class="ik-val__row"><input class="input" id="' + id + '" data-mv="' + x.key + '" inputmode="decimal" autocomplete="off" aria-label="' + esc(it.title + " " + (x.label || "")) + '" value="' + esc(val) + '"' + (readOnly ? " disabled" : "") + ">" +
+        '<span class="ik-val__unit">cm</span>' +
+        '<button class="ik-tgl" type="button" data-skip="' + x.key + '" data-why="못 잼" aria-pressed="' + (sk[x.key] === "못 잼") + '"' + (readOnly ? " disabled" : "") + ">못 잼</button>" +
+        (x.na ? '<button class="ik-tgl" type="button" data-skip="' + x.key + '" data-why="없음" aria-pressed="' + (sk[x.key] === "없음") + '"' + (readOnly ? " disabled" : "") + ">없음</button>" : "") +
+        '</div><div class="ik-val__warn" id="w-' + x.key + '">' + esc(numWarn(val)) + "</div></div>";
+    }).join("") + "</div>";
+    h += '<div class="ik-field"><label for="mNote">메모</label><input class="input" id="mNote" autocomplete="off" placeholder="재는 자리가 애매했으면 적어요" value="' + esc(e.note || "") + '"' + (readOnly ? " disabled" : "") + "></div>";
+  }
+  $("#sheetBody").innerHTML = h;
+
+  // 사진·예시는 주소를 받아 와서 채운다
+  for (const img of $("#sheetBody").querySelectorAll("img[data-src]")) store.url(img.dataset.src).then((u) => { img.src = u; }).catch(() => {});
+  const want = (isShot ? "photo:" : "measure:") + it.key, row = $("#exRow");
+  store.examples(want).then(async (ex) => {
+    if (!sheet || !ex.length) return;
+    const figs = [];
+    for (const x of ex) {
+      let u = ""; try { u = await store.url(x.storage_path); } catch (e) { continue; }
+      const n = (v) => Math.min(1, Math.max(0, Number(v) || 0));   // 0~1 숫자로만
+      const ln = x.line ? '<svg viewBox="0 0 1 1" preserveAspectRatio="none"><line x1="' + n(x.line.x1) + '" y1="' + n(x.line.y1) + '" x2="' + n(x.line.x2) + '" y2="' + n(x.line.y2) + '"/></svg>' : "";
+      figs.push('<figure><img alt="예시" src="' + esc(u) + '">' + ln + (x.caption ? "<figcaption>" + esc(x.caption) + "</figcaption>" : "") + "</figure>");
+    }
+    if (figs.length && row.isConnected) { row.innerHTML = figs.join(""); row.classList.remove("hidden"); }
+  });
+}
+function numWarn(n) {
+  if (n === "" || n == null) return "";
+  if (n > 200) return "cm 로 적었는지 확인해 주세요";
+  if (Math.abs(n * 2 - Math.round(n * 2)) > 1e-9) return "0.5 단위로 적어요";
+  return "";
+}
+
+$("#sheetBody").addEventListener("click", async (e) => {
+  const b = e.target.closest("button");
+  if (!b || !sheet || readOnly) return;
+  const it = (sheet.kind === "shot" ? R.shots : R.measures)[sheet.i];
+  if (b.id === "addCam") return $("#fileCam").click();
+  if (b.id === "addLib") return $("#fileLib").click();
+  if (b.dataset.del !== undefined) {                    // 두 번 눌러야 지운다 (잘못 눌러도 안전)
+    if (!b.classList.contains("is-armed")) { b.classList.add("is-armed"); b.textContent = "지우기"; setTimeout(() => { if (b.isConnected) { b.classList.remove("is-armed"); b.textContent = "✕"; } }, 2500); return; }
+    const list = D.photos[it.key] || [], gone = list.splice(+b.dataset.del, 1)[0];
+    if (!list.length) delete D.photos[it.key];
+    if (gone) deletedPaths.add(gone.path);
+    change(null, true);
+    // 기록에서 뺀 것이 저장된 뒤에만 파일을 지운다 (저장이 실패하면 기록은 아직 그 사진을 가리킨다)
+    if (await flush() && gone) store.removeFile(gone.path).catch(() => {});
+    renderSheet();
+    return;
+  }
+  if (b.dataset.skip) {
+    const m = D.measures[it.key] = D.measures[it.key] || {};
+    m.values = m.values || {}; m.skip = m.skip || {};
+    if (m.skip[b.dataset.skip] === b.dataset.why) delete m.skip[b.dataset.skip];
+    else { m.skip[b.dataset.skip] = b.dataset.why; delete m.values[b.dataset.skip]; }
+    change(); renderSheet();
+  }
+});
+$("#sheetBody").addEventListener("input", (e) => {
+  const el = e.target;
+  if (!sheet || readOnly) return;
+  const it = (sheet.kind === "shot" ? R.shots : R.measures)[sheet.i];
+  if (el.dataset.mv) {
+    const m = D.measures[it.key] = D.measures[it.key] || {};
+    m.values = m.values || {}; m.skip = m.skip || {};
+    const n = parseNum(el.value);
+    if (n == null) delete m.values[el.dataset.mv];
+    else { m.values[el.dataset.mv] = n; delete m.skip[el.dataset.mv]; }
+    const row = el.closest(".ik-val");
+    row.querySelectorAll("[data-skip]").forEach((t) => t.setAttribute("aria-pressed", "false"));
+    $("#w-" + el.dataset.mv).textContent = numWarn(n == null ? "" : n);
+    change();
+    return;
+  }
+  if (el.id === "mNote") { (D.measures[it.key] = D.measures[it.key] || {}).note = el.value; change(); return; }
+  if (el.id === "skipWhy") { D.skipped[it.key] = el.value; change(); }
+});
+$("#sheetBody").addEventListener("change", (e) => {
+  if (e.target.id !== "skipChk" || !sheet || readOnly) return;
+  const it = R.shots[sheet.i];
+  if (e.target.checked) D.skipped[it.key] = D.skipped[it.key] || "";
+  else delete D.skipped[it.key];
+  change(); renderSheet();
+  const why = $("#skipWhy"); if (why) why.focus();
+});
+
+/* ---------- 사진 올리기: 폰에서 1600px 로 줄여 바로 올린다 ---------- */
+async function shrink(file) {
+  let src, objUrl = null;
+  try { src = await createImageBitmap(file, { imageOrientation: "from-image" }); }
+  catch (e) {
+    objUrl = URL.createObjectURL(file);
+    try {
+      src = await new Promise((res, rej) => {
+        const img = new Image();
+        img.onload = () => res(img);
+        img.onerror = () => rej(new Error("이 사진은 열 수 없어요 — 카메라 설정에서 «호환성 우선»으로 찍거나 JPG 로 골라 주세요"));
+        img.src = objUrl;
+      });
+    } catch (err) { URL.revokeObjectURL(objUrl); throw err; }
+  }
+  try {
+    const w0 = src.width || src.naturalWidth, h0 = src.height || src.naturalHeight;
+    const k = Math.min(1, 1600 / Math.max(w0, h0));
+    const w = Math.round(w0 * k), h = Math.round(h0 * k);
+    const c = document.createElement("canvas"); c.width = w; c.height = h;
+    c.getContext("2d").drawImage(src, 0, 0, w, h);
+    const blob = await new Promise((res) => c.toBlob(res, "image/jpeg", 0.85));
+    c.width = c.height = 0;                             // 큰 그림판 메모리를 바로 돌려준다 (구형 아이폰)
+    if (!blob) throw new Error("사진을 줄이지 못했어요");
+    return { blob, w, h };
+  } finally {
+    if (src && src.close) src.close();
+    if (objUrl) URL.revokeObjectURL(objUrl);
+  }
+}
+async function addPhotos(files) {
+  if (!sheet || sheet.kind !== "shot" || readOnly || !files.length) return;
+  const it = R.shots[sheet.i], key = it.key;
+  const room = MAX_PHOTOS - (D.photos[key] || []).length - (uploading[key] || 0);
+  const pick = Array.from(files).slice(0, Math.max(0, room));
+  if (files.length > pick.length) toast("한 칸에 " + MAX_PHOTOS + "장까지예요");
+  uploading[key] = (uploading[key] || 0) + pick.length;
+  renderSheet();
+  for (const f of pick) {
+    try {
+      const { blob, w, h } = await shrink(f);
+      const path = "intakes/" + cur.id + "/" + key + "_" + Date.now() + ".jpg";
+      await store.upload(path, blob);
+      (D.photos[key] = D.photos[key] || []).push({ path, w, h, at: new Date().toISOString() });
+      delete D.skipped[key];
+      change(null, true);
+      await flush();
+    } catch (e) {
+      toast("사진을 올리지 못했어요 — " + errText(e));
+    } finally {
+      uploading[key]--;
+      if (sheet && R.shots[sheet.i] && R.shots[sheet.i].key === key) renderSheet();
+    }
+  }
+}
+for (const id of ["fileCam", "fileLib"]) {
+  $("#" + id).addEventListener("change", (e) => { const fs = Array.from(e.target.files || []); e.target.value = ""; addPhotos(fs); });
+}
+
+init();
+</script>
+</body>
+</html>

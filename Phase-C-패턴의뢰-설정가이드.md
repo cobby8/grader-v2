@@ -62,12 +62,14 @@ create table if not exists public.pattern_intakes (
   status           text not null default 'draft'
                    check (status in ('draft', 'submitted', 'reviewed')),   -- 작성 중 / 제출 / 검토 완료
   data             jsonb not null default '{}'::jsonb,
-  -- data 모양:
-  --   photos   {"S04": [{"path": "intakes/<id>/S04_1.jpg", "w": 1600, "h": 1200, "at": "..."}], ...}
-  --   skipped  {"S11": "라벨이 잘려 있음"}                     ← «못 찍음» 과 이유
-  --   measures {"M10": {"value": 18.5, "unmeasured": false, "note": ""}, ...}
-  --   answers  {"Q_rib_layers": "2겹", ...}                    ← 구조 질문 답
-  --   extras   [{"name": "인서트", "height": 6, "width": 7.5, "where": "V 아래", "photos": [...]}]
+  -- data 모양 (열쇠는 목록 파일 webapp/static/intake/catalog.json 의 key):
+  --   sel      {"neck": "v_rib", "sleeve": "set_in", ..., "extra": ["yoke"]}   ← 고른 옷 모양
+  --   photos   {"neck_out": [{"path": "intakes/<id>/neck_out_<시각>.jpg", "w": 1600, "h": 1200, "at": "..."}], ...}
+  --   skipped  {"label": "라벨이 잘려 있음"}                   ← «못 찍음» 과 이유
+  --   measures {"cuff_half": {"values": {"relaxed": 9.5}, "skip": {"stretched": "못 잼"}, "note": ""}, ...}
+  --            값이 하나인 칸은 values 의 열쇠가 "v"  ·  skip 은 "못 잼" 또는 "없음"
+  --   answers  {"rib_layers": {"choice": "2겹 (반 접은 립)", "note": ""}, "insert_where": {"text": "V 아래"}}
+  --   extras   [{"name": "어깨 덧댐", "where": "", "height": 6, "width": null}]   ← 목록에 없는 조각
   note             text not null default '',            -- 현장 메모
   created_by       uuid not null default auth.uid(),
   created_by_email text not null default coalesce(auth.jwt() ->> 'email', ''),
