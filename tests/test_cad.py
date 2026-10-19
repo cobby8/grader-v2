@@ -313,7 +313,9 @@ class CadScreen(unittest.TestCase):
                "best.idx", "tol", "j.version", "j.style_id", "S.view.style.pieces.length", "(s.versions || []).length", "(s.sizes || []).length",
                "S.view.style.sizes.indexOf(sid) + 1", "S.view.style.sizes.map(sizeLabel).map(esc).join(\" · \")",
                "v == null ? \"\" : v.toFixed(3)", "sid === S.size ? \"is-active\" : \"\"", "S.overlay.has(sid) ? \"checked\" : \"\"",
-               "String(v) === String(ver) ? \"selected\" : \"\""}
+               "String(v) === String(ver) ? \"selected\" : \"\"",
+               # F10 6단계(들여오기·이름 확인) — 화면이 고정 글자 + esc·Number 로만 만든 조각 HTML
+               "ib", "importInfo(M)", "ok1", "ok2", "rnote", "notes", "pts"}
         bad = []
         for m in re.finditer(r"\$\{", script):
             depth, i = 1, m.end()

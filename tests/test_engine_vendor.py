@@ -50,7 +50,8 @@ class EngineVendor(unittest.TestCase):
         self.assertIn("service.py", self.ev["files"])
         self.assertIn("fixtures/gas-warmup-2026/gas_top_2xl.ai", self.ev["files"])
         self.assertIn("marker.py", self.ev["files"])             # F10 4단계 — 창구(service.marker_all)가 import 해서 따라 들어온다
-        self.assertNotIn("style_import.py", self.ev["files"])    # 창구가 안 쓰는 파일은 안 가져온다(다른 작업자 영역)
+        self.assertIn("style_import.py", self.ev["files"])       # F10 6단계 — 창구(service.import_all)가 import 해서 따라 들어온다
+        self.assertNotIn("stiz_notch_add.py", self.ev["files"])  # 창구가 안 쓰는 파일은 안 가져온다(다른 작업자 영역)
 
     def test_fingerprints_match(self):
         bad = []

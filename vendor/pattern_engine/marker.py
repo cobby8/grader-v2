@@ -86,7 +86,9 @@ def pieces_from_graded(graded, garment, counts, spec=None, exclude=()):
     장수·좌우(R/L 거울)는 gas_warmup_meta 의 SPEC 을 patlib.expand 로 펼친다(그레이딩·명세와 같은 규칙)."""
     from patlib import expand
     from gas_warmup_meta import SPEC_T, SPEC_B
-    g = {"top": "top", "상의": "top", "bottom": "bottom", "하의": "bottom"}[garment]
+    g = {"top": "top", "상의": "top", "bottom": "bottom", "하의": "bottom", "imported": "imported"}[garment]
+    if g == "imported" and not spec:                          # 들여온 스타일 — 펼침표(--spec-file)가 꼭 있어야 한다(가스 표를 쓰면 엉뚱한 조각)
+        raise ValueError("들여온 스타일은 펼침표(--spec-file)가 필요하다")
     spec = spec or (SPEC_T if g == "top" else SPEC_B)
     out = []
     for size, n in counts.items():
@@ -1004,7 +1006,8 @@ def _parse_counts(lst):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="마커(원단 배치) + 요척")
-    ap.add_argument("--garment", choices=["top", "bottom"], default="top")
+    ap.add_argument("--garment", choices=["top", "bottom", "imported"], default="top",
+                    help="imported = 들여온 스타일(style_import) — graded.json 의 «imported» 칸 + --spec-file 펼침표")
     ap.add_argument("--counts", nargs="*", help="사이즈=벌수 … (기본: S~5XL 각 1벌)")
     ap.add_argument("--width", type=float, default=150.0, help="원단 폭 cm (기본 150)")
     ap.add_argument("--gap", type=float, default=3.0, help="조각 간격 mm (기본 3)")
@@ -1023,6 +1026,8 @@ def main(argv=None):
     ap.add_argument("--out", default=os.path.join(REPO, "tmp", "pattern-engine", "marker"))
     ap.add_argument("--name", default=None, help="결과 파일 이름(기본 마커_상의 / 마커_하의)")
     ap.add_argument("--no-files", action="store_true", help="PDF·DXF·PNG 없이 숫자만")
+    ap.add_argument("--spec-file", help="펼침표 JSON {원본이름: [[조각이름, 거울?, 좌우, 메모], …]} — 없으면 가스 웜업 표(gas_warmup_meta)")
+    ap.add_argument("--title", help="그림 제목 앞부분(기본: 한국가스공사 웜업 상의/하의 마커)")
     A = ap.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):                     # 시험이 출력을 StringIO 로 받을 때는 건너뛴다
         sys.stdout.reconfigure(encoding="utf-8")
@@ -1031,7 +1036,11 @@ def main(argv=None):
     with open(A.graded, encoding="utf-8") as f:
         graded = json.load(f)
     counts = _parse_counts(A.counts)
-    pcs = pieces_from_graded(graded, A.garment, counts, exclude=set(A.exclude))
+    table = None
+    if A.spec_file:                                           # 들여온 스타일(F10 6단계) — 장수·좌우 펼침표를 파일로 받는다
+        with open(A.spec_file, encoding="utf-8") as f:
+            table = {k: [tuple(x) for x in v] for k, v in json.load(f).items()}
+    pcs = pieces_from_graded(graded, A.garment, counts, spec=table, exclude=set(A.exclude))
     rot = (0,) if A.nap else (0, 180)
     t_all = time.perf_counter()
     if A.quick:
@@ -1040,9 +1049,10 @@ def main(argv=None):
     else:
         r = search_marker(pcs, width_mm=A.width * 10, gap_mm=A.gap, res_mm=A.grid, rotations=rot, allow_flip=A.allow_flip,
                           selvage_mm=A.selvage, seed=A.seed, jobs=A.jobs, time_budget=A.budget, log=print, cache_mb=A.cache_mb)
-    g_ko = "상의" if A.garment == "top" else "하의"
+    g_ko = {"top": "상의", "bottom": "하의"}.get(A.garment, "패턴")
     bundles = sum(counts.values())
-    title = f"한국가스공사 웜업 {g_ko} 마커 · 원단 폭 {A.width:g}cm · " + " ".join(f"{k}×{v}" for k, v in counts.items())
+    head = A.title or f"한국가스공사 웜업 {g_ko} 마커"
+    title = f"{head} · 원단 폭 {A.width:g}cm · " + " ".join(f"{k}×{v}" for k, v in counts.items())
     S = summarize(r, bundles, counts, title)
     S["exclude"] = list(A.exclude); S["nap"] = A.nap
     os.makedirs(A.out, exist_ok=True)

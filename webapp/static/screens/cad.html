@@ -15,6 +15,8 @@
     --cad-s1: var(--blue-600); --cad-s2: var(--red-600); --cad-s3: var(--green-600);
     --cad-s4: var(--amber-600); --cad-s5: #7c3aed; --cad-s6: #0d9488;
     --cad-s7: #db2777; --cad-s8: #92400e; --cad-s9: var(--ink-900);
+    /* 들여온 스타일(13사이즈 — F10 6단계)용 4색 더 */
+    --cad-s10: #0369a1; --cad-s11: #65a30d; --cad-s12: #c2410c; --cad-s13: #475569;
     --cad-cut: var(--ink-900); --cad-seam: var(--blue-600); --cad-int: var(--green-600); --cad-new: var(--amber-600);
     --cad-fill: color-mix(in srgb, var(--blue-bg) 55%, transparent);
     --cad-hi: var(--red-600); --cad-node: var(--stiz-red);
@@ -144,6 +146,21 @@
     .cad-svgwrap { height: 62vh; }
     .acct__btn .name { display: none; }
   }
+  /* ===== 새 스타일 들여오기 · 이름 확인(F10 6단계) ===== */
+  .imp-prog { height: 6px; border-radius: 3px; background: var(--border-subtle); overflow: hidden; margin: 6px 0; }
+  .imp-prog > div { height: 100%; width: 0; background: var(--blue-600); transition: width .3s; }
+  .cf { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 6px 8px; margin-top: 6px; }
+  .cf > summary { cursor: pointer; font: var(--text-sm); color: var(--text-strong); display: flex; gap: 6px; align-items: center; list-style: none; }
+  .cf > summary::-webkit-details-marker { display: none; }
+  .cf.is-done > summary { color: var(--text-muted); }
+  .cf .cf-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber-600); flex: none; }
+  .cf.is-done .cf-dot { background: var(--green-600); }
+  .cf ul { margin: 6px 0 4px; padding-left: 16px; font: var(--text-caption); color: var(--text-muted); }
+  .cf-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: center; font: var(--text-caption); margin-top: 4px; }
+  .cf-grid .input { height: 28px; }
+  .cf-pts { max-height: 220px; overflow: auto; margin-top: 4px; }
+  .cf-pts .input { height: 26px; width: 100%; }
+  .cf .is-changed { outline: 2px solid var(--amber-600); outline-offset: -1px; }
 </style>
 </head>
 <body>
@@ -184,7 +201,10 @@
       <section id="listView" class="stack-4">
         <div class="cad-head">
           <p>공장에 보내는 재단 패턴(재봉선·재단선·노치)을 사이즈별로 봅니다. 두 점을 눌러 길이를 재고, 검산표로 맞물림을 확인하고, DXF·RUL·PDF 를 내려받습니다.</p>
-          <button class="btn btn--primary hidden" id="uploadBtn" type="button"><span class="material-symbols-outlined">upload</span>올리기</button>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn--secondary hidden" id="importBtn" type="button" title="공장 CAD(OptiCad)의 여러 사이즈 .ai 를 올리면 조각·기준점·그레이딩 규칙을 자동으로 읽어 새 스타일을 만듭니다(관리자)"><span class="material-symbols-outlined">add_box</span>새 스타일 들여오기</button>
+            <button class="btn btn--primary hidden" id="uploadBtn" type="button"><span class="material-symbols-outlined">upload</span>올리기</button>
+          </div>
         </div>
         <div id="styleGrid" class="cad-grid"></div>
       </section>
@@ -254,6 +274,7 @@
                   <label class="mk-field">원단 폭(cm)<input class="input" id="mkWidth" type="number" inputmode="decimal" min="50" max="300" step="1" value="150" /></label>
                   <label class="mk-field">조각 간격(mm)<input class="input" id="mkGap" type="number" inputmode="decimal" min="0" max="20" step="0.5" value="3" /></label>
                   <label class="chip" title="결·광택·방향 무늬가 있으면 조각을 180° 돌리지 않습니다"><input type="checkbox" id="mkNap" />원단 결 있음</label>
+                  <label class="mk-field hidden" id="mkSideBox" title="들여온 스타일 — 주문서의 상의 사이즈 칸과 하의 사이즈 칸 중 어느 쪽으로 벌수를 셀지">주문서에서 셀 칸<select class="input" id="mkSide"><option value="top">상의 사이즈</option><option value="bottom">하의 사이즈</option></select></label>
                   <label class="chip hidden" id="mkSearchChip" title="여러 번 깔아 보고 가장 짧은 것을 고릅니다(관리자 · 최대 2분 남짓, 그동안 합성이 기다립니다)"><input type="checkbox" id="mkSearch" />여러 번 깔기</label>
                 </div>
               </div>
@@ -283,6 +304,16 @@
           </div>
 
           <aside class="cad-side">
+            <div class="card hidden" id="confirmCard">
+              <h3><span class="material-symbols-outlined">checklist</span><span id="confirmTitle">이름 확인</span></h3>
+              <div class="cad-card__sub" id="confirmMsg"></div>
+              <div id="confirmList"></div>
+              <div class="grade-row hidden" id="confirmSaveBox" style="margin-top:8px">
+                <input class="input" id="cfNote" maxlength="500" placeholder="메모(선택)" style="flex:1 1 140px;height:30px" />
+                <button class="btn btn--sm btn--primary" type="button" id="cfSave" disabled><span class="material-symbols-outlined">save</span>저장(새 버전)</button>
+              </div>
+              <div class="cad-card__sub" id="cfStatus" role="status" aria-live="polite" style="margin-top:6px"></div>
+            </div>
             <div class="card">
               <h3><span class="material-symbols-outlined">straighten</span>길이 재기 <span class="cad-card__sub" id="measureSize"></span></h3>
               <div id="measureBox" class="cad-card__sub">«길이 재기» 를 켜고 재봉선 위 두 점을 누르세요. 같은 조각이면 재봉선 따라 길이도 잽니다(단위 mm, 그림 확대와 무관).</div>
@@ -355,6 +386,26 @@
   </div>
 </div>
 
+<!-- ===== 새 스타일 들여오기(관리자 · F10 6단계) ===== -->
+<div class="cad-modal hidden" id="impModal">
+  <div class="cad-modal__panel card card--pad" role="dialog" aria-modal="true" aria-labelledby="impTitle">
+    <h2 class="cad-card__name" id="impTitle" style="font-size:17px;margin:0 0 6px">새 스타일 들여오기</h2>
+    <p class="cad-card__sub" style="margin:0 0 14px">OptiCad 에서 «Adobe Export» 로 내보낸 <b>여러 사이즈가 레이어로 든 .ai</b> 하나를 올립니다. 조각·기준점·그레이딩 규칙을 자동으로 읽고, 13사이즈를 규칙으로 다시 만들어 원본과 대조한 뒤 v1 로 저장합니다. 이름은 자동(조각명_P1…)이라 저장 뒤 «이름 확인» 칸에서 고칩니다.</p>
+    <div class="cad-field"><label for="impFile">원본 .ai (50MB 이하)</label><input type="file" id="impFile" accept=".ai,application/postscript,application/illustrator" /></div>
+    <div class="cad-field"><label for="impBase">기준 사이즈</label><select class="input" id="impBase"><option value="">— 파일을 먼저 고르세요 —</option></select></div>
+    <div class="cad-field"><label for="impId">스타일 번호(영문 소문자·숫자·-)</label><input class="input" id="impId" maxlength="64" placeholder="비우면 파일 이름에서" autocomplete="off" /></div>
+    <div class="cad-field"><label for="impName">이름(선택)</label><input class="input" id="impName" maxlength="80" placeholder="비우면 원본의 Style Name" /></div>
+    <div class="cad-field"><label for="impNote">메모(선택)</label><input class="input" id="impNote" maxlength="500" placeholder="예: 공장 1차 패턴" /></div>
+    <div class="imp-prog hidden" id="impProg"><div id="impBar"></div></div>
+    <div class="cad-card__sub" id="impMsg" role="status" aria-live="polite" style="min-height:18px;margin-bottom:10px"></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap">
+      <button class="btn" type="button" id="impCancel">닫기</button>
+      <button class="btn btn--secondary hidden" type="button" id="impOpen"><span class="material-symbols-outlined">open_in_new</span>새 스타일 열기</button>
+      <button class="btn btn--primary" type="button" id="impSubmit">들여오기</button>
+    </div>
+  </div>
+</div>
+
 <div class="toaster" id="toaster"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -394,7 +445,8 @@ const S = {
   vb: null, base: null,                      // 지금 viewBox · 전체 맞춤 viewBox
 };
 const SVGNS = "http://www.w3.org/2000/svg";
-const sizeColor = (sid) => `var(--cad-s${S.view.style.sizes.indexOf(sid) + 1})`;
+const sizeColor = (sid) => `var(--cad-s${Number((Math.max(0, S.view.style.sizes.indexOf(sid)) % 13) + 1)})`;   // 13색(들여온 스타일 13사이즈)
+const isImported = () => !!(S.view && S.view.style && S.view.style.imported);
 const sizeLabel = (sid) => (S.view.style.size_labels || {})[sid] || sid;
 
 // ── view.json 의 납작 정수 배열 → mm 점 ──
@@ -433,8 +485,9 @@ function checkValue(sid, c) {
 
 // ====== 목록 ======
 async function loadMe() {
-  try { const r = await apiFetch("/api/cad/me"); if (r.ok) { const j = await r.json(); S.canUpload = !!j.can_upload; S.rebuildable = j.rebuildable || []; S.markerable = j.markerable || []; } } catch (e) {}
+  try { const r = await apiFetch("/api/cad/me"); if (r.ok) { const j = await r.json(); S.canUpload = !!j.can_upload; S.rebuildable = j.rebuildable || []; S.markerable = j.markerable || []; S.importable = !!j.importable; } } catch (e) {}
   $("#uploadBtn").classList.toggle("hidden", !S.canUpload);
+  $("#importBtn").classList.toggle("hidden", !S.importable);
 }
 async function loadList() {
   const grid = $("#styleGrid");
@@ -450,17 +503,19 @@ async function loadList() {
   }
   if (!S.styles.length) {
     grid.innerHTML = `<div class="card" style="grid-column:1/-1"><div class="empty"><div class="empty__icon"><span class="material-symbols-outlined">content_cut</span></div>
-      <div class="empty__title">올린 재단 패턴이 없습니다</div><div class="empty__desc">관리자가 «올리기» 로 view.json 과 exports.zip 을 올리면 여기에 보입니다.</div></div></div>`;
+      <div class="empty__title">올린 재단 패턴이 없습니다</div><div class="empty__desc">관리자가 «올리기»(view.json + exports.zip) 또는 «새 스타일 들여오기»(OptiCad .ai)를 하면 여기에 보입니다.</div></div></div>`;
     return;
   }
   grid.innerHTML = S.styles.map((s) => {
     const L = s.latest || {}; const b = L.backup;
+    const ib = (s.imported ? '<span class="badge badge--neutral badge--sm">들여옴</span>' : "")          // 들여온 스타일 · 확인 필요 N(화면이 만든 표시)
+      + (s.imported && Number(s.confirm_open) > 0 ? '<span class="badge badge--warn badge--sm">확인 필요 ' + Number(s.confirm_open) + "</span>" : "");
     const bb = !b ? "" : b.ok ? `<span class="badge badge--pass badge--sm">창고 보관</span>` : b.skipped ? `<span class="badge badge--neutral badge--sm">로컬만</span>` : `<span class="badge badge--warn badge--sm">창고 미보관</span>`;
     return `<button type="button" class="card card--interactive cad-card" data-style="${esc(s.id)}" style="text-align:left">
       <div class="cad-card__name">${esc(s.name || s.id)}</div>
       <div class="cad-card__sub">${esc(s.garment || "")} · ${(s.sizes || []).length}벌 · v${esc(L.version)} (${(s.versions || []).length}개 버전)</div>
       <div class="cad-card__sub">${esc((L.uploaded_at || "").replace("T", " "))}${L.uploaded_by ? " · " + esc(L.uploaded_by) : ""}</div>
-      <div class="cad-card__row">${bb}${L.note ? `<span class="cad-card__sub">${esc(L.note)}</span>` : ""}</div>
+      <div class="cad-card__row">${bb}${ib}${L.note ? `<span class="cad-card__sub">${esc(L.note)}</span>` : ""}</div>
     </button>`;
   }).join("");
   grid.querySelectorAll("[data-style]").forEach((el) => el.addEventListener("click", () => openStyle(el.dataset.style)));
@@ -498,13 +553,14 @@ async function openStyle(id, ver) {
   if (S.style !== id || String(S.ver) !== String(ver)) return;   // 기다리는 사이 다른 판을 열었다
   // 버전 고르기에 «공장 보냄» 표시
   $("#verSel").querySelectorAll("option").forEach((o) => { const h = S.history.find((x) => String(x.version) === o.value);
-    o.textContent = "v" + o.value + (h && h.locked ? " · 공장 보냄" : "") + (h && h.regraded_from ? " · 다시 그레이딩" : ""); });
+    o.textContent = "v" + o.value + (h && h.locked ? " · 공장 보냄" : "") + (h && h.regraded_from ? " · 다시 그레이딩" : "") + (h && h.renamed_from ? " · 이름 확인" : ""); });
   $("#rebuildBtn").classList.toggle("hidden", !(S.canUpload && S.rebuildable.includes(id)));
   if (!S.rebuildJob) $("#rebuildStatus").textContent = "";
   syncModeTabs(); renderLock();
   buildAlign(); renderChips(); renderInfo(); renderDownloads(); fitView(); draw(); renderChecks(); renderMeasure();
   try { history.replaceState(null, "", `#${id}/v${ver}`); } catch (e) {}
   loadRules(id, ver);                                       // 그레이딩 규칙표(있으면 «그레이딩» 탭이 보인다) — 그림은 먼저 보인다
+  loadConfirm(id, ver);                                     // 들여온 스타일이면 «이름 확인» 칸(확인 필요 N건)
 }
 
 function renderChips() {
@@ -522,7 +578,7 @@ function renderChips() {
   }));
   $("#measureSize").textContent = "· " + sizeLabel(S.size);
 }
-function setSize(sid) { S.size = sid; S.picks = []; S.pickCheck = null; renderChips(); draw(); renderChecks(); renderMeasure(); renderDownloads(); renderGrade(); }
+function setSize(sid) { S.size = sid; S.picks = []; S.pickCheck = null; renderChips(); draw(); renderChecks(); renderMeasure(); renderDownloads(); renderGrade(); if (isImported()) renderInfo(); }
 
 // 겹쳐 보기 맞춤: 원래 자리(그레이딩 기준점 고정) · 조각 가운데 · 기준점 하나
 function buildAlign() {
@@ -776,12 +832,13 @@ function renderChecks() {
 }
 
 // ====== 내려받기 ======
-const KIND_LABEL = { dxf: "DXF", pdf: "PDF 1:1", ai: ".ai", aama: "AAMA DXF", rul: "RUL 규칙표", allsizes: "전 사이즈 DXF", a4: "A4 분할 PDF" };
+const KIND_LABEL = { dxf: "DXF", pdf: "PDF 1:1", ai: ".ai", aama: "AAMA DXF", rul: "RUL 규칙표", allsizes: "전 사이즈 DXF", a4: "A4 분할 PDF",
+  spec: "명세 JSON", spec_base: "기준 명세", rules: "규칙표 JSON", check: "원본 대조", confirm: "확인 목록", names: "이름 자료", source: "원본 .ai" };
 function renderDownloads() {
   const files = S.view.files || []; const btns = [`<button class="btn btn--sm btn--primary" type="button" data-dl="zip">전체 ZIP</button>`];
-  for (const k of ["dxf", "pdf", "ai"]) if (files.some((f) => f.kind === k && f.size === S.size))
+  for (const k of ["dxf", "pdf", "ai", "spec"]) if (files.some((f) => f.kind === k && f.size === S.size))
     btns.push(`<button class="btn btn--sm btn--secondary" type="button" data-dl="${k}" data-size="${esc(S.size)}">${KIND_LABEL[k]} · ${esc(sizeLabel(S.size))}</button>`);
-  for (const k of ["aama", "rul", "allsizes", "a4"]) if (files.some((f) => f.kind === k))
+  for (const k of ["aama", "rul", "allsizes", "a4", "source", "rules", "spec_base", "confirm"]) if (files.some((f) => f.kind === k))
     btns.push(`<button class="btn btn--sm btn--secondary" type="button" data-dl="${k}">${KIND_LABEL[k]}</button>`);
   $("#dlBox").innerHTML = btns.join("");
   $("#dlBox").querySelectorAll("[data-dl]").forEach((b) => b.addEventListener("click", () => download(b, b.dataset.dl, b.dataset.size)));
@@ -820,19 +877,35 @@ function renderInfo() {
     ${M.rebuilt_from ? `<dt>만든 곳</dt><dd>서버에서 다시 만듦(v${esc(M.rebuilt_from)} 기준)</dd>` : ""}
     ${M.regraded_from ? `<dt>만든 곳</dt><dd>규칙 ${Number(M.rule_changes_count) || 0}칸 바꿔 다시 그레이딩(v${esc(M.regraded_from)} 기준)</dd>` : ""}
     ${M.locked ? `<dt>공장 보냄</dt><dd>${esc((M.locked.locked_at || "").replace("T", " "))}${M.locked.locked_by ? " · " + esc(M.locked.locked_by) : ""}</dd>` : ""}
+    ${M.renamed_from ? `<dt>만든 곳</dt><dd>이름 확인 ${Number(M.name_changes_count) || 0}건(v${esc(M.renamed_from)} 기준)</dd>` : ""}
+    ${importInfo(M)}
     ${run.font_name ? `<dt>PDF 글꼴</dt><dd>${esc(run.font_name)}</dd>` : ""}</dl>
     ${isBuiltin ? `<div class="muted-note">${esc("서버에는 맑은 고딕이 없어 PDF 글자를 Droid Sans Fallback 으로 넣었습니다. 선·치수는 같고 글자 모양만 다릅니다.")}</div>` : ""}
     <div class="muted-note">${esc(src.note || "")}</div>`;
 }
 
+// 들여온 스타일(F10 6단계) — 원본 대조 수치(view.json 사이즈마다 import_check + meta.imported). 규칙으로 다시 만든 사이즈가 원본 CAD 와 얼마나 같은가
+function importInfo(M) {
+  if (!isImported()) return "";
+  const I = (M && M.imported) || {}, ic = (S.view.sizes[S.size] || {}).import_check || {}, mx = I.check_max || {};
+  const okB = (v) => v === true ? '<span class="badge badge--pass badge--sm">통과</span>' : v === false ? '<span class="badge badge--warn badge--sm">다름</span>' : "—";
+  const ok1 = okB(ic.ok), ok2 = okB(I.check_ok);
+  const rnote = M && M.regraded_from ? '<dt></dt><dd class="cad-card__sub" style="text-align:right">규칙을 바꾼 판 — 원본과 다른 것이 정상</dd>' : "";
+  return `<dt>들여온 원본</dt><dd>${esc(I.source_name || ((S.view.source || {}).inputs || [])[0] || "—")}</dd>
+    <dt>기준 사이즈</dt><dd>${esc(S.view.style.base_size || I.base_size || "—")}</dd>
+    <dt>원본 대조 · ${esc(sizeLabel(S.size))}</dt><dd>${ok1} 기준점 ${fmt(ic.max_knot, 3)} · 모양 ${fmt(ic.max_shape, 2)} mm</dd>
+    <dt>원본 대조 · 전체</dt><dd>${ok2} 기준점 ${fmt(mx.knot, 3)} · 재봉선 ${fmt(mx.shape, 2)} · 재단선 ${fmt(mx.cut, 2)} mm</dd>
+    ${rnote}`;
+}
+
 // ====== 단추들 ======
 function syncMode() {
   syncModeTabs();
-  $("#layerTools").classList.toggle("hidden", S.mode === "overlay"); renderChips(); fitView(); draw(); renderGrade();
+  $("#layerTools").classList.toggle("hidden", S.mode === "overlay"); renderChips(); fitView(); draw(); renderGrade(); if (C.data || isImported()) renderConfirm();
 }
 function syncModeTabs() {
   // 마커 탭 — 서버에 원본이 있는 스타일만(로그인 직원 누구나). 마커일 때는 그림 자리를 입력·결과 칸으로 바꾼다
-  const mkOk = !!S.view && (S.markerable || []).includes(S.style);
+  const mkOk = !!S.view && ((S.markerable || []).includes(S.style) || isImported());   // 들여온 스타일은 그 버전 명세 묶음으로 깐다
   $("#markerTab").classList.toggle("hidden", !mkOk);
   if (S.mode === "marker" && !mkOk) S.mode = "one";
   $("#modeSeg").querySelectorAll("button").forEach((x) => x.classList.toggle("is-active", x.dataset.mode === S.mode));
@@ -1027,7 +1100,8 @@ function renderGrade() {
   $("#gradeMsg").innerHTML = !G.rules0 ? esc(info.reason || "이 판은 그레이딩 규칙을 읽을 수 없습니다.")
     : lock ? `<span class="badge badge--neutral badge--sm">공장 보냄</span> ${esc((lock.locked_at || "").replace("T", " "))}${lock.locked_by ? " · " + esc(lock.locked_by) : ""} — 이 판은 고칠 수 없습니다(보기만).`
     : `기준점(동그라미)을 끌거나 아래 숫자를 바꾼 뒤 «미리보기». 기준 사이즈 ${esc(info.base_size)} 는 움직이지 않습니다.` +
-      (info.source === "view" ? `<div class="muted-note">이 판의 규칙은 그림에서 읽었습니다(0.01mm 단위).</div>` : "");
+      (info.source === "view" ? `<div class="muted-note">이 판의 규칙은 그림에서 읽었습니다(0.01mm 단위).</div>` : "") +
+      (info.group === "imported" ? `<div class="muted-note">들여온 스타일 — 재봉선 기준점을 옮기면 재단선(시접)이 같은 양만큼 따라갑니다. 저장 조건은 «재생성 검산» 전부 초록.</div>` : "");
   $("#spreadRow").classList.toggle("hidden", !ed);
   $("#gradeActions").classList.toggle("hidden", !ed);
   // 고른 기준점의 사이즈별 규칙 표
@@ -1059,11 +1133,14 @@ function renderGrade() {
     const fresh = previewFresh(), bad = sizes.reduce((t, s) => t + m.sizes[s].filter((r) => r.ok === false).length, 0);
     const badge = m.ok ? `<span class="badge badge--pass badge--sm">전부 초록</span>` : `<span class="badge badge--fail badge--sm">빨강 ${Number(bad)}칸</span>`;
     const rows = def.map((d) => `<th class="num" title="허용 ±${Number(d.tol)}mm">${esc(d.label)}</th>`).join("");
-    $("#meshBox").innerHTML = `<h3 style="margin-top:12px">맞물림 검산 ${badge}</h3>
+    const imp = info.group === "imported", ic = G.preview.importCheck || {}, icm = ic.max || {};
+    $("#meshBox").innerHTML = `<h3 style="margin-top:12px">${esc(imp ? "재생성 검산" : "맞물림 검산")} ${badge}</h3>
       <table class="ctable mesh"><thead><tr><th>사이즈</th>${rows}</tr></thead><tbody>` +
       sizes.map((s) => `<tr class="${esc(s === S.size ? "is-pick" : "")}"><td>${esc(sizeLabel(s))}</td>` + m.sizes[s].map((r) =>
         `<td class="num ${esc(r.ok == null ? "na" : r.ok ? "ok" : "bad")}" title="목표 ${fmt(r.target, 2)} ± ${Number(r.tol)}">${fmt(r.value, 2)}</td>`).join("") + `</tr>`).join("") +
-      `</tbody></table><div class="muted-note">값 = 맞물리는 두 재봉선의 길이 차(mm). 허용 안이면 초록.${esc(fresh ? "" : " ⚠ 미리보기 뒤에 규칙을 또 바꿨습니다 — 미리보기를 다시 누르세요.")}</div>`;
+      `</tbody></table><div class="muted-note">${esc(imp ? "값 = 문제 수 또는 어긋남(mm) — 기준 명세 + 규칙표로 다시 만든 사이즈가 옷본으로 성립하는가. 0(허용 안)이면 초록."
+        : "값 = 맞물리는 두 재봉선의 길이 차(mm). 허용 안이면 초록.")}${esc(fresh ? "" : " ⚠ 미리보기 뒤에 규칙을 또 바꿨습니다 — 미리보기를 다시 누르세요.")}</div>` +
+      (imp ? `<div class="muted-note">원본 대조(참고): 기준점 최대 ${fmt(icm.knot, 2)}mm · 재봉선 ${fmt(icm.shape, 2)}mm — 규칙을 바꾼 만큼 원본과 다른 것이 정상입니다.</div>` : "");
     $("#gSaveBox").classList.toggle("hidden", !ed);
     $("#gSave").disabled = G.busy || !fresh || !m.ok || !n;
     $("#gSave").title = !m.ok ? "빨강 칸이 있으면 저장할 수 없습니다" : !fresh ? "미리보기를 다시 누르세요" : "새 버전으로 저장(옛 버전은 그대로)";
@@ -1098,9 +1175,11 @@ $("#gPreview").addEventListener("click", async () => {
     const pv = await vr.json();
     if (!onStyle(id, ver)) return;
     if (!G.viewBase) G.viewBase = S.view;               // 처음 미리보기 — 원래 그림을 챙겨 둔다
-    G.preview = { view: pv, mesh: j.result.mesh, rules: j.result.rules, key, job: job.job_id };
+    G.preview = { view: pv, mesh: j.result.mesh, rules: j.result.rules, key, job: job.job_id, importCheck: j.result.import_check };
     setPreviewShown(true);
-    st.textContent = (j.result.mesh && j.result.mesh.ok ? "미리보기 — 맞물림 전부 초록. 저장할 수 있습니다." : "미리보기 — 빨강 칸이 있습니다. 맞물리는 쪽 기준점도 옮겨 보세요.")
+    const impd = !!(j.result && j.result.imported);              // 들여온 스타일 — 맞물림 대신 «재생성 검산»
+    st.textContent = (j.result.mesh && j.result.mesh.ok ? `미리보기 — ${esc(impd ? "재생성 검산" : "맞물림")} 전부 초록. 저장할 수 있습니다.`
+                      : impd ? "미리보기 — 빨강 칸이 있습니다. 옮긴 기준점이 너무 멀리 갔거나 재봉선이 꼬였습니다." : "미리보기 — 빨강 칸이 있습니다. 맞물리는 쪽 기준점도 옮겨 보세요.")
       + (j.result.wall_s ? " (" + j.result.wall_s + "초)" : "");
   } catch (e) { if (!/로그인/.test(String(e.message))) st.textContent = "진행 확인 실패: " + e.message; }
   finally { G.busy = false; renderGrade(); }
@@ -1108,7 +1187,8 @@ $("#gPreview").addEventListener("click", async () => {
 $("#gSave").addEventListener("click", async () => {
   if (!previewFresh() || !G.preview.mesh.ok || G.busy) return;
   const [ch, n] = changes(); const id = S.style, ver = S.ver, st = $("#gStatus");
-  if (!confirm(`규칙 ${Number(n)}칸을 바꿔 새 버전으로 저장할까요?\n전 사이즈 DXF·PDF·AAMA 를 다시 만들어 1분 남짓 걸립니다. v${ver} 은 그대로 남습니다.`)) return;
+  const what = (G.info && G.info.group === "imported") ? "전 사이즈 명세·묶음을 다시 만들어 10초 남짓" : "전 사이즈 DXF·PDF·AAMA 를 다시 만들어 1분 남짓";
+  if (!confirm(`규칙 ${Number(n)}칸을 바꿔 새 버전으로 저장할까요?\n${esc(what)} 걸립니다. v${ver} 은 그대로 남습니다.`)) return;
   G.busy = true; renderGrade(); st.textContent = "저장 요청 중…";
   try {
     const r = await apiFetch(`/api/cad/styles/${encodeURIComponent(id)}/versions`, { method: "POST", headers: { "Content-Type": "application/json" },
@@ -1187,6 +1267,180 @@ $("#upSubmit").addEventListener("click", async () => {
   finally { $("#upSubmit").disabled = false; }
 });
 
+// ====== 새 스타일 들여오기(관리자 · F10 6단계) ======
+//   파일을 고르면 브라우저가 레이어 이름 줄(«(M) Ln»)만 훑어 «기준 사이즈» 고르기를 채운다 — 큰 파일을 두 번 올리지 않게.
+//   정본 판정은 서버 엔진이 다시 한다(머리·사이즈·크기·메모리 어림). 진행률은 작업 번호로 묻는다(약 30초).
+const IMP = { job: null, sid: null, ver: null };
+const IMP_SIZE_RE = /^(\d{0,2}X{0,4}[SML]|X{1,4}[SL]|F|FREE|\d{1,3}(호)?)$/i;     // 서버 IMPORT_SIZE_RE 와 같다
+const SIZES13 = ["5XS", "4XS", "3XS", "2XS", "XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL"];
+const IMP_MAX = 50 * 1024 * 1024;
+const impModal = $("#impModal");
+function impMsg(t) { $("#impMsg").textContent = t || ""; }
+$("#importBtn").addEventListener("click", () => {
+  if (!IMP.job) { impMsg(""); $("#impProg").classList.add("hidden"); $("#impOpen").classList.add("hidden"); }
+  impModal.classList.remove("hidden");
+});
+$("#impCancel").addEventListener("click", () => impModal.classList.add("hidden"));       // 닫아도 서버 작업은 계속된다
+impModal.addEventListener("click", (e) => { if (e.target === impModal) impModal.classList.add("hidden"); });
+$("#impFile").addEventListener("change", async () => {
+  const f = $("#impFile").files[0], sel = $("#impBase");
+  sel.innerHTML = `<option value="">— 파일을 먼저 고르세요 —</option>`;
+  $("#impOpen").classList.add("hidden");
+  if (!f) { impMsg(""); return; }
+  if (f.size > IMP_MAX) { impMsg(`파일이 너무 큽니다(${fmt(f.size / 2 ** 20, 1)}MB — 50MB 이하).`); return; }
+  let txt = "";
+  try { txt = await f.text(); } catch (e) { impMsg("파일을 읽지 못했습니다."); return; }
+  if (txt.startsWith("%PDF")) { impMsg("PDF 형식 .ai 는 아직 못 읽습니다 — OptiCad 에서 «Adobe Export»(PostScript) 로 내보내 주세요."); return; }
+  if (!txt.replace(/^﻿/, "").startsWith("%!PS-Adobe")) { impMsg("OptiCad «Adobe Export» .ai(PostScript) 파일이 아닙니다."); return; }
+  const re = /^[ \t]*\(([^)\r\n]{1,40})\)[ \t]+Ln[ \t]*\r?$/gm, sizes = []; let m;
+  while ((m = re.exec(txt))) { const nm = m[1].trim(); if (!["CUT", "SEW", "DRAW"].includes(nm) && IMP_SIZE_RE.test(nm) && !sizes.includes(nm)) sizes.push(nm); if (sizes.length > 30) break; }
+  if (sizes.length && sizes.every((s) => SIZES13.includes(s))) sizes.sort((a, b) => SIZES13.indexOf(a) - SIZES13.indexOf(b));
+  if (sizes.length < 2) { impMsg(sizes.length ? `사이즈 레이어가 하나(${esc(sizes[0])})뿐입니다 — 여러 사이즈가 든 파일이어야 규칙을 읽을 수 있습니다.` : "사이즈 레이어를 찾지 못했습니다."); return; }
+  const pick = sizes.includes("M") ? "M" : sizes[Math.floor(sizes.length / 2)];
+  sel.innerHTML = sizes.map((s) => `<option value="${esc(s)}" ${esc(s === pick ? "selected" : "")}>${esc(s)}</option>`).join("");
+  const auto = f.name.replace(/\.[^.]+$/, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64).replace(/-+$/, "");
+  $("#impId").placeholder = /^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/.test(auto) ? "비우면 «" + auto + "»" : "비우면 style-(지문 8자리)";
+  impMsg(`사이즈 ${Number(sizes.length)}개: ${esc(sizes.join(" "))} · ${fmt(f.size / 1024, 0)}KB`);
+});
+$("#impSubmit").addEventListener("click", async () => {
+  if (IMP.job) return;
+  const f = $("#impFile").files[0], base = $("#impBase").value, id = $("#impId").value.trim().toLowerCase();
+  if (!f) { impMsg("원본 .ai 파일을 고르세요."); return; }
+  if (!base) { impMsg("기준 사이즈를 고르세요(파일을 다시 골라 보세요)."); return; }
+  if (id && !/^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/.test(id)) { impMsg("스타일 번호는 영문 소문자·숫자·- 만(3~64자, 끝은 영문·숫자)."); return; }
+  const fd = new FormData(); fd.append("source", f); fd.append("base_size", base); fd.append("style_id", id);
+  fd.append("name", $("#impName").value || ""); fd.append("note", $("#impNote").value || "");
+  const btn = $("#impSubmit"); btn.disabled = true; $("#impOpen").classList.add("hidden");
+  $("#impProg").classList.remove("hidden"); $("#impBar").style.width = "2%"; impMsg("올리는 중…");
+  try {
+    const r = await apiFetch("/api/cad/styles/import", { method: "POST", body: fd });
+    if (r.status !== 202) { impMsg((r.status === 403 ? "관리자만 들여올 수 있습니다. " : "") + (await apiError(r) || ("서버 응답 " + r.status))); $("#impProg").classList.add("hidden"); return; }
+    const job = await r.json(); IMP.job = job.job_id; IMP.sid = job.style_id; IMP.ver = null;
+    const t0 = Date.now();
+    const j = await pollJob(job.job_id, (p) => {
+      impMsg(`${esc(p.stage === "queued" && p.ahead ? "앞 작업 " + Number(p.ahead) + "건 기다림" : (p.stage_ko || "진행 중"))} · ${Number(pctOf(p))}% · ${Number(Math.round((Date.now() - t0) / 1000))}초`);
+      $("#impBar").style.width = Math.max(4, pctOf(p)) + "%";
+    }, 25 * 60 * 1000);
+    if (j.status === "error") { impMsg("실패: " + (j.error || "")); toast("fail", "error", "들여오기 실패", j.error || ""); return; }
+    const R = j.result || {}, b = R.backup || {}; IMP.ver = R.version; $("#impBar").style.width = "100%";
+    impMsg(`«${esc(R.style_id)}» v${Number(R.version)} 를 만들었어요 · 조각 ${Number(R.pieces) || 0}개 · 사이즈 ${Number((R.sizes || []).length)}개 · 확인 필요 ${Number(R.confirm_open) || 0}건`
+      + (R.peak_rss_mb ? ` · 일꾼 최고 ${fmt(R.peak_rss_mb, 0)}MB` : "") + (R.wall_s ? ` · ${fmt(R.wall_s, 0)}초` : ""));
+    $("#impOpen").classList.remove("hidden");
+    toast(b.ok || b.skipped ? "pass" : "warn", "check_circle", `${esc(R.style_id)} v${Number(R.version)} 들여옴`, b.ok ? "창고에 보관하고 되읽어 확인했습니다." : (b.skipped ? "로컬에만 저장(창고 미설정)" : "창고 보관을 확인해 주세요"));
+    await loadList();
+  } catch (e) { if (!/로그인/.test(String(e.message))) impMsg("진행 확인 실패: " + e.message); }
+  finally { IMP.job = null; btn.disabled = false; }
+});
+$("#impOpen").addEventListener("click", async () => { impModal.classList.add("hidden"); if (IMP.sid) { CACHE.clear(); await openStyle(IMP.sid, IMP.ver || "latest"); } });
+
+// ====== 이름 확인(들여온 스타일 · F10 6단계) — 조각 이름·영문·장수·좌우·기준점 이름·확인함 → 저장 = 새 버전(모양 그대로) ======
+const C = { data: null, edit: {}, busy: false, open: new Set() };
+const KIND_KO_JS = { turn: "꺾인 점", notch: "노치", curve: "곡선 점", end: "선 끝", anchor: "닻" };
+function cfReset() { C.data = null; C.edit = {}; C.open = new Set(); $("#confirmCard").classList.add("hidden"); $("#cfStatus").textContent = ""; }
+async function loadConfirm(id, ver) {
+  cfReset();
+  if (!isImported()) return;
+  let j = null;
+  try { const r = await apiFetch(`/api/cad/styles/${encodeURIComponent(id)}/v/${encodeURIComponent(ver)}/confirm`); if (r.ok) j = await r.json(); } catch (e) {}
+  if (!onStyle(id, ver)) return;
+  C.data = j;
+  if (j) { const k = (j.pieces || []).findIndex((p) => !p.confirmed); if (k >= 0) C.open.add(k); }
+  renderConfirm();
+}
+const cfP = (k) => C.data.pieces[k];
+function cfVal(k, key) { const e = C.edit[k] || {}; return key in e ? e[key] : cfP(k)[key]; }
+// 바뀐 칸만 — 서버에 보내는 {지금 조각 이름: {name, en_name, qty, mirror, points, confirmed}}
+function cfPayload() {
+  const out = {};
+  (C.data ? C.data.pieces : []).forEach((p, k) => {
+    const e = C.edit[k]; if (!e) return; const o = {};
+    if (e.name != null && e.name.trim() && e.name.trim() !== p.piece) o.name = e.name.trim();
+    if (e.en_name != null && (e.en_name.trim().toUpperCase() || null) !== (p.en_name || null)) o.en_name = e.en_name.trim();
+    if (e.qty != null && Number(e.qty) !== Number(p.qty || 1)) o.qty = Number(e.qty);
+    if (e.mirror != null && e.mirror !== (p.mirror !== false)) o.mirror = e.mirror;
+    if (e.confirmed != null && e.confirmed !== !!p.confirmed) o.confirmed = e.confirmed;
+    const pts = {}; for (const [old, nn] of Object.entries(e.points || {})) if (String(nn).trim() && String(nn).trim() !== old) pts[old] = String(nn).trim();
+    if (Object.keys(pts).length) o.points = pts;
+    if (Object.keys(o).length) out[p.piece] = o;
+  });
+  return out;
+}
+function cfSyncSave() {
+  const n = Object.keys(cfPayload()).length, ed = !!(C.data && C.data.editable) && !C.busy;
+  $("#cfSave").disabled = !ed || !n; $("#cfSave").title = n ? `조각 ${Number(n)}개 바뀜 — 새 버전으로 저장` : "바뀐 것이 없습니다";
+}
+function renderConfirm() {
+  const card = $("#confirmCard"), D = C.data;
+  card.classList.toggle("hidden", !isImported() || S.mode === "grade");   // 그레이딩 중엔 규칙 칸이 위에 오게 접어 둔다
+  if (!isImported()) return;
+  if (!D) { $("#confirmTitle").textContent = "이름 확인"; $("#confirmMsg").textContent = "확인 목록을 읽지 못했습니다."; $("#confirmList").innerHTML = ""; $("#confirmSaveBox").classList.add("hidden"); return; }
+  const ed = !!D.editable && !C.busy, dis = ed ? "" : "disabled";
+  $("#confirmTitle").textContent = D.open ? `확인 필요 ${Number(D.open)}건` : "이름 확인 끝";
+  $("#confirmMsg").innerHTML = (D.locked ? `<span class="badge badge--neutral badge--sm">공장 보냄</span> 이 판은 고칠 수 없습니다(보기만). ` : "")
+    + esc(`조각 ${Number(D.total)}개 중 ${Number(D.total) - Number(D.open)}개 확인함. 자동 이름(조각명_P1…)을 맞는 이름으로 고치고 «확인함» 을 켠 뒤 저장하면 새 버전이 됩니다(모양은 그대로).`);
+  $("#confirmList").innerHTML = D.pieces.map((p, k) => {
+    const done = !!cfVal(k, "confirmed"), q = Number(cfVal(k, "qty") || 1), e = C.edit[k] || {};
+    const notes = (p.notes || []).length ? "<ul>" + p.notes.map((t) => "<li>" + esc(t) + "</li>").join("") + "</ul>" : "";
+    const was = { name: p.piece, en_name: p.en_name || "", qty: Number(p.qty || 1), mirror: p.mirror !== false, confirmed: !!p.confirmed };
+    const ch = (key) => (key in e && String(e[key]).trim().toUpperCase() !== String(was[key]).toUpperCase()) ? " is-changed" : "";
+    const pts = (p.points || []).map((d) => { const v = (e.points || {})[d.name];
+      return `<tr><td><input class="input${esc(v != null && v !== d.name ? " is-changed" : "")}" data-cf="${k}" data-cf-pt="${esc(d.name)}" maxlength="30" value="${esc(v != null ? v : d.name)}" ${esc(dis)} /></td>`
+        + `<td>${esc(KIND_KO_JS[d.kind] || d.kind)}</td><td>${esc(d.where)}</td></tr>`; }).join("");
+    return `<details class="cf${esc(done ? " is-done" : "")}" data-cf-k="${k}" ${esc(C.open.has(k) ? "open" : "")}>
+      <summary><span class="cf-dot"></span>${esc(cfVal(k, "name") || p.piece)}<span class="cad-card__sub">· ${Number(q)}장 · 기준점 ${Number((p.points || []).length)}개${esc(done ? " · 확인함" : "")}</span></summary>
+      ${notes}
+      <div class="cf-grid">
+        <label>조각 이름</label><input class="input${esc(ch("name"))}" data-cf="${k}" data-cf-f="name" maxlength="40" value="${esc(cfVal(k, "name") || p.piece)}" ${esc(dis)} />
+        <label>영문(DXF)</label><input class="input${esc(ch("en_name"))}" data-cf="${k}" data-cf-f="en_name" maxlength="30" placeholder="예: SLEEVE" value="${esc(cfVal(k, "en_name") || "")}" ${esc(dis)} />
+        <label>장수</label><input class="input${esc(ch("qty"))}" type="number" min="1" max="20" step="1" data-cf="${k}" data-cf-f="qty" value="${Number(q)}" ${esc(dis)} />
+        <label>좌우</label><label class="chip${esc(ch("mirror"))}" title="2장 이상일 때 — 짝수 번째를 좌우 뒤집어 한 쌍(R/L)으로 자릅니다"><input type="checkbox" data-cf="${k}" data-cf-f="mirror" ${esc(cfVal(k, "mirror") !== false ? "checked" : "")} ${esc(q < 2 || !ed ? "disabled" : "")} />한 쌍(R/L 뒤집음)</label>
+        <label>확인</label><label class="chip${esc(ch("confirmed"))}"><input type="checkbox" data-cf="${k}" data-cf-f="confirmed" ${esc(done ? "checked" : "")} ${esc(dis)} />확인함</label>
+      </div>
+      <div class="grade-row"><button class="btn btn--sm btn--ghost" type="button" data-cf-show="${k}"><span class="material-symbols-outlined">visibility</span>그림에서 보기</button></div>
+      <details><summary class="cad-card__sub" style="cursor:pointer">기준점 이름 ${Number((p.points || []).length)}개</summary>
+        <div class="cf-pts"><table class="ctable"><thead><tr><th>이름</th><th>종류</th><th>자리</th></tr></thead><tbody>${pts}</tbody></table></div></details>
+    </details>`;
+  }).join("");
+  $("#confirmList").querySelectorAll("details[data-cf-k]").forEach((d) => d.addEventListener("toggle", () => { const k = +d.dataset.cfK; d.open ? C.open.add(k) : C.open.delete(k); }));
+  $("#confirmList").querySelectorAll("input[data-cf]").forEach((inp) => {
+    const k = +inp.dataset.cf, f = inp.dataset.cfF, pt = inp.dataset.cfPt;
+    const apply = () => {
+      const e = C.edit[k] = C.edit[k] || {};
+      if (pt != null) { (e.points = e.points || {})[pt] = inp.value; inp.classList.toggle("is-changed", inp.value.trim() !== pt); cfSyncSave(); return; }
+      e[f] = inp.type === "checkbox" ? inp.checked : f === "qty" ? Math.max(1, Math.min(20, Math.round(Number(inp.value) || 1))) : inp.value;
+      if (inp.type === "checkbox" || f === "qty") renderConfirm();
+      else { const was = f === "name" ? cfP(k).piece : (cfP(k).en_name || ""); inp.classList.toggle("is-changed", inp.value.trim().toUpperCase() !== String(was).toUpperCase()); cfSyncSave(); }
+    };
+    inp.addEventListener(inp.type === "checkbox" || f === "qty" ? "change" : "input", apply);
+  });
+  $("#confirmList").querySelectorAll("[data-cf-show]").forEach((b) => b.addEventListener("click", () => {   // 그 조각만 그림에 — 기준점 이름표가 보인다
+    const nm = cfP(+b.dataset.cfShow).piece; if (!S.view.style.pieces.includes(nm)) return;
+    S.piece = nm; $("#pieceSel").value = nm; if (S.mode !== "one") { S.mode = "one"; syncMode(); }
+    S.picks = []; buildAlign(); fitView(); draw(); renderMeasure();
+  }));
+  $("#confirmSaveBox").classList.toggle("hidden", !D.editable);
+  cfSyncSave();
+}
+$("#cfSave").addEventListener("click", async () => {
+  const pcs = cfPayload(), n = Object.keys(pcs).length; if (!n || C.busy) return;
+  const id = S.style, ver = S.ver, st = $("#cfStatus");
+  if (!confirm(`조각 ${Number(n)}개의 이름·장수·확인을 새 버전으로 저장할까요?\n모양은 그대로이고(서버가 점 하나까지 견줍니다) v${ver} 은 그대로 남습니다.`)) return;
+  C.busy = true; renderConfirm(); st.textContent = "저장 요청 중…";
+  try {
+    const r = await apiFetch(`/api/cad/styles/${encodeURIComponent(id)}/names`, { method: "POST", headers: { "Content-Type": "application/json" },
+                                                                               body: JSON.stringify({ base_version: Number(ver), pieces: pcs, note: $("#cfNote").value || "" }) });
+    if (r.status !== 202) { st.textContent = "시작 못 함: " + (await apiError(r) || ("서버 응답 " + r.status)); return; }
+    const job = await r.json();
+    const j = await pollJob(job.job_id, (p) => { if (onStyle(id, ver)) st.textContent = "저장 · " + (p.stage_ko || "진행 중") + " · " + pctOf(p) + "%"; }, 10 * 60 * 1000);
+    if (j.status === "error") { if (onStyle(id, ver)) st.textContent = "실패: " + (j.error || ""); toast("fail", "error", "저장 실패", j.error || ""); return; }
+    const nv = j.result.version, b = j.result.backup || {};
+    toast(b.ok || b.skipped ? "pass" : "warn", "check_circle", "v" + nv + " 로 저장했어요", `확인 필요 ${Number(j.result.confirm_open) || 0}건 남음` + (b.ok ? " · 창고 보관 확인" : ""));
+    await loadList();
+    if (onStyle(id, ver)) { CACHE.clear(); await openStyle(id, nv); }
+  } catch (e) { if (!/로그인/.test(String(e.message)) && onStyle(id, ver)) st.textContent = "진행 확인 실패: " + e.message; }
+  finally { C.busy = false; if (C.data) renderConfirm(); }
+});
+
 // ── 계정(이메일 표시 · 누르면 로그아웃) ──
 let acctSupa = null;
 (async function initAccount() {
@@ -1209,10 +1463,11 @@ $("#acctBtn").addEventListener("click", async () => {
 const GRADE_SIZES = ["S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL"];
 const MK = { key: null, job: null, res: null, img: null, note: "" };
 const mkKey = () => S.style + "|" + S.ver;
-const mkGroupKo = () => (S.view && S.view.style.group === "bottom") ? "하의" : "상의";
+const mkGroupKo = () => isImported() ? (($("#mkSide").value === "bottom") ? "하의 칸" : "상의 칸") + "으로 센 " + (S.view.style.name || "패턴")
+  : (S.view && S.view.style.group === "bottom") ? "하의" : "상의";
 function mkReset() {
   if (MK.img) URL.revokeObjectURL(MK.img);
-  MK.key = S.view ? mkKey() : null; MK.res = null; MK.img = null; MK.note = "";
+  MK.key = S.view ? mkKey() : null; MK.res = null; MK.img = null; MK.note = ""; MK.sideSet = false;
   if (!MK.job) $("#mkStatus").textContent = "";
   $("#mkBar").style.width = "0%"; $("#mkProg").classList.add("hidden");
   $("#mkCounts").innerHTML = ""; $("#mkResult").innerHTML = "";
@@ -1222,8 +1477,10 @@ function renderMarker() {
   if (MK.key !== mkKey()) mkReset();
   $("#mkGroup").textContent = mkGroupKo();
   $("#mkSearchChip").classList.toggle("hidden", !S.canUpload);   // 여러 번 깔기는 관리자만 — 직원은 빠르게(서버 기본)
+  $("#mkSideBox").classList.toggle("hidden", !isImported());     // 들여온 스타일 — 주문서의 상의/하의 칸 중 어느 쪽으로 셀지
+  if (isImported() && !MK.sideSet) { MK.sideSet = true; $("#mkSide").value = /pants|bottom|팬츠|하의|바지/i.test(S.style + " " + (S.view.style.name || "")) ? "bottom" : "top"; }
   if (!$("#mkCounts").children.length) {                    // 사이즈 칸 — 그 버전 사이즈(S~5XL)만. 처음엔 모두 1벌
-    $("#mkCounts").innerHTML = S.view.style.sizes.filter((s) => GRADE_SIZES.includes(s)).map((s) =>
+    $("#mkCounts").innerHTML = S.view.style.sizes.filter((s) => isImported() || GRADE_SIZES.includes(s)).map((s) =>   // 들여온 스타일 = 그 버전 사이즈 전부(13개)
       `<label class="mk-cnt"><span>${esc(s)}</span><input class="input" type="number" inputmode="numeric" min="0" max="200" step="1" value="1" data-mk-size="${esc(s)}" aria-label="${esc(s)} 벌수" /></label>`).join("");
     $("#mkCounts").querySelectorAll("input").forEach((i) => i.addEventListener("input", mkTotal));
     $("#mkEx").innerHTML = S.view.style.pieces.map((n) => `<label class="chip"><input type="checkbox" data-mk-ex="${esc(n)}" />${esc(n)}</label>`).join("");
@@ -1242,6 +1499,7 @@ function mkTotal() {
 }
 function mkSetAll(v) { $("#mkCounts").querySelectorAll("[data-mk-size]").forEach((i) => { i.value = v; }); mkTotal(); }
 $("#mkAll1").addEventListener("click", () => mkSetAll(1));
+$("#mkSide").addEventListener("change", () => { $("#mkGroup").textContent = mkGroupKo(); });
 $("#mkClear").addEventListener("click", () => mkSetAll(0));
 $("#mkOrderBtn").addEventListener("click", () => $("#mkOrder").click());
 $("#mkOrder").addEventListener("change", async (e) => {
@@ -1251,7 +1509,7 @@ $("#mkOrder").addEventListener("change", async (e) => {
   try {
     const r = await apiFetch("/api/cad/order/counts", { method: "POST", body: fd });
     if (!r.ok) { const why = await apiError(r) || ("서버 응답 " + r.status); $("#mkOrderNote").textContent = "못 읽음: " + why; toast("fail", "error", "주문서를 못 읽었어요", why); return; }
-    const j = await r.json(); const g = S.view.style.group === "bottom" ? "bottom" : "top"; const c = j[g] || {};
+    const j = await r.json(); const g = isImported() ? $("#mkSide").value : (S.view.style.group === "bottom" ? "bottom" : "top"); const c = j[g] || {};
     const here = new Set([...$("#mkCounts").querySelectorAll("[data-mk-size]")].map((i) => i.dataset.mkSize));
     $("#mkCounts").querySelectorAll("[data-mk-size]").forEach((i) => { i.value = c[i.dataset.mkSize] || 0; });
     const extra = Object.keys(c).filter((s) => !here.has(s));    // 이 스타일에 없는 사이즈(XS·아동 호수 등) — 빠진다고 알린다
@@ -1345,6 +1603,7 @@ function renderMarkerResult() {
 
 // ── 시험·자동 확인용 창구(화면 동작에는 쓰지 않는다) ──
 window.CAD = { state: S, grade: G, applyDrag, changes, handlePos, renderGrade, drawGrade, renderInfo, measureNodes, checkValue, open: openStyle, setSize,
+  confirm: C, cfPayload, renderConfirm, marker: MK,
   setMode: (m) => { S.mode = m; syncMode(); }, pickAt: (sid, piece, node) => { const o = P(sid, piece); const i = o.raw.nodes[node];
     return { piece, idx: i, x: o.seam[i][0], y: o.seam[i][1], s: o.cum[i], name: node }; },
   measurePicks: (a, b) => { S.picks = [a, b]; drawHi(); renderMeasure(); return measurement(); } };

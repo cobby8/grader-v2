@@ -32,6 +32,13 @@
 #              python tools/pattern-engine/service.py marker --work <폴더> --graded graded.json --request-file 요청.json
 #     배치 계산은 marker.main(명령줄과 «같은 함수») 을 그대로 부른다 → 같은 입력이면 명령줄 결과와 길이·조각 자리가 같다.
 #     서버 기본: 일꾼 수 1 · FFT 기억 100MB · 탐색 한도 120초(MARKER_SERVER) — Render 512MB 안
+#   F10 6단계(새 스타일 들여오기 — OptiCad 여러 사이즈 .ai):
+#     서버:    service.import_style(work, 원본.ai, "M", "std-warmup-top", on_step=…)   ← 일꾼(약 30초 · 최고 약 140MB) → view.json·exports.zip·확인 목록
+#              service.restyle(work, 그 버전 exports.zip, rule_changes=…|names=…)      ← 이름 고치기 · 규칙 바꿔 다시 그레이딩(약 6초)
+#              service.marker(work, "imported", {…}, spec_zip=그 버전 exports.zip, spec_files={경로: 지문}, …)   ← 명세 묶음으로 마커
+#     명령줄:  python tools/pattern-engine/service.py import --work <폴더> --src 원본.ai --base M --style-id std-warmup-top
+#              python tools/pattern-engine/service.py restyle --work <폴더> --zip exports.zip [--changes-file 표.json] [--names-file 이름.json]
+#     입장 판정(admit_import): 파일 크기로 메모리·시간을 어림(IMPORT_FIT 실측) — 512MB 상자 안 · 일꾼 안 시계(--max-seconds)로 원본 읽기 상한
 #   🚫 쇼핑몰 운영 DB·드라이브를 읽지도 쓰지도 않는다. 결과는 <work> 안에만 생긴다(주문 명단은 부르는 쪽이 넘긴다).
 import sys, os, re, json, math, time, shutil, argparse, datetime, contextlib, subprocess, threading, runpy, hashlib
 
@@ -130,6 +137,26 @@ MARKER_FIT = {
 MARKER_VIEW_TOL_MM = 0.05                                   # «다시 만든 모양 = 그 버전 모양» 허용 차(view.json 점 줄이기 오차와 같다)
 MARKER_FILES = {"json": "marker.json", "pdf": "marker.pdf", "dxf": "marker.dxf", "png": "marker.png"}   # 결과 파일(영문 이름)
 _SIZE_ALIAS = {"XXL": "2XL", "XXXL": "3XL", "XXXXL": "4XL", "XXXXXL": "5XL", "2X": "2XL", "3X": "3XL", "4X": "4XL", "5X": "5XL"}
+
+# ════════ 새 스타일 들여오기(F10 6단계) — OptiCad .ai → 들여온 스타일(style_import) ════════
+IMPORT_STEPS = ["read", "pieces", "verify", "bundle"]       # 원본 읽기 · 조각마다 규칙 읽기(대부분의 시간) · 원본 대조 · 묶음
+RESTYLE_STEPS = ["load", "apply", "verify", "bundle"]       # 이름 고치기·규칙 바꾸기 — 묶음 열기 · 바꾸기 · 원본 대조 · 묶음
+IMARKER_STEPS = ["specs", "marker"]                        # 들여온 스타일 마커 — 명세 꺼내기·지문 확인 · 배치
+STEP_KO.update({"read": "원본 .ai 읽기", "pieces": "조각마다 그레이딩 규칙 읽기", "bundle": "명세·화면 자료·묶음 쓰기",
+                "load": "묶음 열기", "apply": "이름·규칙 바꾸기", "verify": "원본 대조·재생성 검산",
+                "specs": "사이즈별 명세 꺼내기·지문 확인"})
+IMPORT_MAX_BYTES = 50 * 1024 * 1024                         # 원본 .ai 업로드 상한(설계 §7)
+IMPORT_MAX_SIZES = 30                                       # 사이즈 레이어 상한(어림 밖 — 이상한 파일)
+IMPORT_MAX_SECONDS = 600.0                                  # 일꾼 안 시계 — 원본 읽기·규칙 읽기 전체 상한(초)
+# 입장 판정 어림 — 2026-10-20 실측(윈도우 · 일꾼 한 명): 표준 웜업 상의 276KB 13사이즈 → 최고 135.5MB · 26.3초 |
+#   팬츠 219KB 13사이즈 → 116.7MB · 33.4초. 엔진만 불러온 바닥 84MB. 메모리·시간 모두 «원본 점 수» 에 비례 → 파일 크기로 어림.
+#   일꾼(창구 + 엔진)으로 재면 상의 142.6MB(2026-10-20). 아래 값은 실측보다 늘 크게(상의 153MB·61초 · 팬츠 142MB·50초) 어림한다(시험 ImportRun 이 지킨다)
+IMPORT_FIT = {"rss0": 100.0, "rss_per_mb": 200.0, "t0": 8.0, "t_per_mb": 200.0}   # 시간: 다른 시험과 겹쳐 돌 때 팬츠 41.4초 실측 → 160 에서 올림
+IMPORT_SIZE_RE = re.compile(r"^(\d{0,2}X{0,4}[SML]|X{1,4}[SL]|F|FREE|\d{1,3}(호)?)$", re.I)   # style_import.SIZE_RE 와 같다(시험이 견준다)
+IMPORT_STYLE_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{1,62}[a-z0-9]")   # 그레이더 STYLE_ID_RE 와 같다(디스크 폴더·창고 열쇠)
+IMPORT_NAME_BAD = set('<>"/\\')                              # 조각·기준점 이름에 못 쓰는 글자(style_import.NAME_BAD 와 같다)
+IMPORT_MESH_DEF = [("valid", "명세 검사(문제 수)", 0.0), ("twist", "재봉선 꼬임(조각 수)", 0.0),
+                   ("cover", "재단선 밖 재봉선(mm)", 0.5), ("echo", "규칙과 기준점 차(mm)", 0.01), ("notch", "노치 수 차", 0.0)]
 
 
 class ServiceError(RuntimeError):
@@ -433,6 +460,214 @@ def max_rule_gap(a, b):
     return round(worst, 4)
 
 
+# ════════ 들여오기·들여온 스타일 — 서버(부모)가 일꾼을 띄우기 전에 부르는 것 (표준 라이브러리만) ════════
+def ai_header_kind(head):
+    """파일 머리(앞부분 바이트) → "ps"(PostScript .ai — 읽을 수 있다) · "pdf"(PDF 형식 .ai — 아직 못 읽는다) · None(.ai 아님)
+    OptiCad «Adobe Export» 는 «%!PS-Adobe-3.0» 으로 시작한다(2026-10-20 표준 웜업·가스 원본 4개 실측)."""
+    h = bytes(head[:1024] or b"")
+    if h.startswith(b"\xef\xbb\xbf"): h = h[3:]
+    if h.startswith(b"%!PS-Adobe"): return "ps"
+    if h.startswith(b"%PDF-"): return "pdf"
+    return None
+
+
+_LAYER_RE = re.compile(rb"^[ \t]*\(([^)\r\n]{1,40})\)[ \t]+Ln[ \t]*\r?$", re.M)   # opticad.parse 의 레이어 이름 줄 «(M) Ln»
+_SIZES13 = ["5XS", "4XS", "3XS", "2XS", "XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL"]
+
+
+def ai_complete(data):
+    """파일 끝 표시(%%EOF)가 있는가 — 없으면 올리기·내보내기가 중간에 끊긴 파일(style_import.prescan 과 같은 규칙)"""
+    return b"%%EOF" in bytes(data[-2048:])
+
+
+def peek_sizes(data):
+    """원본 바이트에서 «사이즈처럼 생긴 레이어 이름» 만 빠르게(엔진 없이) — 기준 사이즈 확인·입장 판정용.
+    정본 판정은 일꾼(style_import.read_ai)이 한다. 표준 13사이즈면 작은 것부터 정렬"""
+    out = []
+    for m in _LAYER_RE.finditer(bytes(data)):
+        nm = m.group(1).decode("cp949", errors="replace").strip()
+        if nm and nm not in ("CUT", "SEW", "DRAW") and IMPORT_SIZE_RE.match(nm) and re.fullmatch(r"[A-Za-z0-9]{1,8}", nm) and nm not in out:
+            out.append(nm)
+            if len(out) > IMPORT_MAX_SIZES: break
+    if out and all(s in _SIZES13 for s in out): out.sort(key=_SIZES13.index)
+    return out
+
+
+def default_style_id(filename, data):
+    """스타일 번호를 비워 두면 — 파일 이름에서(영문 소문자·숫자·- 만). 남는 것이 없거나 짧으면 «style-지문8자리»"""
+    stem = os.path.splitext(os.path.basename(str(filename or "").replace("\\", "/")))[0].lower()
+    s = re.sub(r"[^a-z0-9]+", "-", stem).strip("-")[:64].strip("-")
+    if not IMPORT_STYLE_ID_RE.fullmatch(s):
+        s = "style-" + hashlib.sha256(bytes(data)).hexdigest()[:8]
+    return s
+
+
+def estimate_import(nbytes):
+    """들여오기 일꾼 최고 메모리(MB)·시간(초, 이 PC) 어림 — IMPORT_FIT(실측보다 늘 크게)"""
+    mb = nbytes / 2 ** 20; F = IMPORT_FIT
+    return {"mb": round(mb, 3), "rss_mb": round(F["rss0"] + F["rss_per_mb"] * mb, 1), "secs": round(F["t0"] + F["t_per_mb"] * mb, 1)}
+
+
+def admit_import(nbytes, n_sizes, time_limit_s=IMPORT_MAX_SECONDS, box_mb=MARKER_BOX_MB, server_mb=MARKER_SERVER_MB, slow=MARKER_SLOW):
+    """들여오기 입장 판정 — 크기·사이즈 수를 먼저 보고, 어림 메모리가 상자(512MB − 서버 몫 − 여유)·시간 한도를 넘으면 ServiceError.
+    반환: 어림 + 일꾼 안 시계(max_seconds)"""
+    if nbytes <= 0:
+        raise ServiceError("원본 파일이 비어 있습니다.")
+    if nbytes > IMPORT_MAX_BYTES:
+        raise ServiceError(f"원본이 너무 큽니다({nbytes / 2 ** 20:.1f}MB — {IMPORT_MAX_BYTES // 2 ** 20}MB 이하).")
+    if n_sizes < 2:
+        raise ServiceError("사이즈 레이어가 둘 이상인 OptiCad «Adobe Export» .ai 만 들여올 수 있습니다(규칙은 사이즈 사이 이동량이라).")
+    if n_sizes > IMPORT_MAX_SIZES:
+        raise ServiceError(f"사이즈 레이어가 너무 많습니다({n_sizes}개 — {IMPORT_MAX_SIZES}개 이하).")
+    e = estimate_import(nbytes); F = IMPORT_FIT
+    cap_mb = box_mb - server_mb - MARKER_MARGIN_MB
+    need_s = slow * e["secs"]
+    if e["rss_mb"] > cap_mb or need_s > time_limit_s:
+        max_mb = min((cap_mb - F["rss0"]) / F["rss_per_mb"], (time_limit_s / slow - F["t0"]) / F["t_per_mb"])
+        raise ServiceError(f"원본이 서버에서 읽기엔 큽니다({e['mb']:.2f}MB — 메모리·시간 한도로 약 {max(0.0, max_mb):.2f}MB 까지). "
+                           "사이즈를 나눠 내보내 주세요.")
+    return dict(e, sizes=n_sizes, cap_mb=cap_mb, need_s=round(need_s, 1), slow=slow, max_seconds=float(time_limit_s))
+
+
+def imported_rules_ui(doc):
+    """들여온 스타일 rules.json → 화면 규칙표 {"rules": {조각: {기준점: {사이즈: [Δx, Δy]}}}, "frame", "sizes", "base_size"}
+    값 = 기준 사이즈 대비 이동량(mm · 조각 좌표 · y 위 +). 틀 = {조각: {기준점: [[기준점, 1]]}} — 화면 점 이동 = (Δx, −Δy)
+    (가스 RULE_FRAME 과 같은 꼴이라 그레이딩 화면이 그대로 쓴다)"""
+    try:
+        sizes = [str(s) for s in doc["sizes"]]; base = str(doc["base_size"]); T = doc["rules"]; pieces = doc["pieces"]
+        table, frame = {}, {}
+        for pc, pr in pieces.items():
+            for k in pr.get("seam") or []:
+                nm = k.get("name")
+                if not isinstance(nm, str) or not nm: continue
+                row = T[int(k["rule"])]
+                table.setdefault(pc, {})[nm] = {s: [float(row[j][0]) + 0.0, float(row[j][1]) + 0.0] for j, s in enumerate(sizes)}
+                frame.setdefault(pc, {})[nm] = [[nm, 1]]
+    except (KeyError, TypeError, ValueError, IndexError, AttributeError):
+        raise ServiceError("들여온 스타일의 규칙표(rules.json)를 읽지 못했습니다.")
+    return {"rules": table, "frame": frame, "sizes": sizes, "base_size": base}
+
+
+def check_imported_changes(ui, changes):
+    """들여온 스타일 규칙 변경(바꾼 칸만) 검사 → 깨끗한 사본. 틀리면 ServiceError(한국어) — check_rules 의 들여온 판"""
+    if not isinstance(changes, dict):
+        raise ServiceError("규칙표는 {조각: {기준점: {사이즈: [Δx, Δy]}}} 모양이어야 합니다.")
+    frame, sizes, base = ui["frame"], ui["sizes"], ui["base_size"]
+    out = {}
+    for pc, pts in changes.items():
+        if pc not in frame or not isinstance(pts, dict):
+            raise ServiceError(f"그레이딩할 수 없는 조각: {str(pc)[:30]}")
+        for k, bys in pts.items():
+            if k not in frame[pc] or not isinstance(bys, dict):
+                raise ServiceError(f"{pc} 에 «{str(k)[:30]}» 기준점이 없습니다.")
+            for s, v in bys.items():
+                if s not in sizes:
+                    raise ServiceError(f"모르는 사이즈: {str(s)[:20]}")
+                if not (isinstance(v, (list, tuple)) and len(v) == 2 and all(_num(a) for a in v)):
+                    raise ServiceError(f"{pc} {k} {s} 값은 숫자 두 개 [Δx, Δy] 여야 합니다.")
+                dx, dy = float(v[0]), float(v[1])
+                if abs(dx) > RULE_MAX_MM or abs(dy) > RULE_MAX_MM:
+                    raise ServiceError(f"{pc} {k} {s} 이동량이 너무 큽니다(±{RULE_MAX_MM:.0f}mm 이하).")
+                if s == base and (abs(dx) > 1e-6 or abs(dy) > 1e-6):
+                    raise ServiceError(f"기준 사이즈({base})는 움직이지 않습니다 — {pc} {k}")
+                out.setdefault(pc, {}).setdefault(k, {})[s] = [dx, dy]
+    return out
+
+
+def _clean_name(v, n, what):
+    if not isinstance(v, str):
+        raise ServiceError(f"{what}은(는) 글자여야 합니다.")
+    s = " ".join(v.split())                                    # 앞뒤·겹친 공백 정리
+    if not s or len(s) > n:
+        raise ServiceError(f"{what}은(는) 1~{n}자여야 합니다.")
+    if any(c in IMPORT_NAME_BAD or not c.isprintable() for c in s):
+        raise ServiceError(f"{what}에 쓸 수 없는 글자가 있습니다(< > \" / \\ 와 제어 문자).")
+    return s
+
+
+def check_names(conf, payload):
+    """이름 확인 화면의 변경 검사 → 깨끗한 사본 {"pieces": {지금 이름: {바뀐 칸만}}}. 틀리면 ServiceError(한국어).
+    conf = 그 버전의 confirm.json. 바꿀 수 있는 것: name(조각 이름) · en_name(DXF 영문) · qty(장수 1~20) · mirror(2장 이상일 때 좌우 짝?)
+    · points({옛 기준점: 새 이름}) · confirmed(확인함). 모양은 바꿀 수 없다(좌표·규칙 칸이 없다)"""
+    if not isinstance(payload, dict) or not isinstance(payload.get("pieces"), dict) or not payload["pieces"]:
+        raise ServiceError("바꿀 조각이 없습니다({pieces: {조각: {…}}}).")
+    known = {c.get("piece"): c for c in (conf or {}).get("pieces") or [] if isinstance(c, dict)}
+    out = {}
+    for cur, ch in payload["pieces"].items():
+        if cur not in known:
+            raise ServiceError(f"이 판에 없는 조각: {str(cur)[:30]}")
+        if not isinstance(ch, dict):
+            raise ServiceError(f"{cur} 의 변경 모양이 다릅니다.")
+        bad = set(ch) - {"name", "en_name", "qty", "mirror", "points", "confirmed"}
+        if bad:
+            raise ServiceError(f"바꿀 수 없는 칸: {sorted(bad)[0][:20]}")
+        c = known[cur]; o = {}
+        if ch.get("name") is not None:
+            nm = _clean_name(ch["name"], 40, "조각 이름")
+            if nm != cur: o["name"] = nm
+        if ch.get("en_name") is not None:
+            if not isinstance(ch["en_name"], str):
+                raise ServiceError("영문 이름은 글자여야 합니다.")
+            en = " ".join(ch["en_name"].upper().split())
+            if not re.fullmatch(r"[A-Z0-9 _-]{0,30}", en):
+                raise ServiceError("영문 이름은 영문·숫자·공백·- _ 만 30자까지 쓸 수 있습니다(DXF 에 들어갑니다).")
+            if (en or None) != (c.get("en_name") or None): o["en_name"] = en
+        if ch.get("qty") is not None:
+            q = _int_like(ch["qty"])
+            if q is None or not (1 <= q <= 20):
+                raise ServiceError(f"{cur} 장수는 1~20 사이 정수여야 합니다.")
+            if q != int(c.get("qty") or 1): o["qty"] = q
+        for key, ko in (("mirror", "좌우 짝"), ("confirmed", "확인함")):
+            if ch.get(key) is not None:
+                if not isinstance(ch[key], bool):
+                    raise ServiceError(f"{ko} 은(는) 참/거짓이어야 합니다.")
+                if ch[key] != bool(c.get(key, key == "mirror")): o[key] = ch[key]
+        if ch.get("points") is not None:
+            pts = ch["points"]
+            if not isinstance(pts, dict):
+                raise ServiceError("기준점 이름은 {옛 이름: 새 이름} 모양이어야 합니다.")
+            now = [p.get("name") for p in c.get("points") or [] if isinstance(p, dict)]
+            ren = {}
+            for old, new in pts.items():
+                if old not in now:
+                    raise ServiceError(f"{cur} 에 «{str(old)[:30]}» 기준점이 없습니다.")
+                nn = _clean_name(new, 30, "기준점 이름")
+                if nn != old: ren[old] = nn
+            final = [ren.get(x, x) for x in now]
+            if len(set(final)) != len(final):
+                raise ServiceError(f"{cur} 기준점 이름이 겹칩니다 — 서로 다른 이름을 붙여 주세요.")
+            if ren: o["points"] = ren
+        if o: out[cur] = o
+    final = [(out.get(n) or {}).get("name") or n for n in known]
+    if len(set(final)) != len(final):
+        raise ServiceError("조각 이름이 겹칩니다 — 서로 다른 이름을 붙여 주세요.")
+    if not out:
+        raise ServiceError("바뀐 것이 없습니다.")
+    return {"pieces": out}
+
+
+def same_shape(a, b, piece_map=None, point_map=None):
+    """이름만 고친 두 view.json(dict)이 «모양은 점 하나까지 같은가» — 0.01mm 정수 배열을 그대로 견준다.
+    piece_map {옛 조각: 새 조각} · point_map {새 조각: {옛 기준점: 새 기준점}} → 다른 곳 목록(빈 목록 = 같음)"""
+    piece_map = piece_map or {}; point_map = point_map or {}; diffs = []
+    if a.get("q") != b.get("q") or a.get("sheet") != b.get("sheet"): diffs.append("q·sheet 다름")
+    sizes = (a.get("style") or {}).get("sizes") or []
+    if sizes != (b.get("style") or {}).get("sizes"): diffs.append("사이즈 목록 다름")
+    for sid in sizes:
+        A = {p.get("name"): p for p in ((a.get("sizes") or {}).get(sid) or {}).get("pieces") or []}
+        B = {p.get("name"): p for p in ((b.get("sizes") or {}).get(sid) or {}).get("pieces") or []}
+        if len(A) != len(B): diffs.append(f"{sid} 조각 수 다름"); continue
+        for n, p in A.items():
+            nn = piece_map.get(n, n); q = B.get(nn)
+            if q is None: diffs.append(f"{sid} {nn} 없음"); continue
+            for k in ("seam", "cut", "internal", "notches", "holes", "grain", "fold"):
+                if p.get(k) != q.get(k): diffs.append(f"{sid} {nn} {k} 다름")
+            pm = point_map.get(nn) or {}
+            want = {pm.get(k, k): v for k, v in (p.get("nodes") or {}).items()}
+            if want != (q.get("nodes") or {}): diffs.append(f"{sid} {nn} 기준점 자리 다름")
+    return diffs
+
+
 # ════════ 마커 요청 — 명단 → 벌수 · 입력 검사 (표준 라이브러리만 — 서버가 일꾼을 띄우기 전에 부른다) ════════
 def norm_size(s):
     """사이즈 글자 정리 — ' 2xl ' → '2XL', 'XXL' → '2XL'. 빈칸이면 ''. (marker.norm_size 와 같은 규칙 — 시험이 견준다)"""
@@ -462,12 +697,21 @@ def _int_like(v):
 
 
 def check_marker_request(group, counts, width_cm=150.0, gap_mm=3.0, nap=False, quick=False, budget=None, cache_mb=None,
-                         jobs=None, seed=0, exclude=(), sizes=None, pieces=None):
+                         jobs=None, seed=0, exclude=(), sizes=None, pieces=None, per_bundle=None):
     """마커 요청 검사 → 깨끗한 사본(dict). 틀리면 ServiceError(한국어 — 직원 화면에 그대로 보여도 된다).
-    sizes: 고를 수 있는 사이즈(그 버전 사이즈 · 없으면 S~5XL) · pieces: 뺄 수 있는 조각 이름(없으면 검사 안 함)"""
-    if group not in ("top", "bottom"):
+    sizes: 고를 수 있는 사이즈(그 버전 사이즈 · 없으면 S~5XL) · pieces: 뺄 수 있는 조각 이름(없으면 검사 안 함)
+    group "imported"(들여온 스타일 · F10 6단계): sizes 가 꼭 있어야 하고(13사이즈 등 그 버전 순서 그대로) per_bundle(한 벌 장수)을 넘긴다"""
+    if group not in ("top", "bottom", "imported"):
         raise ServiceError(f"모르는 옷 종류: {str(group)[:20]}")
-    allowed = [s for s in GRADE_SIZES if sizes is None or s in sizes]
+    if group == "imported":
+        if not sizes:
+            raise ServiceError("들여온 스타일은 사이즈 목록이 있어야 합니다.")
+        allowed = [str(s) for s in sizes]
+        pb = _int_like(per_bundle)
+        if pb is None or not (1 <= pb <= 500):
+            raise ServiceError("들여온 스타일의 한 벌 장수를 알 수 없습니다.")
+    else:
+        allowed = [s for s in GRADE_SIZES if sizes is None or s in sizes]
     if not isinstance(counts, dict) or not counts:
         raise ServiceError("사이즈별 벌수를 하나 이상 넣어 주세요(예: {\"M\": 2}).")
     clean = {}
@@ -512,9 +756,12 @@ def check_marker_request(group, counts, width_cm=150.0, gap_mm=3.0, nap=False, q
             raise ServiceError(f"이 스타일에 없는 조각: {bad[0][:30]}")
         if len(exclude) >= len(set(pieces)):
             raise ServiceError("조각을 전부 뺄 수는 없습니다.")
-    return {"group": group, "counts": clean, "bundles": total, "width_cm": float(width_cm), "gap_mm": float(gap_mm),
-            "nap": bool(nap), "quick": bool(quick), "budget": float(budget), "cache_mb": float(cache_mb), "jobs": jobs,
-            "seed": seed, "exclude": exclude}
+    out = {"group": group, "counts": clean, "bundles": total, "width_cm": float(width_cm), "gap_mm": float(gap_mm),
+           "nap": bool(nap), "quick": bool(quick), "budget": float(budget), "cache_mb": float(cache_mb), "jobs": jobs,
+           "seed": seed, "exclude": exclude}
+    if group == "imported":                                    # 일꾼이 다시 검사할 때도 같은 사이즈·장수로(marker_all)
+        out["sizes"] = allowed; out["per_bundle"] = pb
+    return out
 
 
 def pieces_per_bundle(group, exclude=()):
@@ -543,7 +790,8 @@ def estimate_marker(pieces, quick, group="top", width_cm=150.0, gap_mm=3.0):
 def admit_marker(req, time_limit_s=180.0, box_mb=MARKER_BOX_MB, server_mb=MARKER_SERVER_MB, slow=MARKER_SLOW):
     """서버 입장 판정 — 어림이 상자(512MB)·시간 한도를 넘으면: 여러 번 깔기는 «빠르게» 로 바꾸고(forced_quick),
     빠르게도 넘으면 ServiceError(«한 번에 N벌까지»). 반환: req 사본 + estimate·forced_quick·budget(남은 시간에 맞춤)."""
-    pcs = req["bundles"] * pieces_per_bundle(req["group"], req["exclude"])
+    per = req.get("per_bundle") if req.get("group") == "imported" else None   # 들여온 스타일 — 장수는 명세(meta.qty)에서 센 값
+    pcs = req["bundles"] * (per or pieces_per_bundle(req["group"], req["exclude"]))
     cap_mb = box_mb - server_mb - MARKER_MARGIN_MB
     cap_s = float(time_limit_s)
 
@@ -785,6 +1033,134 @@ def graded_all(work, group, rules=None, check_view=None, sources=None, font=None
             "timings_s": timings, "peak_rss_mb": peak_rss_mb(), "made_at": when}
 
 
+# ── 들여오기·다시 묶기·명세 꺼내기 — 일꾼 프로세스 안에서만 돈다(style_import · piecespec 이 shapely 를 읽는다) ──
+def _watchdog(max_seconds, what):
+    """일꾼 안 시계 — max_seconds 가 지나면 한국어 사유를 남기고 일꾼 스스로 끝낸다(부모 시계보다 먼저 · 깨끗한 사유)"""
+    if not max_seconds: return None
+    def boom():
+        print(f"[service] 실패: {what} 시간이 {round(max_seconds)}초를 넘어 멈췄습니다 — 원본이 너무 크거나 이상합니다.", flush=True)
+        os._exit(3)
+    t = threading.Timer(float(max_seconds), boom); t.daemon = True; t.start()
+    return t
+
+
+def _bundle_entry(res, sid):
+    """style_import 결과 → 그레이더가 받는 styles 칸 {view, zip, …} (다시 만들기 결과와 같은 꼴)
+    view.json 의 엔진 판 표시는 창구가 채운다(_view_step 과 같이 — 복사본에는 git 이 없어 cad_view.git_head 가 그레이더 판을 적는다)"""
+    P = res["paths"]; chk = res["check"]
+    ev = engine_version()
+    with open(P["view"], encoding="utf-8") as f: view = json.load(f)
+    view["source"].update(commit=ev.get("commit"), engine_source=ev.get("source"), built_by="service.py")
+    with open(P["view"], "w", encoding="utf-8") as f: json.dump(view, f, ensure_ascii=False, separators=(",", ":"))
+    return {"group": "imported", "view": P["view"], "zip": P["zip"], "view_bytes": os.path.getsize(P["view"]),
+            "zip_bytes": os.path.getsize(P["zip"]), "checks_bad": [], "check_ok": bool(chk["ok"]), "check_max": chk["max"],
+            "check_bad": list(chk.get("bad") or [])[:30], "confirm_open": sum(1 for c in (res.get("confirm_doc") or {}).get("pieces") or []
+                                                                             if not c.get("confirmed"))}
+
+
+def import_all(work, src, base, style_id, name=None, source_name=None, emit=False, max_seconds=IMPORT_MAX_SECONDS):
+    """F10 6단계 — OptiCad .ai → 들여온 스타일 묶음(work/out). 일꾼 프로세스 안에서 부른다.
+    돌려주는 것: {"styles": {style_id: {view, zip, check_ok, …}}, "summary", "confirm_doc" 요약, 메모리·시간}"""
+    if not IMPORT_STYLE_ID_RE.fullmatch(style_id or ""):
+        raise ServiceError("스타일 번호는 영문 소문자·숫자·- 만 쓸 수 있습니다(3~64자).")
+    if not os.path.isfile(src):
+        raise ServiceError("원본 .ai 가 없습니다.")
+    with open(src, "rb") as f:
+        kind = ai_header_kind(f.read(1024))
+    if kind != "ps":
+        raise ServiceError("OptiCad «Adobe Export»(PostScript) .ai 만 들여올 수 있습니다." + (" PDF 형식 .ai 는 아직 못 읽습니다." if kind == "pdf" else ""))
+    if HERE not in sys.path: sys.path.insert(0, HERE)
+    dog = _watchdog(max_seconds, "원본 읽기·규칙 읽기")
+    import style_import as SI
+    n = len(IMPORT_STEPS); idx = {k: i + 1 for i, k in enumerate(IMPORT_STEPS)}
+    timings, t0, last = {}, time.time(), {"k": None, "t": time.time()}
+
+    def prog(k):
+        if last["k"]: timings[last["k"]] = round(time.time() - last["t"], 1)
+        last.update(k=k, t=time.time()); _step(idx.get(k, 1), k, emit, n)
+    out = os.path.join(os.path.abspath(work), "out")
+    try:
+        res = SI.import_style(src, base, style_id, out, name=name, source_name=source_name, progress=prog)
+    except SI.StyleImportError as e:
+        raise ServiceError(f"들여오지 못했습니다: {e}")
+    finally:
+        if dog: dog.cancel()
+    if last["k"]: timings[last["k"]] = round(time.time() - last["t"], 1)
+    timings["total"] = round(time.time() - t0, 1)
+    ent = _bundle_entry(res, style_id)
+    return {"ok": True, "mode": "import", "work": os.path.abspath(work), "styles": {style_id: ent}, "summary": res["summary"],
+            "base_size": base, "sizes": res["style"]["sizes"], "pieces": res["style"]["pieces"], "name": res["style"]["name"],
+            "engine": engine_version(), "font": None, "timings_s": timings, "peak_rss_mb": peak_rss_mb(),
+            "made_at": res["style"]["made_at"]}
+
+
+def restyle_all(work, zip_path, rule_changes=None, names=None, by=None, check_view=None, emit=False):
+    """들여온 스타일 다시 묶기(이름 고치기 · 규칙 바꿔 다시 그레이딩) — 일꾼 안에서. 결과 칸에 재생성 검산(mesh)을 싣는다.
+    names 만 바꿨고 check_view(그 버전 view.json)를 주면 «모양이 점 하나까지 같은가» 를 견주고 다르면 멈춘다"""
+    if not os.path.isfile(zip_path or ""):
+        raise ServiceError("그 버전의 묶음(exports.zip)이 없습니다.")
+    if not rule_changes and not names:
+        raise ServiceError("바꿀 것이 없습니다.")
+    if HERE not in sys.path: sys.path.insert(0, HERE)
+    import style_import as SI
+    n = len(RESTYLE_STEPS); idx = {k: i + 1 for i, k in enumerate(RESTYLE_STEPS)}
+    t0 = time.time()
+    out = os.path.join(os.path.abspath(work), "out")
+    try:
+        res = SI.restyle(zip_path, out, rule_changes=rule_changes, names=names, by=by, progress=lambda k: _step(idx.get(k, 1), k, emit, n))
+    except SI.StyleImportError as e:
+        raise ServiceError(f"다시 묶지 못했습니다: {e}")
+    sid = res["style"]["id"]
+    ent = _bundle_entry(res, sid)
+    ent["mesh"] = res["mesh"]; ent["rule_changes"] = res["rule_changes"]; ent["name_changes"] = res["name_changes"]
+    if names and not rule_changes and check_view:              # 이름만 — 모양 같음을 0.01mm 정수까지 견준다
+        with open(check_view, encoding="utf-8") as f: old = json.load(f)
+        with open(ent["view"], encoding="utf-8") as f: new = json.load(f)
+        pmap = {c["from"]: c["to"] for c in res["name_changes"] if c["field"] == "name"}
+        ptmap = {}
+        for c in res["name_changes"]:
+            if c["field"] == "point": ptmap.setdefault(c["piece"], {})[c["from"]] = c["to"]
+        ent["shape_diffs"] = same_shape(old, new, pmap, ptmap)
+        if ent["shape_diffs"]:
+            raise ServiceError(f"이름만 바꿨는데 모양이 달라졌습니다({ent['shape_diffs'][0]}) — 저장하지 않습니다.")
+    return {"ok": True, "mode": "restyle", "work": os.path.abspath(work), "styles": {sid: ent}, "summary": res["summary"],
+            "engine": engine_version(), "font": None, "timings_s": {"total": round(time.time() - t0, 1)}, "peak_rss_mb": peak_rss_mb(),
+            "made_at": res["style"]["made_at"]}
+
+
+def specs_graded(work, zip_path, files, emit=False):
+    """들여온 스타일 마커 ① — 그 버전 묶음의 사이즈별 명세(specs/spec_<사이즈>.json)를 꺼내 지문을 맞추고
+    marker.py 가 받는 graded.json({사이즈: {"imported": {조각: 옛 형식(재단선)}}}) + 펼침표(expand.json)를 만든다. 일꾼 안에서.
+    files = {ZIP 안 경로: sha256} (그 버전 meta 의 files 중 kind=spec) — 하나라도 다르면 멈춘다(버전 모양과 다른 것으로 깔지 않게)"""
+    import zipfile
+    if not isinstance(files, dict) or not files:
+        raise ServiceError("그 버전에 사이즈별 명세가 없습니다.")
+    if HERE not in sys.path: sys.path.insert(0, HERE)
+    _step(1, "specs", emit, len(IMARKER_STEPS))
+    from piecespec import to_legacy
+    import style_import as SI
+    t0 = time.time(); graded, table = {}, None
+    with zipfile.ZipFile(zip_path) as z:
+        for path, sha in files.items():
+            m = re.fullmatch(r"specs/spec_([A-Za-z0-9]+)\.json", str(path))
+            if not m:
+                raise ServiceError(f"명세 경로가 이상합니다: {str(path)[:60]}")
+            b = z.read(path)
+            if hashlib.sha256(b).hexdigest() != sha:
+                raise ServiceError(f"{m.group(1)} 명세 지문이 그 버전과 다릅니다(손상) — 마커를 만들지 않았습니다.")
+            doc = json.loads(b.decode("utf-8")); pcs = doc["pieces"]
+            graded[m.group(1)] = {"imported": {n: {"cut": to_legacy(sp)["cut"], "sew": [], "draw": [], "notch": [], "fold": None}
+                                               for n, sp in pcs.items()}}
+            if table is None: table = SI.expand_table(pcs)
+    work = os.path.abspath(work); os.makedirs(work, exist_ok=True)
+    gp, ep = os.path.join(work, "graded_imported.json"), os.path.join(work, "expand.json")
+    with open(gp, "w", encoding="utf-8") as f: json.dump(graded, f, ensure_ascii=False, separators=(",", ":"))
+    with open(ep, "w", encoding="utf-8") as f: json.dump(table, f, ensure_ascii=False)
+    return {"ok": True, "mode": "specs", "graded": gp, "expand": ep, "sizes": list(graded), "graded_sha256": _file_sha(gp),
+            "per_bundle": sum(len(v) for v in table.values()), "timings_s": {"specs": round(time.time() - t0, 1)},
+            "peak_rss_mb": peak_rss_mb()}
+
+
 def _file_sha(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -793,8 +1169,9 @@ def _file_sha(path):
     return h.hexdigest()
 
 
-def marker_argv(graded, out_dir, req, name="marker"):
-    """검사한 요청 → marker.py 명령줄 인자. 서버 길과 명령줄 길이 «같은 인자» 를 쓰게 한 곳에서 만든다(시험이 이것으로 명령줄을 돌린다)."""
+def marker_argv(graded, out_dir, req, name="marker", spec_file=None, title=None):
+    """검사한 요청 → marker.py 명령줄 인자. 서버 길과 명령줄 길이 «같은 인자» 를 쓰게 한 곳에서 만든다(시험이 이것으로 명령줄을 돌린다).
+    spec_file·title: 들여온 스타일(group "imported") — 장수·좌우 펼침표 파일 · 그림 제목"""
     argv = ["--garment", req["group"], "--graded", graded, "--out", out_dir, "--name", name,
             "--width", f"{req['width_cm']:g}", "--gap", f"{req['gap_mm']:g}", "--seed", str(req["seed"]),
             "--jobs", str(req["jobs"]), "--budget", f"{req['budget']:g}", "--cache-mb", f"{req['cache_mb']:g}",
@@ -802,29 +1179,34 @@ def marker_argv(graded, out_dir, req, name="marker"):
     if req["nap"]: argv.append("--nap")
     if req["quick"]: argv.append("--quick")
     if req["exclude"]: argv += ["--exclude", *req["exclude"]]
+    if spec_file: argv += ["--spec-file", spec_file]
+    if title: argv.append("--title=" + str(title)[:80])
     return argv
 
 
-def marker_all(work, graded, req, font=None, emit=False):
+def marker_all(work, graded, req, font=None, emit=False, spec_file=None, title=None):
     """F10 4단계 ④ — graded.json + 요청 → 마커(배치) + 1:1 PDF · DXF(R2000 mm) · 미리보기 PNG · 요약 JSON. 일꾼 안에서 부른다.
     배치는 marker.main(명령줄과 같은 함수)에 «같은 인자» 를 넘겨 돌린다 — 서버 결과가 명령줄 결과와 갈라질 길을 없앤다.
     창구가 하는 일은 ① 글꼴 주소 바꿔 끼우기(리눅스엔 맑은 고딕이 없다 — PDF·PNG 둘 다) ② 결과 파일 이름을 영문으로
     ③ 다시 재서 검산(겹침·간격·폭 밖·식서 0°/180°)을 결과에 붙이기."""
     req = check_marker_request(**{k: req.get(k) for k in ("group", "counts", "width_cm", "gap_mm", "nap", "quick", "budget",
-                                                           "cache_mb", "jobs", "seed", "exclude")})
+                                                           "cache_mb", "jobs", "seed", "exclude", "sizes", "per_bundle")})
+    if req["group"] == "imported" and not (spec_file and os.path.isfile(spec_file)):
+        raise ServiceError("들여온 스타일 마커에 펼침표(장수·좌우)가 없습니다.")
     if not graded or not os.path.isfile(graded):
         raise ServiceError(f"그레이딩 결과(graded.json)가 없습니다: {graded}")
     work = os.path.abspath(work); out = os.path.join(work, "marker"); os.makedirs(out, exist_ok=True)
     if HERE not in sys.path: sys.path.insert(0, HERE)
     fnt = font or resolve_font()
     when = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-    _step(len(MARKER_STEPS), "marker", emit, len(MARKER_STEPS))
+    nst = len(IMARKER_STEPS) if spec_file else len(MARKER_STEPS)
+    _step(nst, "marker", emit, nst)
     t0 = time.time()
     import marker as MK
     MK.FONT = fnt["path"]                                  # PNG(PIL)은 글꼴 파일을 직접 연다 — font_shim 이 못 막는 자리라 주소를 바꾼다
     try:
         with font_shim(fnt["path"]):
-            S = MK.main(marker_argv(graded, out, req))
+            S = MK.main(marker_argv(graded, out, req, spec_file=spec_file, title=title))
     except ValueError as e:                                # 조각이 원단보다 넓다 등 — 직원이 고칠 수 있는 입력 문제
         raise ServiceError(f"원단에 깔지 못했습니다: {e}")
     except KeyError as e:
@@ -885,6 +1267,45 @@ def regrade(work, group, rules, full=False, sources=None, timeout=900, python=No
     return _spawn(cmd, work, res_path, timeout, on_step, env)
 
 
+def import_style(work, src, base, style_id, name=None, source_name=None, timeout=900, max_seconds=IMPORT_MAX_SECONDS, python=None,
+                 on_step=None, env=None):
+    """서버가 부르는 함수(F10 6단계) — 원본 .ai 를 «따로 띄운 일꾼» 에서 들여온다. 머리·스타일 번호는 부모에서 먼저 본다.
+    max_seconds: 일꾼 안 시계(원본 읽기·규칙 읽기 상한) · timeout: 부모 시계(일꾼을 죽이는 마지막 방어)"""
+    if not IMPORT_STYLE_ID_RE.fullmatch(style_id or ""):
+        raise ServiceError("스타일 번호는 영문 소문자·숫자·- 만 쓸 수 있습니다(3~64자).")
+    if not isinstance(base, str) or not IMPORT_SIZE_RE.match(base):
+        raise ServiceError("기준 사이즈 이름이 이상합니다.")
+    work = os.path.abspath(work); os.makedirs(work, exist_ok=True)
+    res_path = os.path.join(work, "result.json")
+    cmd = [python or sys.executable, os.path.abspath(__file__), "import", "--work", work, "--src", os.path.abspath(src), "--base", base,
+           "--style-id", style_id, "--result", res_path, "--emit-steps", "--max-seconds", f"{float(max_seconds):g}"]
+    if name: cmd.append("--name=" + str(name)[:80])                # «=» 로 붙여 «-» 로 시작하는 이름이 옵션으로 읽히지 않게
+    if source_name: cmd.append("--source-name=" + str(source_name)[:120])
+    try:
+        return _spawn(cmd, work, res_path, max(float(timeout), float(max_seconds) + 30.0), on_step, env)
+    except ServiceError as e:
+        raise ServiceError(_worker_reason(os.path.join(work, "engine.log")) or str(e))
+
+
+def restyle(work, zip_path, rule_changes=None, names=None, by=None, check_view=None, timeout=600, python=None, on_step=None, env=None):
+    """서버가 부르는 함수 — 들여온 스타일의 이름 고치기·규칙 바꿔 다시 그레이딩(새 묶음). 같은 «따로 띄운 일꾼» 길"""
+    work = os.path.abspath(work); os.makedirs(work, exist_ok=True)
+    res_path = os.path.join(work, "result.json")
+    cmd = [python or sys.executable, os.path.abspath(__file__), "restyle", "--work", work, "--zip", os.path.abspath(zip_path),
+           "--result", res_path, "--emit-steps"]
+    for flag, obj, fn in (("--changes-file", rule_changes, "changes_req.json"), ("--names-file", names, "names_req.json")):
+        if obj:
+            p = os.path.join(work, fn)
+            with open(p, "w", encoding="utf-8") as f: json.dump(obj, f, ensure_ascii=False)
+            cmd += [flag, p]
+    if by: cmd.append("--by=" + str(by)[:120])
+    if check_view: cmd += ["--check-view", os.path.abspath(check_view)]
+    try:
+        return _spawn(cmd, work, res_path, timeout, on_step, env)
+    except ServiceError as e:
+        raise ServiceError(_worker_reason(os.path.join(work, "engine.log")) or str(e))
+
+
 def _worker_reason(log_path):
     """일꾼 출력에서 창구가 남긴 «[service] 실패: …» 사유(한국어) — 없으면 None"""
     try:
@@ -911,7 +1332,8 @@ def _marker_failure(e, log_path):
 
 def marker(work, group, counts, width_cm=150.0, gap_mm=3.0, nap=False, quick=False, budget=None, cache_mb=None, jobs=None, seed=0,
            exclude=(), graded=None, rules=None, check_view=None, sizes=None, pieces=None, sources=None, timeout=1800,
-           python=None, on_step=None, env=None, view_tol_mm=MARKER_VIEW_TOL_MM, cancel=None, files_reserve_s=20.0):
+           python=None, on_step=None, env=None, view_tol_mm=MARKER_VIEW_TOL_MM, cancel=None, files_reserve_s=20.0,
+           spec_zip=None, spec_files=None, title=None, per_bundle=None):
     """서버가 부르는 함수(F10 4단계) — 마커·요척. 요청은 부모에서 먼저 검사한다(틀린 요청으로 일꾼을 띄우지 않게).
     일꾼을 «두 번» 띄운다: ① graded(원본 → 그레이딩, check_view 를 주면 그 버전 모양과 견줌) ② marker(배치 + 파일).
       왜 두 번: 그레이딩(약 200MB)과 배치(약 340MB)의 메모리가 한 프로세스에 겹쳐 쌓이지 않게 — 끝나면 운영체제로 통째로 돌아간다.
@@ -919,12 +1341,32 @@ def marker(work, group, counts, width_cm=150.0, gap_mm=3.0, nap=False, quick=Fal
     on_step(i, total, name) — MARKER_STEPS 기준(1 build · 2 grade · 3 check · 4 marker).
     timeout: «전체»(두 일꾼 합) 벽시계 상한 — 넘으면 일꾼을 죽이고 ServiceError. 여러 번 깔기 한도(budget)는 그레이딩이 쓴 시간을 빼고
              파일 몫(files_reserve_s)을 남긴 만큼으로 줄여 넘긴다(넘길 것 같으면 그때까지의 최선을 낸다).
-    cancel: threading.Event — 세우면 돌고 있는 일꾼을 죽이고 ServiceError("취소했습니다.")"""
-    req = check_marker_request(group, counts, width_cm, gap_mm, nap, quick, budget, cache_mb, jobs, seed, exclude, sizes, pieces)
+    cancel: threading.Event — 세우면 돌고 있는 일꾼을 죽이고 ServiceError("취소했습니다.")
+    들여온 스타일(group "imported", F10 6단계): spec_zip(그 버전 exports.zip) + spec_files({specs/spec_<사이즈>.json: 지문}) —
+      ① 일꾼이 명세를 꺼내 지문을 맞추고 graded·펼침표를 만든다(원본에서 다시 그레이딩하지 않는다 — 명세 묶음이 정본) ② 배치는 같은 길.
+      입장 판정은 같은 어림(벌수 × per_bundle 장수)."""
+    req = check_marker_request(group, counts, width_cm, gap_mm, nap, quick, budget, cache_mb, jobs, seed, exclude, sizes, pieces,
+                               per_bundle=per_bundle)
     work = os.path.abspath(work); os.makedirs(work, exist_ok=True)
     py = python or sys.executable
     t0 = time.time()
-    prep = None
+    prep = None; spec_file = None
+    if group == "imported":
+        if not spec_zip or not os.path.isfile(spec_zip):
+            raise ServiceError("들여온 스타일의 묶음(exports.zip)이 없습니다.")
+        r1 = os.path.join(work, "result_specs.json"); ff = os.path.join(work, "spec_files.json")
+        with open(ff, "w", encoding="utf-8") as f: json.dump(spec_files or {}, f, ensure_ascii=False)
+        cmd = [py, os.path.abspath(__file__), "specs", "--work", work, "--zip", os.path.abspath(spec_zip), "--files-file", ff,
+               "--result", r1, "--emit-steps"]
+        try:
+            prep = _spawn(cmd, work, r1, min(timeout, 300), on_step, env, log_name="engine_graded.log", cancel=cancel)
+        except ServiceError as e:
+            raise ServiceError(_marker_failure(e, os.path.join(work, "engine_graded.log")))
+        missing = [s for s in req["counts"] if s not in (prep.get("sizes") or [])]
+        if missing:
+            raise ServiceError(f"그 버전 명세에 없는 사이즈입니다: {missing[0]}")
+        graded, spec_file = prep["graded"], prep["expand"]
+        prep["view_match"] = {"max_mm": 0.0, "pieces": len(prep.get("sizes") or []), "diffs": [], "by": "spec_sha256"}
     if graded is None:
         r1 = os.path.join(work, "result_graded.json")
         cmd = [py, os.path.abspath(__file__), "graded", "--work", work, "--group", group, "--result", r1, "--emit-steps"]
@@ -956,6 +1398,8 @@ def marker(work, group, counts, width_cm=150.0, gap_mm=3.0, nap=False, quick=Fal
     r2 = os.path.join(work, "result.json")
     cmd = [py, os.path.abspath(__file__), "marker", "--work", work, "--graded", os.path.abspath(graded), "--request-file", rq,
            "--result", r2, "--emit-steps"]
+    if spec_file: cmd += ["--spec-file", os.path.abspath(spec_file)]
+    if title: cmd.append("--title=" + str(title)[:80])
     try:
         out = _spawn(cmd, work, r2, max(5.0, timeout - (time.time() - t0)), on_step, env, cancel=cancel)
     except ServiceError as e:
@@ -1070,7 +1514,7 @@ def compare_cuts(a, b):
     diffs, worst, n = [], 0.0, 0
     qa, qb = float(a.get("q") or 0.01), float(b.get("q") or 0.01)
     line = lambda flat, q: LineString([(flat[k] * q, flat[k + 1] * q) for k in range(0, len(flat), 2)])
-    for sid in GRADE_SIZES:
+    for sid in GRADE_SIZES:                                       # 가스 S~5XL 만(«2XL-edit» 같은 덧붙은 판은 안 견준다 — 들여온 스타일은 명세 지문으로 확인)
         A, B = (a.get("sizes") or {}).get(sid), (b.get("sizes") or {}).get(sid)
         if A is None and B is None: continue
         if A is None or B is None: diffs.append(f"{sid} 없음"); continue
@@ -1115,6 +1559,20 @@ def main(argv=None):
     mk.add_argument("--work", required=True); mk.add_argument("--graded", required=True)
     mk.add_argument("--request-file", required=True, help="check_marker_request 모양의 JSON(group·counts·width_cm·gap_mm …)")
     mk.add_argument("--result"); mk.add_argument("--emit-steps", action="store_true")
+    mk.add_argument("--spec-file", help="들여온 스타일 펼침표(specs 결과 expand.json)"); mk.add_argument("--title")
+    im = sub.add_parser("import", help="OptiCad .ai(여러 사이즈) → 들여온 스타일 묶음 (F10 6단계)")
+    im.add_argument("--work", required=True); im.add_argument("--src", required=True); im.add_argument("--base", default="M")
+    im.add_argument("--style-id", required=True); im.add_argument("--name"); im.add_argument("--source-name")
+    im.add_argument("--max-seconds", type=float, default=IMPORT_MAX_SECONDS, help="일꾼 안 시계 — 넘으면 한국어 사유를 남기고 멈춘다")
+    im.add_argument("--result"); im.add_argument("--emit-steps", action="store_true")
+    rs = sub.add_parser("restyle", help="들여온 스타일 묶음 → 이름 고치기·규칙 바꿔 다시 그레이딩 (F10 6단계)")
+    rs.add_argument("--work", required=True); rs.add_argument("--zip", required=True)
+    rs.add_argument("--changes-file", help="{조각: {기준점: {사이즈: [Δx, Δy]}}} — 바꾼 칸만"); rs.add_argument("--names-file")
+    rs.add_argument("--by"); rs.add_argument("--check-view", help="이름만 바꿀 때 — 그 버전 view.json 과 모양을 점 하나까지 견준다")
+    rs.add_argument("--result"); rs.add_argument("--emit-steps", action="store_true")
+    sp = sub.add_parser("specs", help="들여온 스타일 묶음 → 마커용 graded·펼침표 (지문 확인)")
+    sp.add_argument("--work", required=True); sp.add_argument("--zip", required=True); sp.add_argument("--files-file", required=True)
+    sp.add_argument("--result"); sp.add_argument("--emit-steps", action="store_true")
     sub.add_parser("font", help="쓰게 될 글꼴")
     a = ap.parse_args(argv)
     if a.cmd == "font":
@@ -1127,7 +1585,15 @@ def main(argv=None):
             r = graded_all(a.work, a.group, rules, a.check_view, {k: getattr(a, k) for k in SOURCE_KEYS}, emit=a.emit_steps)
         elif a.cmd == "marker":
             with open(a.request_file, encoding="utf-8") as f: req = json.load(f)
-            r = marker_all(a.work, a.graded, req, emit=a.emit_steps)
+            r = marker_all(a.work, a.graded, req, emit=a.emit_steps, spec_file=a.spec_file, title=a.title)
+        elif a.cmd == "import":
+            r = import_all(a.work, a.src, a.base, a.style_id, a.name, a.source_name, emit=a.emit_steps, max_seconds=a.max_seconds)
+        elif a.cmd == "restyle":
+            load = lambda p: json.load(open(p, encoding="utf-8")) if p else None
+            r = restyle_all(a.work, a.zip, load(a.changes_file), load(a.names_file), a.by, a.check_view, emit=a.emit_steps)
+        elif a.cmd == "specs":
+            with open(a.files_file, encoding="utf-8") as f: files = json.load(f)
+            r = specs_graded(a.work, a.zip, files, emit=a.emit_steps)
         elif a.cmd == "build":
             r = build_all(a.work, {k: getattr(a, k) for k in SOURCE_KEYS}, a.groups, not a.no_aama, emit=a.emit_steps)
         elif a.cmd == "regrade":
@@ -1149,6 +1615,8 @@ def main(argv=None):
         what = f"마커 {sm.get('length_m')} m · 벌당 {sm.get('yield_m_per_bundle')} m · 효율 {sm.get('efficiency_pct')}%"
     elif r.get("mode") == "graded":
         what = "graded.json" + (f" · 버전과 차 {r['view_match']['max_mm']}mm" if r.get("view_match") else "")
+    elif r.get("mode") == "specs":
+        what = f"명세 {len(r.get('sizes') or [])}사이즈 · 한 벌 {r.get('per_bundle')}장"
     else:
         what = " · ".join(f"{k} {s['view_bytes']:,}B/{s['zip_bytes']:,}B" for k, s in r["styles"].items())
     print(f"[service] 끝 · 최고 메모리 {r['peak_rss_mb']} MB" + (f" · VmPeak {r['vm_peak_mb']} MB" if r.get("vm_peak_mb") else "")

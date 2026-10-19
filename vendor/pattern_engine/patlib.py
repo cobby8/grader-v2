@@ -104,12 +104,13 @@ def spec_instances(specs, flip_y=False):
                      notch=[f(l) for l in p["notch"]], fold=f(p["fold"]) if p.get("fold") else None)
         p["en_name"] = meta.get("en_name")
         qty = int(meta.get("qty") or 1); note = meta.get("note") or ""
+        mir = meta.get("mirror", True) is not False             # meta.mirror=False — 좌우 짝이 아니라 «같은 모양 n장»(2026-10-20 이름 확인 화면)
         if qty <= 1:
             inst[base] = (p, base, "", note)
         else:
             for j in range(qty):
-                q = mirror(p) if j % 2 else p
-                inst[f"{base} {j + 1}"] = (q, base, "", (note + " · " if note else "") + ("짝(뒤집음)" if j % 2 else f"{qty}장 중 {j + 1}"))
+                q = mirror(p) if (j % 2 and mir) else p
+                inst[f"{base} {j + 1}"] = (q, base, "", (note + " · " if note else "") + ("짝(뒤집음)" if (j % 2 and mir) else f"{qty}장 중 {j + 1}"))
     return inst
 
 
