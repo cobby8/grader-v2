@@ -39,9 +39,18 @@
   /* 목록 */
   .ik-new { width: 100%; height: 56px; font-size: 17px; }
   .ik-cards { display: grid; gap: 10px; margin-top: 18px; }
-  .ik-card { display: grid; gap: 4px; width: 100%; text-align: left; padding: 14px 16px; border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-lg); background: var(--surface-card); cursor: pointer; font: var(--text-body); color: var(--text-body); }
+  .ik-card { display: grid; gap: 10px; padding: 14px 16px; border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg); background: var(--surface-card); }
   .ik-card:hover { border-color: var(--border-strong); }
+  .ik-card__open { display: grid; gap: 4px; width: 100%; text-align: left; padding: 0; border: 0; background: none; cursor: pointer; font: var(--text-body); color: var(--text-body); }
+  .ik-card__del { display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding-top: 8px; border-top: 1px solid var(--border-subtle); }
+  .ik-card__del .ik-linkbtn { padding: 4px 0; }
+  .ik-card__ask { flex: 1; font: var(--text-sm); color: var(--text-muted); }
+  .ik-newform { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--surface-card); }
+  .ik-newform label { font: var(--text-sm-strong); color: var(--text-body); }
+  .ik-newform .input { font-size: 16px; height: 46px; }
+  .ik-bar__title.is-link { cursor: pointer; }
+  .ik-bar__edit { font-size: 16px; margin-left: 4px; color: var(--text-subtle); vertical-align: -2px; }
   .ik-card__top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .ik-card__code { font: var(--text-sm-strong); color: var(--text-muted); font-variant-numeric: tabular-nums; }
   .ik-card__name { font: var(--text-body-strong); color: var(--text-strong); }
@@ -207,7 +216,7 @@
 <body>
 <header class="ik-bar">
   <button class="ik-bar__back hidden" id="backBtn" type="button" aria-label="의뢰 목록으로"><span class="material-symbols-outlined">arrow_back</span></button>
-  <div class="ik-bar__title"><b id="barTitle">패턴 의뢰</b><small id="barSub"></small></div>
+  <div class="ik-bar__title" id="barTitleBox"><b><span id="barTitle">패턴 의뢰</span><span class="material-symbols-outlined ik-bar__edit hidden" id="barEdit" aria-label="이름 고치기">edit</span></b><small id="barSub"></small></div>
   <button class="ik-save" id="saveState" type="button" aria-live="polite"></button>
 </header>
 <div class="ik-practice hidden" id="practiceNote">연습 모드 — 이 브라우저에만 저장돼요</div>
@@ -482,6 +491,7 @@ async function init() {
 }
 
 /* ---------- 목록 ---------- */
+const NEW_BTN = '<button class="btn btn--primary ik-new" type="button" id="newBtn"><span class="material-symbols-outlined">add</span>새 의뢰 시작</button>';
 async function showList() {
   cur = null;
   $("#backBtn").classList.add("hidden");
@@ -490,34 +500,82 @@ async function showList() {
   $("#roNote").classList.add("hidden");
   $("#barTitle").textContent = "패턴 의뢰";
   $("#barSub").textContent = "실물 옷 사진·치수 모으기";
+  $("#barEdit").classList.add("hidden");
+  $("#barTitleBox").classList.remove("is-link");
   setSave("");
   const main = $("#main");
-  main.innerHTML = '<button class="btn btn--primary ik-new" type="button" id="newBtn"><span class="material-symbols-outlined">add</span>새 의뢰 시작</button>' +
+  main.innerHTML = '<div id="newBox">' + NEW_BTN + "</div>" +
     '<h2 class="ik-h3">내 의뢰</h2><div class="ik-cards" id="cards"><div class="ik-center"><div class="spinner"></div></div></div>';
-  $("#newBtn").addEventListener("click", newIntake);
   let rows = [];
   try { rows = await store.list(); }
   catch (e) { $("#cards").innerHTML = '<p class="ik-empty">목록을 불러오지 못했어요 — ' + esc(errText(e)) + "</p>"; return; }
   $("#cards").innerHTML = rows.length ? rows.map((r) =>
-    '<button class="ik-card" type="button" data-id="' + esc(r.id) + '">' +
+    '<div class="ik-card" data-card="' + esc(r.id) + '"><button class="ik-card__open" type="button" data-id="' + esc(r.id) + '">' +
       '<span class="ik-card__top"><span class="ik-card__code">' + esc(r.code) + '</span><span class="ik-status ik-status--' + esc(r.status) + '">' + esc(STATUS[r.status] || r.status) + "</span></span>" +
       '<span class="ik-card__name">' + esc(r.product_name || "(제품 이름 없음)") + (r.size_label ? " · " + esc(r.size_label) : "") + "</span>" +
-      '<span class="ik-card__meta">' + esc(when(r.updated_at)) + "</span></button>").join("")
+      '<span class="ik-card__meta">' + esc(when(r.updated_at)) + "</span></button>" +
+      // 작성 중인 것만 지울 수 있다(제출한 것은 규칙상 본인이 못 지운다)
+      (r.status === "draft" ? '<div class="ik-card__del" data-delbox="' + esc(r.id) + '">' + DEL_BTN(r.id) + "</div>" : "") +
+    "</div>").join("")
     : '<p class="ik-empty">아직 의뢰가 없어요.</p>';
-  $("#cards").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-id]");
-    if (b) location.assign("intake.html?id=" + encodeURIComponent(b.dataset.id) + "&step=1");
-  });
 }
+const DEL_BTN = (id) => '<button class="ik-linkbtn" type="button" data-del="' + esc(id) + '">지우기</button>';
+
+// 목록 화면 동작 — 새 의뢰(이름부터 받기)·열기·지우기
+$("#main").addEventListener("click", async (e) => {
+  if (cur) return;                                     // 의뢰를 연 화면에서는 아래 단계 화면 동작이 맡는다
+  const b = e.target.closest("button");
+  if (!b) return;
+  if (b.id === "newBtn") {
+    $("#newBox").innerHTML = '<div class="ik-newform"><label for="newName">제품 이름</label>' +
+      '<input class="input" id="newName" autocomplete="off" enterkeyhint="done" placeholder="예: 레이지비 럭비 저지">' +
+      '<div class="ik-addrow"><button class="btn btn--secondary" type="button" id="newCancel">그만두기</button>' +
+      '<button class="btn btn--primary" type="button" id="newGo" disabled>만들기</button></div></div>';
+    $("#newName").focus();
+    return;
+  }
+  if (b.id === "newCancel") { $("#newBox").innerHTML = NEW_BTN; return; }
+  if (b.id === "newGo") { newIntake(); return; }
+  if (b.dataset.id) { location.assign("intake.html?id=" + encodeURIComponent(b.dataset.id) + "&step=1"); return; }
+  if (b.dataset.del) {
+    b.parentElement.innerHTML = '<span class="ik-card__ask">사진도 함께 지워져요.</span>' +
+      '<button class="btn btn--ghost btn--sm" type="button" data-delno="' + esc(b.dataset.del) + '">그만두기</button>' +
+      '<button class="btn btn--danger btn--sm" type="button" data-delyes="' + esc(b.dataset.del) + '">지우기</button>';
+    return;
+  }
+  if (b.dataset.delno) { b.parentElement.innerHTML = DEL_BTN(b.dataset.delno); return; }
+  if (b.dataset.delyes) {
+    const id = b.dataset.delyes;
+    b.disabled = true;
+    try {
+      await store.remove(id);
+      const card = document.querySelector('[data-card="' + CSS.escape(id) + '"]');
+      if (card) card.remove();
+      if (!document.querySelector(".ik-card")) $("#cards").innerHTML = '<p class="ik-empty">아직 의뢰가 없어요.</p>';
+      toast("지웠어요");
+    } catch (err) {
+      b.disabled = false;
+      toast("지우지 못했어요 — " + errText(err));
+    }
+  }
+});
+$("#main").addEventListener("input", (e) => {
+  if (!cur && e.target.id === "newName") $("#newGo").disabled = !e.target.value.trim();
+});
+$("#main").addEventListener("keydown", (e) => {
+  if (!cur && e.target.id === "newName" && e.key === "Enter" && e.target.value.trim()) { e.preventDefault(); newIntake(); }
+});
 
 async function newIntake() {
-  const btn = $("#newBtn"); btn.disabled = true;
+  const name = (($("#newName") || {}).value || "").trim();
+  if (!name) return;
+  const btn = $("#newGo"); if (btn) btn.disabled = true;
   const sel = K.defaults(BASE || CAT.bases[0]);
   try {
-    const row = await store.create({ base_type: "sleeve_top", catalog_version: CAT.version, parts: tokensOf(sel), data: { sel } });
+    const row = await store.create({ product_name: name, base_type: "sleeve_top", catalog_version: CAT.version, parts: tokensOf(sel), data: { sel } });
     location.assign("intake.html?id=" + encodeURIComponent(row.id) + "&step=1");
   } catch (e) {
-    btn.disabled = false;
+    if (btn) btn.disabled = false;
     toast("새 의뢰를 만들지 못했어요 — " + errText(e));
   }
 }
@@ -575,6 +633,8 @@ function go(n) {
 }
 function renderBar() {
   $("#barTitle").textContent = cur.product_name || "새 의뢰";
+  $("#barEdit").classList.toggle("hidden", readOnly);           // 제목을 누르면 이름 고치는 단계로
+  $("#barTitleBox").classList.toggle("is-link", !readOnly);
   $("#barSub").textContent = cur.code + " · " + (STATUS[cur.status] || cur.status) + (cur.size_label ? " · " + cur.size_label : "");
 }
 
@@ -965,6 +1025,12 @@ $("#nextBtn").addEventListener("click", () => {
   else leave();
 });
 $("#backBtn").addEventListener("click", leave);
+$("#barTitleBox").addEventListener("click", () => {     // 제목(제품 이름)을 누르면 «기본 정보»로 가서 이름 칸에 커서
+  if (!cur || readOnly) return;
+  if (sheet) return;
+  flush(); go(2);
+  setTimeout(() => { const f = $("#fName"); if (f) { f.focus(); f.select(); } }, 60);
+});
 
 function parseNum(s) {
   const t = String(s || "").replace(",", ".").replace(/[^0-9.]/g, "");
