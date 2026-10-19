@@ -101,6 +101,27 @@
   .grade-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
   svg.no-cut .cut { stroke: none; } svg.no-int .int, svg.no-notch .notch, svg.no-hole .hole, svg.no-grain .grain, svg.no-fold .fold { display: none; }
 
+  /* ===== 마커·요척(F10 4단계) — 그림 자리 대신 입력·결과 칸 ===== */
+  .is-mkhide { display: none !important; }
+  .mk { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .mk-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-end; }
+  .mk-field { display: flex; flex-direction: column; gap: 4px; font: var(--text-caption); color: var(--text-muted); }
+  .mk-field .input { width: 110px; height: 32px; }
+  .mk-counts { display: grid; grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); gap: 6px; }
+  .mk-cnt { display: flex; flex-direction: column; gap: 2px; font: var(--text-caption); color: var(--text-muted); }
+  .mk-cnt .input { width: 100%; height: 32px; text-align: right; }
+  .mk-total { font: var(--text-sm-strong); color: var(--text-strong); }
+  .mk-total.is-bad { color: var(--red-600); }
+  .mk-warn { color: var(--amber-600); margin-top: 2px; }
+  .mk-prog { height: 6px; border-radius: 3px; background: var(--border-subtle); overflow: hidden; }
+  .mk-prog > div { height: 100%; width: 0; background: var(--stiz-red); transition: width .4s; }
+  .mk-img { display: block; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; background: var(--paper); }
+  .mk-img img { display: block; width: 100%; height: auto; }
+  .mk-nums { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .mk-big { font: var(--text-lg-strong, 600 18px/1.4 sans-serif); color: var(--text-strong); font-variant-numeric: tabular-nums; }
+  .mk-ok { color: var(--green-700) !important; } .mk-bad { color: var(--red-600) !important; font-weight: 700; }
+  .mk h4 { font: var(--text-sm-strong); color: var(--text-strong); margin: 0 0 6px; }
+
   /* ===== 왼쪽 메뉴 배경: 메뉴 자체는 화면 높이(sticky)라 긴 페이지 아래쪽이 비어 보였다 → 같은 폭의 띠를 바탕에 칠한다 ===== */
   .app { background: linear-gradient(to right, var(--surface-card) calc(var(--sidebar-w) - 1px),
                                      var(--border-subtle) calc(var(--sidebar-w) - 1px), var(--border-subtle) var(--sidebar-w),
@@ -188,6 +209,7 @@
                 <button type="button" data-mode="one" class="is-active">한 사이즈</button>
                 <button type="button" data-mode="overlay">겹쳐 보기</button>
                 <button type="button" data-mode="grade" id="gradeTab" class="hidden">그레이딩</button>
+                <button type="button" data-mode="marker" id="markerTab" class="hidden" title="원단 폭에 사이즈별 벌수를 깔아 벌당 요척을 냅니다">마커·요척</button>
               </div>
               <select class="input" id="pieceSel" style="width:auto;height:32px" aria-label="조각"></select>
               <button class="btn btn--sm btn--secondary" id="measureBtn" type="button"><span class="material-symbols-outlined">straighten</span>길이 재기</button>
@@ -224,6 +246,39 @@
                 <button class="btn btn--sm btn--secondary" id="zFit" type="button" aria-label="맞춤"><span class="material-symbols-outlined">fit_screen</span></button>
               </div>
               <div class="cad-hint" id="hint">끌어서 이동 · 휠/두 손가락으로 확대</div>
+            </div>
+            <div class="mk hidden" id="markerPane">
+              <div>
+                <h4>원단 · <span id="mkGroup"></span></h4>
+                <div class="mk-row">
+                  <label class="mk-field">원단 폭(cm)<input class="input" id="mkWidth" type="number" inputmode="decimal" min="50" max="300" step="1" value="150" /></label>
+                  <label class="mk-field">조각 간격(mm)<input class="input" id="mkGap" type="number" inputmode="decimal" min="0" max="20" step="0.5" value="3" /></label>
+                  <label class="chip" title="결·광택·방향 무늬가 있으면 조각을 180° 돌리지 않습니다"><input type="checkbox" id="mkNap" />원단 결 있음</label>
+                  <label class="chip hidden" id="mkSearchChip" title="여러 번 깔아 보고 가장 짧은 것을 고릅니다(관리자 · 최대 2분 남짓, 그동안 합성이 기다립니다)"><input type="checkbox" id="mkSearch" />여러 번 깔기</label>
+                </div>
+              </div>
+              <div>
+                <h4>사이즈별 벌수 <span class="mk-total" id="mkTotal"></span></h4>
+                <div class="mk-counts" id="mkCounts"></div>
+                <div class="mk-row" style="margin-top:8px">
+                  <button class="btn btn--sm btn--ghost" type="button" id="mkAll1">모두 1벌</button>
+                  <button class="btn btn--sm btn--ghost" type="button" id="mkClear">비우기</button>
+                  <button class="btn btn--sm btn--secondary" type="button" id="mkOrderBtn"><span class="material-symbols-outlined">upload_file</span>주문서로 채우기</button>
+                  <input type="file" id="mkOrder" accept=".xlsx,.xlsm" class="hidden" />
+                </div>
+                <div class="cad-card__sub" id="mkOrderNote" style="margin-top:4px"></div>
+              </div>
+              <details>
+                <summary class="cad-card__sub" style="cursor:pointer">뺄 조각(다른 원단으로 따로 재단하는 립 등)</summary>
+                <div class="cad-chips" id="mkEx" style="margin-top:6px"></div>
+              </details>
+              <div class="mk-row">
+                <button class="btn btn--primary" type="button" id="mkRun"><span class="material-symbols-outlined">grid_view</span>마커 만들기</button>
+                <button class="btn btn--sm btn--ghost hidden" type="button" id="mkCancel">취소</button>
+                <span class="cad-card__sub" id="mkStatus" role="status" aria-live="polite"></span>
+              </div>
+              <div class="mk-prog hidden" id="mkProg"><div id="mkBar"></div></div>
+              <div id="mkResult"></div>
             </div>
           </div>
 
@@ -332,7 +387,7 @@ async function apiError(res) { try { const j = await res.json(); return j.detail
 
 // ====== 상태 ======
 const S = {
-  styles: [], canUpload: false, rebuildable: [], meta: null, rebuildJob: null,
+  styles: [], canUpload: false, rebuildable: [], markerable: [], meta: null, rebuildJob: null,
   style: null, ver: null, view: null,       // 지금 연 스타일·버전·view.json
   mode: "one", size: null, overlay: new Set(), align: "none", ovCut: false,
   piece: "", measure: false, picks: [], pickCheck: null,
@@ -378,7 +433,7 @@ function checkValue(sid, c) {
 
 // ====== 목록 ======
 async function loadMe() {
-  try { const r = await apiFetch("/api/cad/me"); if (r.ok) { const j = await r.json(); S.canUpload = !!j.can_upload; S.rebuildable = j.rebuildable || []; } } catch (e) {}
+  try { const r = await apiFetch("/api/cad/me"); if (r.ok) { const j = await r.json(); S.canUpload = !!j.can_upload; S.rebuildable = j.rebuildable || []; S.markerable = j.markerable || []; } } catch (e) {}
   $("#uploadBtn").classList.toggle("hidden", !S.canUpload);
 }
 async function loadList() {
@@ -776,8 +831,16 @@ function syncMode() {
   $("#layerTools").classList.toggle("hidden", S.mode === "overlay"); renderChips(); fitView(); draw(); renderGrade();
 }
 function syncModeTabs() {
+  // 마커 탭 — 서버에 원본이 있는 스타일만(로그인 직원 누구나). 마커일 때는 그림 자리를 입력·결과 칸으로 바꾼다
+  const mkOk = !!S.view && (S.markerable || []).includes(S.style);
+  $("#markerTab").classList.toggle("hidden", !mkOk);
+  if (S.mode === "marker" && !mkOk) S.mode = "one";
   $("#modeSeg").querySelectorAll("button").forEach((x) => x.classList.toggle("is-active", x.dataset.mode === S.mode));
   $("#gradeCard").classList.toggle("hidden", S.mode !== "grade");
+  const mk = S.mode === "marker";
+  ["#sizeChips", "#layerTools", "#svgWrap", "#pieceSel", "#measureBtn"].forEach((q) => $(q).classList.toggle("is-mkhide", mk));
+  $("#markerPane").classList.toggle("hidden", !mk);
+  if (mk) renderMarker();
 }
 $("#modeSeg").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { S.mode = b.dataset.mode; S.pickCheck = null; syncMode(); }));
 $("#pieceSel").addEventListener("change", (e) => { S.piece = e.target.value; S.picks = []; buildAlign(); fitView(); draw(); renderMeasure(); });
@@ -1139,6 +1202,146 @@ $("#acctBtn").addEventListener("click", async () => {
   try { if (acctSupa) await acctSupa.auth.signOut(); } catch (e) {}
   sessionStorage.removeItem(TOKEN_KEY); location.replace("/static/screens/login.html");
 });
+
+// ====== 마커·요척(F10 4단계) — 원단 폭에 사이즈별 벌수를 깔아 «벌당 요척» ======
+//   로그인 직원 누구나. 서버가 엔진으로 깔고(1분 남짓, «빠르게» 면 30초 남짓) 그림·숫자·파일을 돌려준다. 결과는 버전에 저장하지 않는다.
+//   벌수는 손으로 넣거나 주문서 엑셀을 올려 채운다(피스 규칙 — 상의 = 상의 사이즈 칸이 찬 사람 수 · 하의 = 하의 칸).
+const GRADE_SIZES = ["S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL"];
+const MK = { key: null, job: null, res: null, img: null, note: "" };
+const mkKey = () => S.style + "|" + S.ver;
+const mkGroupKo = () => (S.view && S.view.style.group === "bottom") ? "하의" : "상의";
+function mkReset() {
+  if (MK.img) URL.revokeObjectURL(MK.img);
+  MK.key = S.view ? mkKey() : null; MK.res = null; MK.img = null; MK.note = "";
+  if (!MK.job) $("#mkStatus").textContent = "";
+  $("#mkBar").style.width = "0%"; $("#mkProg").classList.add("hidden");
+  $("#mkCounts").innerHTML = ""; $("#mkResult").innerHTML = "";
+}
+function renderMarker() {
+  if (!S.view) return;
+  if (MK.key !== mkKey()) mkReset();
+  $("#mkGroup").textContent = mkGroupKo();
+  $("#mkSearchChip").classList.toggle("hidden", !S.canUpload);   // 여러 번 깔기는 관리자만 — 직원은 빠르게(서버 기본)
+  if (!$("#mkCounts").children.length) {                    // 사이즈 칸 — 그 버전 사이즈(S~5XL)만. 처음엔 모두 1벌
+    $("#mkCounts").innerHTML = S.view.style.sizes.filter((s) => GRADE_SIZES.includes(s)).map((s) =>
+      `<label class="mk-cnt"><span>${esc(s)}</span><input class="input" type="number" inputmode="numeric" min="0" max="200" step="1" value="1" data-mk-size="${esc(s)}" aria-label="${esc(s)} 벌수" /></label>`).join("");
+    $("#mkCounts").querySelectorAll("input").forEach((i) => i.addEventListener("input", mkTotal));
+    $("#mkEx").innerHTML = S.view.style.pieces.map((n) => `<label class="chip"><input type="checkbox" data-mk-ex="${esc(n)}" />${esc(n)}</label>`).join("");
+  }
+  mkTotal(); renderMarkerResult();
+}
+function mkCounts() {
+  const o = {};
+  $("#mkCounts").querySelectorAll("[data-mk-size]").forEach((i) => { if (i.value.trim() !== "") o[i.dataset.mkSize] = Number(i.value); });
+  return o;
+}
+function mkTotal() {
+  const n = Object.values(mkCounts()).reduce((t, v) => t + (Number.isFinite(v) ? v : 0), 0);
+  $("#mkTotal").textContent = `합 ${Number(n)}벌` + (n > 200 ? " — 200벌까지" : "");
+  $("#mkTotal").classList.toggle("is-bad", n < 1 || n > 200);
+}
+function mkSetAll(v) { $("#mkCounts").querySelectorAll("[data-mk-size]").forEach((i) => { i.value = v; }); mkTotal(); }
+$("#mkAll1").addEventListener("click", () => mkSetAll(1));
+$("#mkClear").addEventListener("click", () => mkSetAll(0));
+$("#mkOrderBtn").addEventListener("click", () => $("#mkOrder").click());
+$("#mkOrder").addEventListener("change", async (e) => {
+  const f = e.target.files[0]; e.target.value = ""; if (!f) return;
+  const fd = new FormData(); fd.append("order", f);
+  $("#mkOrderNote").textContent = "주문서 읽는 중…";
+  try {
+    const r = await apiFetch("/api/cad/order/counts", { method: "POST", body: fd });
+    if (!r.ok) { const why = await apiError(r) || ("서버 응답 " + r.status); $("#mkOrderNote").textContent = "못 읽음: " + why; toast("fail", "error", "주문서를 못 읽었어요", why); return; }
+    const j = await r.json(); const g = S.view.style.group === "bottom" ? "bottom" : "top"; const c = j[g] || {};
+    const here = new Set([...$("#mkCounts").querySelectorAll("[data-mk-size]")].map((i) => i.dataset.mkSize));
+    $("#mkCounts").querySelectorAll("[data-mk-size]").forEach((i) => { i.value = c[i.dataset.mkSize] || 0; });
+    const extra = Object.keys(c).filter((s) => !here.has(s));    // 이 스타일에 없는 사이즈(XS·아동 호수 등) — 빠진다고 알린다
+    const warn = (j.warnings || []).map((w) => w.replace(/^⚠️\s*/, ""));
+    if (g === "bottom" && !j.bottom_found) warn.unshift("하의 사이즈 열이 없어 하의 벌수를 못 셌습니다 — 직접 넣어 주세요.");
+    if (extra.length) warn.push("이 스타일에 없는 사이즈라 뺐습니다: " + extra.map((s) => s + " " + Number(c[s]) + "벌").join(" · "));   // 아래에서 한 번만 esc
+    $("#mkOrderNote").innerHTML = `${esc(f.name)} · ${Number(j.people) || 0}줄 → ${esc(mkGroupKo())} ${Number(Object.values(c).reduce((t, v) => t + v, 0))}벌`
+      + warn.map((w) => `<div class="mk-warn">${esc(w)}</div>`).join("");
+    mkTotal();
+  } catch (err) { if (!/로그인/.test(String(err.message))) $("#mkOrderNote").textContent = "서버에 연결하지 못했습니다."; }
+});
+$("#mkRun").addEventListener("click", async () => {
+  if (MK.job) return;
+  const key = mkKey(), id = S.style, ver = S.ver;
+  const counts = {}; for (const [s, v] of Object.entries(mkCounts())) if (v) counts[s] = v;
+  const body = { width_cm: Number($("#mkWidth").value), gap_mm: Number($("#mkGap").value), nap: $("#mkNap").checked,
+                 quick: !(S.canUpload && $("#mkSearch").checked), counts, exclude: [...document.querySelectorAll("#mkEx [data-mk-ex]:checked")].map((c) => c.dataset.mkEx) };
+  const btn = $("#mkRun"), st = $("#mkStatus");
+  btn.disabled = true; st.textContent = "요청 중…"; $("#mkProg").classList.remove("hidden"); $("#mkBar").style.width = "0%";
+  $("#mkCancel").classList.add("hidden");
+  try {
+    const r = await apiFetch(`/api/cad/styles/${encodeURIComponent(id)}/v/${encodeURIComponent(ver)}/marker`,
+                             { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (r.status !== 202) { const why = await apiError(r) || ("서버 응답 " + r.status); st.textContent = "시작 못 함: " + why; $("#mkProg").classList.add("hidden"); return; }
+    const job = await r.json(); MK.job = job.job_id; $("#mkCancel").classList.remove("hidden");
+    const t0 = Date.now();
+    const j = await pollJob(job.job_id, (p) => {
+      if (MK.key !== key) return;
+      st.textContent = (p.stage === "queued" && p.ahead ? `앞 작업 ${Number(p.ahead)}건 기다림` : (p.stage_ko || "진행 중")) + ` · ${Number(Math.round((Date.now() - t0) / 1000))}초`;
+      $("#mkBar").style.width = Math.max(4, pctOf(p)) + "%";
+    });
+    if (MK.key !== key) return;                              // 기다리는 사이 다른 판을 열었다 — 결과를 엉뚱한 판에 붙이지 않는다
+    $("#mkProg").classList.add("hidden");
+    if (j.status === "error") { st.textContent = (j.cancelled ? "" : "실패: ") + (j.error || "");
+      if (!j.cancelled) toast("fail", "error", "마커를 못 만들었어요", j.error || ""); return; }
+    MK.res = j.result; st.textContent = `끝 · ${Number(Math.round((Date.now() - t0) / 1000))}초`;
+    try { const pr = await apiFetch(j.result.files.png.url); if (pr.ok) MK.img = URL.createObjectURL(await pr.blob()); } catch (e) {}
+    renderMarkerResult();
+  } catch (e) {
+    if (!/로그인/.test(String(e.message))) { st.textContent = "진행 확인 실패: " + e.message; $("#mkProg").classList.add("hidden"); }
+  } finally { MK.job = null; btn.disabled = false; $("#mkCancel").classList.add("hidden"); }
+});
+$("#mkCancel").addEventListener("click", async () => {      // 취소 — 맡긴 본인·관리자. 돌고 있으면 서버가 일꾼을 멈춘다
+  if (!MK.job) return;
+  $("#mkCancel").disabled = true;
+  try {
+    const r = await apiFetch(`/api/cad/jobs/${encodeURIComponent(MK.job)}`, { method: "DELETE" });
+    if (!r.ok) toast("fail", "error", "취소하지 못했어요", await apiError(r) || ("서버 응답 " + r.status));
+    else $("#mkStatus").textContent = "취소하는 중…";
+  } catch (e) {} finally { $("#mkCancel").disabled = false; }
+});
+function renderMarkerResult() {
+  const R = MK.res; if (!R) { $("#mkResult").innerHTML = ""; return; }
+  const s = R.summary || {}, v = R.verify || {}, m = R.memory || {}, q = R.request || {};
+  const cnt = Object.entries(q.counts || {}).map(([k, n]) => k + "×" + Number(n)).join(" ");
+  const hit = s.search && s.search.time_budget_hit;
+  $("#mkResult").innerHTML = `
+    ${MK.img ? `<a class="mk-img" href="${esc(MK.img)}" target="_blank" rel="noopener" title="크게 보기"><img src="${esc(MK.img)}" alt="마커 미리보기 — 가로가 원단 길이" /></a>` : ""}
+    <div class="mk-nums">
+      <div><div class="mk-big">${fmt(s.yield_m_per_bundle, 3)} m</div><div class="cad-card__sub">벌당 요척</div></div>
+      <div><div class="mk-big">${fmt(s.length_m, 3)} m</div><div class="cad-card__sub">마커 길이 · ${Number(s.bundles) || 0}벌</div></div>
+      <div><div class="mk-big">${fmt(s.efficiency_pct, 1)}%</div><div class="cad-card__sub">효율</div></div>
+    </div>
+    <dl class="kv">
+      <dt>원단</dt><dd>폭 ${fmt(q.width_cm, 0)}cm · 간격 ${fmt(q.gap_mm, 1)}mm${esc(q.nap ? " · 결 있음(0°만)" : "")}</dd>
+      <dt>벌수</dt><dd>${esc(cnt)}</dd>
+      <dt>뺀 조각</dt><dd>${esc((q.exclude || []).join(" · ") || "없음")}</dd>
+      <dt>조각</dt><dd>${Number(s.piece_count) || 0}장</dd>
+      <dt>검산</dt><dd class="${esc(v.ok ? "mk-ok" : "mk-bad")}">겹침 ${Number(v.overlaps) || 0} · 최소 간격 ${fmt(v.min_gap_mm, 2)}mm · 식서 ${esc((v.rotations || []).join("°/"))}°${esc(v.ok ? " ✓" : "")}</dd>
+      <dt>깔기</dt><dd>${esc(q.quick ? "빠르게(한 번)" : "여러 번 " + (Number((s.search || {}).tries) || 0) + "회")}${esc(hit ? " · 시간 한도에서 멈춤" : "")}${esc(q.forced_quick ? " · 서버 한도로 빠르게 바꿈" : "")}</dd>
+      <dt>메모리</dt><dd>일꾼 최고 ${fmt(m.worker_max_mb, 0)}MB · 서버 ${fmt(m.server_peak_mb, 0)}MB</dd>
+    </dl>
+    <div class="dl-grid" style="margin-top:8px" id="mkDl"></div>
+    <div class="muted-note">결과는 버전에 저장하지 않습니다(같은 값으로 다시 누르면 같은 결과). PDF 는 1:1 mm · 5m 마다 쪽이 나뉩니다.</div>`;
+  for (const k of ["pdf", "dxf", "png", "json"]) {                // 내려받기 단추 — 글자는 textContent 로(HTML 로 안 넣는다)
+    if (!(R.files || {})[k]) continue;
+    const b = document.createElement("button"); b.type = "button"; b.dataset.mkDl = k;
+    b.className = "btn btn--sm " + (k === "pdf" ? "btn--primary" : "btn--secondary"); b.textContent = R.files[k].label || k;
+    $("#mkDl").appendChild(b);
+  }
+  $("#mkResult").querySelectorAll("[data-mk-dl]").forEach((b) => b.addEventListener("click", async () => {
+    b.disabled = true;
+    try {
+      const res = await apiFetch(R.files[b.dataset.mkDl].url);
+      if (!res.ok) { toast("fail", "error", "내려받지 못했어요", await apiError(res) || ("서버 응답 " + res.status)); return; }
+      await saveBlob(res, "marker." + b.dataset.mkDl);
+    } catch (e) { if (!/로그인/.test(String(e.message))) toast("fail", "error", "내려받지 못했어요", "서버에 연결하지 못했습니다."); }
+    finally { b.disabled = false; }
+  }));
+}
 
 // ── 시험·자동 확인용 창구(화면 동작에는 쓰지 않는다) ──
 window.CAD = { state: S, grade: G, applyDrag, changes, handlePos, renderGrade, drawGrade, renderInfo, measureNodes, checkValue, open: openStyle, setSize,

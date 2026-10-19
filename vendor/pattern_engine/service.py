@@ -25,9 +25,15 @@
 #     명령줄:  python tools/pattern-engine/service.py regrade --work <폴더> --group top --rules-file <표.json> [--full]
 #     규칙표 = {조각: {기준점: {사이즈: [Δx, Δy]}}} (RULE_FRAME 참고) — rules_from_view(view) 로 기존 버전에서 읽고,
 #              merge_rules(표, 바꾼칸) 으로 합치고, mesh_checks 가 맞물림(래글런·옆선·소매 밑선·안솔기)을 초록/빨강으로 판정한다
-#   🚫 쇼핑몰 운영 DB·드라이브를 읽지도 쓰지도 않는다. 결과는 <work> 안에만 생긴다.
-#   🚫 marker.py 는 부르지 않는다(4단계 · 다른 작업자가 효율 개선 중).
-import sys, os, json, math, time, shutil, argparse, datetime, contextlib, subprocess, threading, runpy, hashlib
+#   F10 4단계(마커·요척):
+#     서버:    service.marker(work, "top", {"S": 1, …}, width_cm=150, gap_mm=3, rules=…|None, check_view=<버전 view.json>, on_step=…)
+#              ← 일꾼 두 번: ① 원본 → 그레이딩(graded.json, 그 버전 모양과 같은지 확인) ② marker.py 로 배치(PDF·DXF·PNG·JSON)
+#     명령줄:  python tools/pattern-engine/service.py graded --work <폴더> --group top [--rules-file 표.json] [--check-view view.json]
+#              python tools/pattern-engine/service.py marker --work <폴더> --graded graded.json --request-file 요청.json
+#     배치 계산은 marker.main(명령줄과 «같은 함수») 을 그대로 부른다 → 같은 입력이면 명령줄 결과와 길이·조각 자리가 같다.
+#     서버 기본: 일꾼 수 1 · FFT 기억 100MB · 탐색 한도 120초(MARKER_SERVER) — Render 512MB 안
+#   🚫 쇼핑몰 운영 DB·드라이브를 읽지도 쓰지도 않는다. 결과는 <work> 안에만 생긴다(주문 명단은 부르는 쪽이 넘긴다).
+import sys, os, re, json, math, time, shutil, argparse, datetime, contextlib, subprocess, threading, runpy, hashlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIX = os.path.join(HERE, "fixtures", "gas-warmup-2026")
@@ -84,6 +90,46 @@ MESH = {
                ("pants_side_front", "앞판 옆선=앞배색", "하의 검산", "앞판 옆선−앞배색", 0.0, 1.0),
                ("pants_side_back", "뒤판 옆선=뒤배색", "하의 검산", "뒤판 옆선−뒤배색", 0.0, 1.0)],
 }
+
+# ════════ 마커(F10 4단계) — 원단 폭에 사이즈별 벌수를 깔아 «벌당 요척» ════════
+MARKER_STEPS = ["build", "grade", "check", "marker"]       # ①② 원본 → 그레이딩 · ③ 그 버전 모양과 같은가 · ④ 배치+파일
+STEP_KO.update({"check": "버전 모양 확인", "marker": "원단 배치(마커)·파일"})
+MARKER_WIDTH_CM = (50.0, 300.0)                             # 원단 폭(cm) 허용 범위 — 실제 원단은 110~180cm
+MARKER_GAP_MM = (0.0, 20.0)                                 # 조각 간격(mm)
+MARKER_MAX_BUNDLES = 200                                    # 한 번에 까는 벌수 합 상한(조각 수·시간이 벌수에 비례)
+MARKER_BUDGET_MAX_S = 120.0                                 # 탐색 시간 상한(초) — 서버 일꾼 한 명이 오래 붙잡지 않게
+# 서버 기본값 — 결과는 일꾼 수·기억 한도와 무관(속도만 다르다).
+#   2026-10-20 실측(윈도우 · 빠르게 · 상의): FFT 기억 100MB → 0 으로 7벌 315→216MB · 14벌 386→287MB, 시간은 거의 같다(8.4→8.6초)
+#   → 서버는 기억하지 않는다(cache 0)
+MARKER_SERVER = {"jobs": 1, "cache_mb": 0.0, "budget": 120.0, "seed": 0}
+# ── 서버 입장 판정(admit_marker) — «벌수 × 장수» 로 일꾼 메모리·시간을 미리 어림한다(근거: MARKER_MODEL 실측 표) ──
+MARKER_BOX_MB = 512.0                                       # Render starter 상자
+MARKER_SERVER_MB = 160.0                                    # 서버(uvicorn) 몫 — 실측 151MB(마커 2번 돈 뒤) + 여유
+MARKER_MARGIN_MB = 20.0                                     # 어림 오차 여유
+MARKER_SLOW = 2.0                                           # Render(0.5 CPU) 가 이 PC 보다 느린 배수(가정 — 실측 전) · 시간 어림에 곱한다
+MARKER_GRADE_S = 12.0                                       # 그레이딩 일꾼(원본 → graded + 버전 대조) 이 PC 실측 9~10초
+# 실측 맞춤(2026-10-20 · 윈도우 · 일꾼 1·cache 0 · 폭 150cm · 빠르게 · 배치+PDF/DXF/PNG 합) — 아래 값보다 늘 «같거나 크게» 어림하게 맞췄다
+#   상의(벌당 17장)  조각 136 → 204MB·19초 | 238 → 213MB·32초 | 476 → 254MB·80초 | 714 → 294MB·217초 | 952 → 339MB·517초
+#   하의(벌당 14장)  조각 112 → 224MB·25초 | 196 → 243MB·64초 | 210 → 247MB·95초 | 392 → 290MB·231초   ← 하의 조각이 길어 장당 훨씬 느리다
+#   (같은 크기도 다시 재면 ±30% 흔들린다 — 하의 210장이 어림 76초보다 느린 95초 → 계수를 올려 «넘치지 않게» 맞췄다)
+#   시간은 조각 수에 «제곱보다 가파르게» 는다(끝부분 압축·다시 넣기) → 상의는 3제곱 항, 하의는 1.85제곱으로 맞췄다
+#   여러 번 깔기(일꾼 1·한도 95~120초) 메모리 = 빠르게 + 0~16MB 실측(상의 8벌 211·14벌 229·24벌 245 · 하의 8벌 232·15벌 236MB) → 몫 30MB
+MARKER_FIT = {
+    "top": {"rss0": 185.0, "rss_per_piece": 0.165, "t0": 13.0, "t_lin": 0.06, "t_k": 5.5e-7, "t_pow": 3.0},
+    "bottom": {"rss0": 200.0, "rss_per_piece": 0.24, "t0": 8.0, "t_lin": 0.0, "t_k": 0.0055, "t_pow": 1.85},   # t0: 작은 주문(3벌 10초)도 넘지 않게
+    "search_mb": 30.0,                                        # 여러 번 깔기 메모리 몫(실측 최대 +16MB)
+    # 원단 폭·간격 배수(2026-10-20 재리뷰 실측 — 폭 150·간격 3 기준 대비, 빠르게):
+    #   상의 14벌  폭 220 ×1.33 · 폭 300 ×1.59 · 간격 10 ×1.25 · 간격 20 ×1.18 · 폭 300+간격 20 ×1.50 | 상의 24벌 폭 300+간격 20 ×2.00(132초)
+    #   하의 8벌   폭 300 ×1.53 · 간격 20 ×1.62 · 폭 300+간격 20 ×2.06 | 하의 12벌 폭 300+간격 20 ×2.07(78초)
+    #   → 시간 × max(1, (폭/150)^0.75) × (1 + 0.035 × max(0, 간격−3)) — 실측보다 늘 크게(폭 300+간격 20 = ×2.69).
+    #     폭이 150 보다 좁으면 1 로 둔다(격자는 좁아도 마커가 길어진다 — 줄여 어림하지 않는다)
+    #   메모리: 폭 150 을 넘는 1cm 마다 +0.15MB(하의 12벌 폭 300+간격 20 = 258MB, 기준 어림 240MB)
+    "w_pow": 0.75, "gap_per_mm": 0.035, "rss_per_cm": 0.15,
+    "files_share": 0.3,                                       # 시간 중 파일 내보내기 몫(상의 476장 80초 중 24초)
+}
+MARKER_VIEW_TOL_MM = 0.05                                   # «다시 만든 모양 = 그 버전 모양» 허용 차(view.json 점 줄이기 오차와 같다)
+MARKER_FILES = {"json": "marker.json", "pdf": "marker.pdf", "dxf": "marker.dxf", "png": "marker.png"}   # 결과 파일(영문 이름)
+_SIZE_ALIAS = {"XXL": "2XL", "XXXL": "3XL", "XXXXL": "4XL", "XXXXXL": "5XL", "2X": "2XL", "3X": "3XL", "4X": "4XL", "5X": "5XL"}
 
 
 class ServiceError(RuntimeError):
@@ -187,6 +233,32 @@ def peak_rss_mb():
         return round(r / 2 ** 20 if sys.platform == "darwin" else r / 1024, 1)   # 리눅스는 KB, 맥은 바이트
     except Exception:
         return None
+
+
+def current_rss_mb():
+    """이 프로세스가 «지금» 쓰는 실제 RAM(MB) — 서버가 마커 입장 판정에 «서버 몫» 으로 쓴다(고정값 대신). 못 재면 None"""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes
+
+            class PMC(ctypes.Structure):
+                _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD), ("PeakWorkingSetSize", ctypes.c_size_t),
+                            ("WorkingSetSize", ctypes.c_size_t)] + [(f"x{i}", ctypes.c_size_t) for i in range(6)]
+            c = PMC(); c.cb = ctypes.sizeof(PMC)
+            k32 = ctypes.WinDLL("kernel32"); psapi = ctypes.WinDLL("psapi")
+            k32.GetCurrentProcess.restype = wintypes.HANDLE
+            psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(PMC), wintypes.DWORD]
+            if psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(c), c.cb):
+                return round(c.WorkingSetSize / 2 ** 20, 1)
+            return None
+        with open("/proc/self/status", encoding="ascii", errors="replace") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return round(int(line.split()[1]) / 1024, 1)
+    except Exception:
+        return None
+    return None
 
 
 def engine_version():
@@ -361,6 +433,148 @@ def max_rule_gap(a, b):
     return round(worst, 4)
 
 
+# ════════ 마커 요청 — 명단 → 벌수 · 입력 검사 (표준 라이브러리만 — 서버가 일꾼을 띄우기 전에 부른다) ════════
+def norm_size(s):
+    """사이즈 글자 정리 — ' 2xl ' → '2XL', 'XXL' → '2XL'. 빈칸이면 ''. (marker.norm_size 와 같은 규칙 — 시험이 견준다)"""
+    t = str(s or "").strip().upper().replace(" ", "")
+    return _SIZE_ALIAS.get(t, t)
+
+
+def counts_from_members(members, garment):
+    """주문 명단 [{topSize, bottomSize}…] → {사이즈: 벌수} — marker.counts_from_members 와 «같은 규칙» 의 가벼운 사본.
+    왜 사본: marker.py 는 불러오는 순간 numpy·shapely 를 읽는다(서버 메모리). 서버는 이 함수로 벌수만 센다.
+    피스 규칙(stizshop CLAUDE.md «수량은 피스로 센다»): 상의 = topSize 가 채워진 사람 수 · 하의 = bottomSize 가 채워진 사람 수.
+    «세트» 로 묶지 않는다(상의만 입는 사람 · 위아래 사이즈가 다른 사람이 실제로 있다). 모르는 사이즈도 버리지 않고 뒤에 둔다."""
+    key = {"top": "topSize", "상의": "topSize", "bottom": "bottomSize", "하의": "bottomSize"}[garment]
+    out = {}
+    for m in members or []:
+        s = norm_size((m or {}).get(key))
+        if s:
+            out[s] = out.get(s, 0) + 1
+    return {s: out[s] for s in sorted(out, key=lambda s: (GRADE_SIZES.index(s) if s in GRADE_SIZES else 99, s))}
+
+
+def _int_like(v):
+    """정수(또는 2.0 같은 정수 실수)면 int, 아니면 None — 참·거짓은 숫자로 보지 않는다"""
+    if isinstance(v, bool) or not _num(v):
+        return None
+    return int(v) if float(v) == int(v) else None
+
+
+def check_marker_request(group, counts, width_cm=150.0, gap_mm=3.0, nap=False, quick=False, budget=None, cache_mb=None,
+                         jobs=None, seed=0, exclude=(), sizes=None, pieces=None):
+    """마커 요청 검사 → 깨끗한 사본(dict). 틀리면 ServiceError(한국어 — 직원 화면에 그대로 보여도 된다).
+    sizes: 고를 수 있는 사이즈(그 버전 사이즈 · 없으면 S~5XL) · pieces: 뺄 수 있는 조각 이름(없으면 검사 안 함)"""
+    if group not in ("top", "bottom"):
+        raise ServiceError(f"모르는 옷 종류: {str(group)[:20]}")
+    allowed = [s for s in GRADE_SIZES if sizes is None or s in sizes]
+    if not isinstance(counts, dict) or not counts:
+        raise ServiceError("사이즈별 벌수를 하나 이상 넣어 주세요(예: {\"M\": 2}).")
+    clean = {}
+    for k, v in counts.items():
+        s = norm_size(k)
+        if s not in allowed:
+            raise ServiceError(f"이 스타일에 없는 사이즈: {str(k)[:20]} (있는 사이즈: {'·'.join(allowed)})")
+        n = _int_like(v)
+        if n is None or n < 0 or n > MARKER_MAX_BUNDLES:
+            raise ServiceError(f"{s} 벌수는 0~{MARKER_MAX_BUNDLES} 사이 정수여야 합니다.")
+        clean[s] = clean.get(s, 0) + n
+    clean = {s: clean[s] for s in allowed if clean.get(s)}       # 표준 순서 · 0벌은 뺀다
+    total = sum(clean.values())
+    if total < 1:
+        raise ServiceError("벌수 합이 0 입니다 — 한 벌 이상 넣어 주세요.")
+    if total > MARKER_MAX_BUNDLES:
+        raise ServiceError(f"벌수 합이 {total}벌입니다 — 한 번에 {MARKER_MAX_BUNDLES}벌까지 깔 수 있습니다(나눠서 까세요).")
+    if not _num(width_cm) or not (MARKER_WIDTH_CM[0] <= float(width_cm) <= MARKER_WIDTH_CM[1]):
+        raise ServiceError(f"원단 폭은 {MARKER_WIDTH_CM[0]:.0f}~{MARKER_WIDTH_CM[1]:.0f}cm 사이 숫자여야 합니다.")
+    if not _num(gap_mm) or not (MARKER_GAP_MM[0] <= float(gap_mm) <= MARKER_GAP_MM[1]):
+        raise ServiceError(f"조각 간격은 {MARKER_GAP_MM[0]:.0f}~{MARKER_GAP_MM[1]:.0f}mm 사이 숫자여야 합니다.")
+    budget = MARKER_SERVER["budget"] if budget is None else budget
+    if not _num(budget) or not (5.0 <= float(budget) <= MARKER_BUDGET_MAX_S):
+        raise ServiceError(f"탐색 시간은 5~{MARKER_BUDGET_MAX_S:.0f}초 사이여야 합니다.")
+    cache_mb = MARKER_SERVER["cache_mb"] if cache_mb is None else cache_mb
+    if not _num(cache_mb) or not (0.0 <= float(cache_mb) <= 300.0):
+        raise ServiceError("FFT 기억 한도는 0~300MB 사이여야 합니다.")
+    jobs = MARKER_SERVER["jobs"] if jobs is None else _int_like(jobs)
+    if jobs is None or not (1 <= jobs <= 4):
+        raise ServiceError("일꾼 수는 1~4 사이 정수여야 합니다.")
+    seed = _int_like(seed)
+    if seed is None or not (0 <= seed < 2 ** 31):
+        raise ServiceError("시드는 0 이상 정수여야 합니다.")
+    if exclude is None:
+        exclude = []
+    if not isinstance(exclude, (list, tuple)) or not all(isinstance(x, str) and x for x in exclude):
+        raise ServiceError("뺄 조각은 이름 목록이어야 합니다.")
+    exclude = sorted(set(exclude))
+    if pieces is not None:
+        bad = [x for x in exclude if x not in pieces]
+        if bad:
+            raise ServiceError(f"이 스타일에 없는 조각: {bad[0][:30]}")
+        if len(exclude) >= len(set(pieces)):
+            raise ServiceError("조각을 전부 뺄 수는 없습니다.")
+    return {"group": group, "counts": clean, "bundles": total, "width_cm": float(width_cm), "gap_mm": float(gap_mm),
+            "nap": bool(nap), "quick": bool(quick), "budget": float(budget), "cache_mb": float(cache_mb), "jobs": jobs,
+            "seed": seed, "exclude": exclude}
+
+
+def pieces_per_bundle(group, exclude=()):
+    """한 벌의 장수(좌우·여러 장 펼친 수) — gas_warmup_meta 의 SPEC(그레이딩·마커와 같은 표). 뺀 조각은 빼고 센다.
+    서버 sys.path 를 건드리지 않으려고 파일에서 바로 읽는다(표준 라이브러리만 — 엔진이 돌지 않는다)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_stiz_gas_warmup_meta", os.path.join(HERE, "gas_warmup_meta.py"))
+    meta = importlib.util.module_from_spec(spec); spec.loader.exec_module(meta)
+    table = meta.SPEC_T if group == "top" else meta.SPEC_B
+    return sum(len(v) for k, v in table.items() if k not in set(exclude or ()))
+
+
+def estimate_marker(pieces, quick, group="top", width_cm=150.0, gap_mm=3.0):
+    """일꾼 하나의 «최고 메모리(MB)·걸리는 시간(초, 이 PC — 한 번 깔기 + 파일)» 어림 — 조각 수(벌수 × 장수)·원단 폭·간격으로.
+    근거: MARKER_FIT(실측 맞춤 — 실측보다 늘 크게, 시험 MarkerEstimate 가 지킨다).
+    여러 번 깔기는 시간이 한도(budget)로 잘리므로 시간은 «한 번 깔기» 만 어림하고, 메모리는 탐색 몫을 더한다."""
+    F = MARKER_FIT
+    f = F[group if group in ("top", "bottom") else "bottom"]
+    w, g = float(width_cm), float(gap_mm)
+    rss = f["rss0"] + f["rss_per_piece"] * pieces + F["rss_per_cm"] * max(0.0, w - 150.0) + (0.0 if quick else F["search_mb"])
+    mult = max(1.0, (w / 150.0) ** F["w_pow"]) * (1.0 + F["gap_per_mm"] * max(0.0, g - 3.0))
+    secs = (f["t0"] + f["t_lin"] * pieces + f["t_k"] * (pieces ** f["t_pow"])) * mult
+    return {"rss_mb": round(rss, 1), "quick_s": round(secs, 1)}
+
+
+def admit_marker(req, time_limit_s=180.0, box_mb=MARKER_BOX_MB, server_mb=MARKER_SERVER_MB, slow=MARKER_SLOW):
+    """서버 입장 판정 — 어림이 상자(512MB)·시간 한도를 넘으면: 여러 번 깔기는 «빠르게» 로 바꾸고(forced_quick),
+    빠르게도 넘으면 ServiceError(«한 번에 N벌까지»). 반환: req 사본 + estimate·forced_quick·budget(남은 시간에 맞춤)."""
+    pcs = req["bundles"] * pieces_per_bundle(req["group"], req["exclude"])
+    cap_mb = box_mb - server_mb - MARKER_MARGIN_MB
+    cap_s = float(time_limit_s)
+
+    def fits(quick):
+        e = estimate_marker(pcs, quick, req["group"], req["width_cm"], req["gap_mm"])
+        need_s = slow * (MARKER_GRADE_S + e["quick_s"])             # 그레이딩 + 한 번 깔기 + 파일(어림에 포함) — 느린 서버 배수
+        return e, e["rss_mb"] <= cap_mb and need_s <= cap_s, need_s
+    out = dict(req)
+    e, ok, need_s = fits(req["quick"])
+    # «빠르게로 바꾸기» — 기본값(메모리 몫 30MB · 시간은 두 길 모두 «한 번 깔기» 로 어림)에서는 여기 닿지 않는다:
+    #   여러 번 깔기가 넘치면 빠르게도 시간에서 먼저 넘친다. 운영값(MARKER_FIT·서버 몫)이 바뀌어 메모리만 넘칠 때를 위한 길로 남겨 둔다
+    if not ok and not req["quick"]:
+        e, ok, need_s = fits(True)
+        if ok:
+            out["quick"] = True; out["forced_quick"] = True           # 탐색 몫까지는 안 들어간다 — 빠르게로
+    if not ok:
+        n = req["bundles"]
+        per = pcs // req["bundles"]
+        est = lambda k: estimate_marker(k * per, True, req["group"], req["width_cm"], req["gap_mm"])
+        while n > 1 and not (est(n)["rss_mb"] <= cap_mb and slow * (MARKER_GRADE_S + est(n)["quick_s"]) <= cap_s):
+            n -= 1
+        raise ServiceError(f"한 번에 깔기엔 너무 많습니다({req['bundles']}벌 · {pcs}장 — 서버 메모리·시간 한도). "
+                           f"{n}벌 이하로 나눠 까 주세요.")
+    # 여러 번 깔기 시간 한도 = 전체 한도 − (그레이딩 + 파일 몫). 빠르게는 쓰지 않는다
+    files_s = slow * (e["quick_s"] * MARKER_FIT["files_share"])
+    out["budget"] = float(max(5.0, min(req["budget"], cap_s - slow * MARKER_GRADE_S - files_s - 10.0)))
+    out["estimate"] = {"pieces": pcs, "rss_mb": e["rss_mb"], "need_s": round(need_s, 1), "files_s": round(files_s + 5.0, 1),
+                       "cap_mb": cap_mb, "cap_s": cap_s, "slow": slow}
+    return out
+
+
 # ════════ 단계 — 일꾼 프로세스 안에서만 돈다 ════════
 def _run_script(name, argv):
     """명령줄 인자를 import 시점에 읽는 엔진 파일을 «그 인자를 쥐여 준 채» 새 이름공간에서 돌린다(파일은 안 고친다)"""
@@ -381,8 +595,9 @@ def _check_sources(sources):
     return src
 
 
-def _step(i, name, emit):
-    if emit: print(f"{STEP_MARK} {i}/{len(STEPS)} {name}", flush=True)
+def _step(i, name, emit, total=None):
+    # total: 단계 수(기본 = 다시 만들기 5단계). 마커는 MARKER_STEPS 4단계라 따로 준다
+    if emit: print(f"{STEP_MARK} {i}/{total or len(STEPS)} {name}", flush=True)
 
 
 def _view_step(src, aama_dir, out, groups, when, ev):
@@ -516,6 +731,129 @@ def build_view(src, out, aama_dir=None, groups=("top", "bottom")):
     return {"ok": True, "mode": "results", "styles": styles, "peak_rss_mb": peak_rss_mb(), "made_at": when}
 
 
+def graded_all(work, group, rules=None, check_view=None, sources=None, font=None, emit=False):
+    """F10 4단계 ①②③ — 원본 .ai → 2XL 수정 → 그레이딩(graded.json, 사이즈별 DXF·PDF 는 안 만든다). 일꾼 프로세스 안에서 부른다.
+       rules:      그 버전의 규칙표(다시 그레이딩한 버전 — rules.json) · None 이면 표준 규칙(처음 만든 판과 같다)
+       check_view: 그 버전의 view.json 주소 — 주면 이 그레이딩으로 화면 자료를 다시 만들어 «점 하나씩» 견준다(③).
+                   어긋나면 마커가 그 버전이 아닌 다른 모양으로 깔리니, 부모가 그 차(view_match)를 보고 멈춘다.
+       돌려주는 것: {"graded": graded.json 주소, "view_match": {max_mm, points, diffs} | None, …}"""
+    if group not in ("top", "bottom"):
+        raise ServiceError(f"모르는 옷 종류: {group}")
+    table = check_rules(group, rules, full=True) if rules else None
+    src = _check_sources(sources)
+    work = os.path.abspath(work); os.makedirs(work, exist_ok=True)
+    gw = os.path.join(work, "gas-warmup"); d2, dg, ds = (os.path.join(gw, x) for x in ("2xl", "graded", "spec"))
+    if HERE not in sys.path: sys.path.insert(0, HERE)
+    fnt = font or resolve_font()
+    when = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    extra = []
+    if table:
+        rpath = os.path.join(work, "rules_in.json")
+        with open(rpath, "w", encoding="utf-8") as f:
+            json.dump({group: table}, f, ensure_ascii=False)
+        extra = ["--rules", rpath]
+    n = len(MARKER_STEPS)
+    timings, t0 = {}, time.time()
+    view_match = None
+    with font_shim(fnt["path"]):
+        _step(1, "build", emit, n); t = time.time()
+        _run_script("gas_warmup_build.py", [src["top"], src["bottom"], d2]); timings["build"] = round(time.time() - t, 1)
+        _step(2, "grade", emit, n); t = time.time()
+        _run_script("gas_warmup_grade.py", ["--pieces", os.path.join(d2, "pieces_after.json"), "--std-top", src["std_top"],
+                                            "--std-pants", src["std_pants"], "--src-top", src["top"], "--src-bottom", src["bottom"],
+                                            "--out", dg, "--no-export"] + extra)
+        timings["grade"] = round(time.time() - t, 1)
+        if check_view:
+            _step(3, "check", emit, n); t = time.time()
+            with open(check_view, encoding="utf-8") as f:
+                want = json.load(f)
+            import gas_warmup_spec, cad_view
+            gas_warmup_spec.main(["--pieces", os.path.join(d2, "pieces_after.json"), "--graded", os.path.join(dg, "graded.json"),
+                                  "--out", ds])
+            sid = cad_view.GROUPS[group]["style_id"]
+            vpath, _z, _rep, _files = cad_view.build_style(gw, None, group, os.path.join(work, "cad", sid), when)
+            with open(vpath, encoding="utf-8") as f:
+                got = json.load(f)
+            view_match = compare_cuts(want, got)            # 마커가 쓰는 것은 재단선뿐 — 노치·안쪽선이 바뀐 옛 판도 재단선이 같으면 통과
+            timings["check"] = round(time.time() - t, 1)
+    graded = os.path.join(dg, "graded.json")
+    if not os.path.isfile(graded):
+        raise ServiceError("그레이딩 결과(graded.json)를 만들지 못했습니다.")
+    timings["total"] = round(time.time() - t0, 1)
+    return {"ok": True, "mode": "graded", "work": work, "group": group, "graded": graded, "graded_sha256": _file_sha(graded),
+            "rules_used": bool(table), "view_match": view_match, "font": fnt, "engine": engine_version(),
+            "timings_s": timings, "peak_rss_mb": peak_rss_mb(), "made_at": when}
+
+
+def _file_sha(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def marker_argv(graded, out_dir, req, name="marker"):
+    """검사한 요청 → marker.py 명령줄 인자. 서버 길과 명령줄 길이 «같은 인자» 를 쓰게 한 곳에서 만든다(시험이 이것으로 명령줄을 돌린다)."""
+    argv = ["--garment", req["group"], "--graded", graded, "--out", out_dir, "--name", name,
+            "--width", f"{req['width_cm']:g}", "--gap", f"{req['gap_mm']:g}", "--seed", str(req["seed"]),
+            "--jobs", str(req["jobs"]), "--budget", f"{req['budget']:g}", "--cache-mb", f"{req['cache_mb']:g}",
+            "--counts", *[f"{s}={k}" for s, k in req["counts"].items()]]
+    if req["nap"]: argv.append("--nap")
+    if req["quick"]: argv.append("--quick")
+    if req["exclude"]: argv += ["--exclude", *req["exclude"]]
+    return argv
+
+
+def marker_all(work, graded, req, font=None, emit=False):
+    """F10 4단계 ④ — graded.json + 요청 → 마커(배치) + 1:1 PDF · DXF(R2000 mm) · 미리보기 PNG · 요약 JSON. 일꾼 안에서 부른다.
+    배치는 marker.main(명령줄과 같은 함수)에 «같은 인자» 를 넘겨 돌린다 — 서버 결과가 명령줄 결과와 갈라질 길을 없앤다.
+    창구가 하는 일은 ① 글꼴 주소 바꿔 끼우기(리눅스엔 맑은 고딕이 없다 — PDF·PNG 둘 다) ② 결과 파일 이름을 영문으로
+    ③ 다시 재서 검산(겹침·간격·폭 밖·식서 0°/180°)을 결과에 붙이기."""
+    req = check_marker_request(**{k: req.get(k) for k in ("group", "counts", "width_cm", "gap_mm", "nap", "quick", "budget",
+                                                           "cache_mb", "jobs", "seed", "exclude")})
+    if not graded or not os.path.isfile(graded):
+        raise ServiceError(f"그레이딩 결과(graded.json)가 없습니다: {graded}")
+    work = os.path.abspath(work); out = os.path.join(work, "marker"); os.makedirs(out, exist_ok=True)
+    if HERE not in sys.path: sys.path.insert(0, HERE)
+    fnt = font or resolve_font()
+    when = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    _step(len(MARKER_STEPS), "marker", emit, len(MARKER_STEPS))
+    t0 = time.time()
+    import marker as MK
+    MK.FONT = fnt["path"]                                  # PNG(PIL)은 글꼴 파일을 직접 연다 — font_shim 이 못 막는 자리라 주소를 바꾼다
+    try:
+        with font_shim(fnt["path"]):
+            S = MK.main(marker_argv(graded, out, req))
+    except ValueError as e:                                # 조각이 원단보다 넓다 등 — 직원이 고칠 수 있는 입력 문제
+        raise ServiceError(f"원단에 깔지 못했습니다: {e}")
+    except KeyError as e:
+        raise ServiceError(f"그레이딩 결과에 없는 사이즈입니다: {e}")
+    except SystemExit as e:                                # marker.main 이 graded.json 을 못 찾으면 sys.exit(글)
+        raise ServiceError(str(e.code) if not isinstance(e.code, int) else "마커 계산이 멈췄습니다.")
+    secs = round(time.time() - t0, 1)
+    png_ko = os.path.join(out, "marker_미리보기.png")       # marker.py 가 붙이는 한글 이름 → 영문으로
+    if os.path.isfile(png_ko):
+        os.replace(png_ko, os.path.join(out, MARKER_FILES["png"]))
+    files = {}
+    for kind, nm in MARKER_FILES.items():
+        p = os.path.join(out, nm)
+        if os.path.isfile(p):
+            files[kind] = {"path": p, "bytes": os.path.getsize(p), "sha256": _file_sha(p)}
+    allowed = {0} if req["nap"] else {0, 180}
+    pl = S.get("placements") or []
+    chk = S.get("check") or {}
+    verify = {"overlaps": len(chk.get("overlaps") or []), "outside": len(chk.get("outside") or []),
+              "min_gap_mm": chk.get("min_gap_mm"), "gap_ok": chk.get("min_gap_mm") is None or chk["min_gap_mm"] >= req["gap_mm"] - 0.01,
+              "rotations": sorted({q.get("rot") for q in pl}), "grain_ok": all(q.get("rot") in allowed for q in pl),
+              "flipped": sum(1 for q in pl if q.get("flip"))}
+    verify["ok"] = verify["overlaps"] == 0 and verify["outside"] == 0 and verify["gap_ok"] and verify["grain_ok"]
+    summary = {k: v for k, v in S.items() if k != "placements"}
+    return {"ok": True, "mode": "marker", "work": work, "group": req["group"], "request": req, "graded": graded,
+            "graded_sha256": _file_sha(graded), "summary": summary, "verify": verify, "files": files, "font": fnt,
+            "engine": engine_version(), "timings_s": {"marker": secs}, "peak_rss_mb": peak_rss_mb(), "made_at": when}
+
+
 # ════════ 부모(서버) 쪽 — 일꾼 프로세스를 띄워 기다린다 ════════
 def rebuild(work, groups=("top", "bottom"), sources=None, aama=True, timeout=1800, python=None, on_step=None, env=None):
     """서버가 부르는 함수 — 엔진을 «따로 띄운 프로세스» 에서 돌린다.
@@ -547,9 +885,94 @@ def regrade(work, group, rules, full=False, sources=None, timeout=900, python=No
     return _spawn(cmd, work, res_path, timeout, on_step, env)
 
 
-def _spawn(cmd, work, res_path, timeout, on_step, env):
-    """일꾼 프로세스를 띄워 출력은 engine.log 에, 단계 줄(@@STEP)은 on_step 으로 — 끝나면 result.json 을 읽어 돌려준다"""
-    log_path = os.path.join(work, "engine.log")
+def _worker_reason(log_path):
+    """일꾼 출력에서 창구가 남긴 «[service] 실패: …» 사유(한국어) — 없으면 None"""
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            lines = [l.strip() for l in f if l.startswith("[service] 실패:")]
+        return lines[-1].split(":", 1)[1].strip() if lines else None
+    except OSError:
+        return None
+
+
+def _marker_failure(e, log_path):
+    """마커 일꾼 실패 → 직원에게 보일 한국어 한 줄. 창구가 남긴 사유가 먼저, 없으면 메모리 부족·강제 종료를 알아본다"""
+    why = _worker_reason(log_path)
+    if why:
+        return why
+    t = str(e)
+    if "MemoryError" in t or "Unable to allocate" in t or "bad_alloc" in t:
+        return "메모리가 모자라 마커를 멈췄습니다 — 벌수를 줄이거나 나눠 까 주세요."
+    m = re.search(r"종료 코드 (-?\d+)", t)
+    if m and int(m.group(1)) < 0:
+        return f"마커 일꾼이 강제로 멈췄습니다(신호 {-int(m.group(1))} — 메모리 부족일 수 있음). 벌수를 줄여 다시 눌러 주세요."
+    return t.split("\n", 1)[0]
+
+
+def marker(work, group, counts, width_cm=150.0, gap_mm=3.0, nap=False, quick=False, budget=None, cache_mb=None, jobs=None, seed=0,
+           exclude=(), graded=None, rules=None, check_view=None, sizes=None, pieces=None, sources=None, timeout=1800,
+           python=None, on_step=None, env=None, view_tol_mm=MARKER_VIEW_TOL_MM, cancel=None, files_reserve_s=20.0):
+    """서버가 부르는 함수(F10 4단계) — 마커·요척. 요청은 부모에서 먼저 검사한다(틀린 요청으로 일꾼을 띄우지 않게).
+    일꾼을 «두 번» 띄운다: ① graded(원본 → 그레이딩, check_view 를 주면 그 버전 모양과 견줌) ② marker(배치 + 파일).
+      왜 두 번: 그레이딩(약 200MB)과 배치(약 340MB)의 메모리가 한 프로세스에 겹쳐 쌓이지 않게 — 끝나면 운영체제로 통째로 돌아간다.
+    graded 를 주면 ①을 건너뛴다(이미 있는 graded.json). 반환: marker_all 의 결과 + graded_run(① 기록) + wall_s.
+    on_step(i, total, name) — MARKER_STEPS 기준(1 build · 2 grade · 3 check · 4 marker).
+    timeout: «전체»(두 일꾼 합) 벽시계 상한 — 넘으면 일꾼을 죽이고 ServiceError. 여러 번 깔기 한도(budget)는 그레이딩이 쓴 시간을 빼고
+             파일 몫(files_reserve_s)을 남긴 만큼으로 줄여 넘긴다(넘길 것 같으면 그때까지의 최선을 낸다).
+    cancel: threading.Event — 세우면 돌고 있는 일꾼을 죽이고 ServiceError("취소했습니다.")"""
+    req = check_marker_request(group, counts, width_cm, gap_mm, nap, quick, budget, cache_mb, jobs, seed, exclude, sizes, pieces)
+    work = os.path.abspath(work); os.makedirs(work, exist_ok=True)
+    py = python or sys.executable
+    t0 = time.time()
+    prep = None
+    if graded is None:
+        r1 = os.path.join(work, "result_graded.json")
+        cmd = [py, os.path.abspath(__file__), "graded", "--work", work, "--group", group, "--result", r1, "--emit-steps"]
+        if rules:
+            rfile = os.path.join(work, "rules_req.json")
+            with open(rfile, "w", encoding="utf-8") as f:
+                json.dump(check_rules(group, rules, full=True), f, ensure_ascii=False)
+            cmd += ["--rules-file", rfile]
+        if check_view:
+            cmd += ["--check-view", os.path.abspath(check_view)]
+        for k in SOURCE_KEYS:
+            if sources and sources.get(k): cmd += [f"--{k.replace('_', '-')}", sources[k]]
+        try:
+            prep = _spawn(cmd, work, r1, min(timeout, 900), on_step, env, log_name="engine_graded.log", cancel=cancel)
+        except ServiceError as e:
+            raise ServiceError(_marker_failure(e, os.path.join(work, "engine_graded.log")))
+        vm = prep.get("view_match")
+        if check_view and (vm is None or vm.get("diffs") or (vm.get("max_mm") or 0) > view_tol_mm):
+            why = (vm or {}).get("diffs") or [f"점 차 최대 {(vm or {}).get('max_mm')}mm"]
+            raise ServiceError(f"서버에서 다시 만든 모양이 이 버전과 달라 마커를 만들지 않았습니다({why[0]}).")
+        graded = prep["graded"]
+    left = timeout - (time.time() - t0)
+    if left < 5.0:
+        raise ServiceError(f"그레이딩에 시간을 다 써서({round(time.time() - t0)}초) 마커를 깔지 못했습니다. 잠시 후 다시 눌러 주세요.")
+    req["budget"] = float(max(5.0, min(req["budget"], left - files_reserve_s)))   # 벽시계 전체를 지키게 — 파일 몫을 남긴다
+    rq = os.path.join(work, "marker_req.json")
+    with open(rq, "w", encoding="utf-8") as f:
+        json.dump(req, f, ensure_ascii=False)
+    r2 = os.path.join(work, "result.json")
+    cmd = [py, os.path.abspath(__file__), "marker", "--work", work, "--graded", os.path.abspath(graded), "--request-file", rq,
+           "--result", r2, "--emit-steps"]
+    try:
+        out = _spawn(cmd, work, r2, max(5.0, timeout - (time.time() - t0)), on_step, env, cancel=cancel)
+    except ServiceError as e:
+        raise ServiceError(_marker_failure(e, os.path.join(work, "engine.log")))
+    if prep:
+        out["graded_run"] = {k: prep.get(k) for k in ("graded_sha256", "rules_used", "view_match", "timings_s", "peak_rss_mb",
+                                                       "vm_peak_mb", "vm_hwm_mb", "guard", "wall_s")}
+    peaks = [x for x in (out.get("peak_rss_mb"), (prep or {}).get("peak_rss_mb")) if isinstance(x, (int, float))]
+    out["peak_rss_mb_max"] = max(peaks) if peaks else None    # 두 일꾼 중 큰 쪽(동시에 돌지 않는다)
+    out["wall_s"] = round(time.time() - t0, 1)
+    return out
+
+
+def _spawn(cmd, work, res_path, timeout, on_step, env, log_name="engine.log", cancel=None):
+    """일꾼 프로세스를 띄워 출력은 engine.log 에, 단계 줄(@@STEP)은 on_step 으로 — 끝나면 result.json 을 읽어 돌려준다.
+    cancel(threading.Event, 선택): 세워지면 일꾼을 죽이고 ServiceError("취소했습니다.")"""
+    log_path = os.path.join(work, log_name)
     e = dict(os.environ if env is None else env); e["PYTHONIOENCODING"] = "utf-8"; e.setdefault("PYTHONUTF8", "1")
     t0 = time.time()
     p = subprocess.Popen(cmd, cwd=work, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
@@ -561,6 +984,15 @@ def _spawn(cmd, work, res_path, timeout, on_step, env):
         try: p.kill()
         except Exception: pass
     timer = threading.Timer(timeout, _kill); timer.daemon = True; timer.start()
+    cancelled = {"v": False}
+    if cancel is not None:                                    # 취소 지켜보기 — 일꾼이 끝나면 스스로 멈춘다
+        def _watch():
+            while p.poll() is None:
+                if cancel.wait(0.3):
+                    cancelled["v"] = True
+                    _kill()
+                    return
+        threading.Thread(target=_watch, daemon=True).start()
     tail = []
     try:
         with open(log_path, "w", encoding="utf-8") as log:
@@ -577,8 +1009,10 @@ def _spawn(cmd, work, res_path, timeout, on_step, env):
     finally:
         timer.cancel()
         if p.stdout: p.stdout.close()                         # 읽는 관 닫기(열어 둔 채 두면 파일 손잡이가 샌다)
+    if cancelled["v"]:
+        raise ServiceError("취소했습니다.")
     if killed["v"]:
-        raise ServiceError(f"엔진이 {timeout}초 안에 끝나지 않아 멈췄습니다.")
+        raise ServiceError(f"엔진이 {round(timeout)}초 안에 끝나지 않아 멈췄습니다.")
     if rc != 0 or not os.path.isfile(res_path):
         raise ServiceError("엔진이 실패했습니다(종료 코드 %s). 마지막 출력:\n%s" % (rc, "".join(tail[-15:]).strip()))
     with open(res_path, encoding="utf-8") as f: out = json.load(f)
@@ -629,6 +1063,29 @@ def compare_views(a, b):
     return {"max_mm": round(worst, 4), "points": npts, "diffs": diffs}
 
 
+def compare_cuts(a, b):
+    """마커용 견주기 — 두 view.json 의 «재단선» 만, 사이즈(S~5XL)·조각마다 하우스도르프 거리(가장 먼 어긋남, mm).
+    → {"max_mm", "pieces", "diffs"}. 점 수가 달라도 모양이 같으면 0 이다(점 줄이기 차이에 흔들리지 않게). 일꾼 안에서만(shapely)."""
+    from shapely.geometry import LineString
+    diffs, worst, n = [], 0.0, 0
+    qa, qb = float(a.get("q") or 0.01), float(b.get("q") or 0.01)
+    line = lambda flat, q: LineString([(flat[k] * q, flat[k + 1] * q) for k in range(0, len(flat), 2)])
+    for sid in GRADE_SIZES:
+        A, B = (a.get("sizes") or {}).get(sid), (b.get("sizes") or {}).get(sid)
+        if A is None and B is None: continue
+        if A is None or B is None: diffs.append(f"{sid} 없음"); continue
+        pa = {p.get("name"): p for p in A.get("pieces") or []}; pb = {p.get("name"): p for p in B.get("pieces") or []}
+        if set(pa) != set(pb): diffs.append(f"{sid} 조각 이름 다름"); continue
+        for nm in pa:
+            try:
+                d = line(pa[nm]["cut"], qa).hausdorff_distance(line(pb[nm]["cut"], qb))
+            except Exception:
+                diffs.append(f"{sid}/{nm} 재단선 못 읽음"); continue
+            worst = max(worst, d); n += 1
+    if not n and not diffs: diffs.append("견줄 재단선이 없음")
+    return {"max_mm": round(worst, 4), "pieces": n, "diffs": diffs}
+
+
 # ════════ 명령줄 ════════
 def main(argv=None):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -648,12 +1105,30 @@ def main(argv=None):
     g.add_argument("--full", action="store_true", help="그레이딩 시트·AAMA 까지(새 버전 저장용). 없으면 미리보기")
     g.add_argument("--result"); g.add_argument("--emit-steps", action="store_true")
     for k in SOURCE_KEYS: g.add_argument(f"--{k.replace('_', '-')}")
+    gd = sub.add_parser("graded", help="원본 → 그레이딩(graded.json)만 — 마커 ①②③ (F10 4단계)")
+    gd.add_argument("--work", required=True); gd.add_argument("--group", required=True, choices=["top", "bottom"])
+    gd.add_argument("--rules-file", help="그 버전의 규칙표(다시 그레이딩한 버전) — 없으면 표준 규칙")
+    gd.add_argument("--check-view", help="그 버전의 view.json — 다시 만든 모양과 점 하나씩 견준다")
+    gd.add_argument("--result"); gd.add_argument("--emit-steps", action="store_true")
+    for k in SOURCE_KEYS: gd.add_argument(f"--{k.replace('_', '-')}")
+    mk = sub.add_parser("marker", help="graded.json + 요청 JSON → 마커·요척 PDF/DXF/PNG/JSON (F10 4단계 ④)")
+    mk.add_argument("--work", required=True); mk.add_argument("--graded", required=True)
+    mk.add_argument("--request-file", required=True, help="check_marker_request 모양의 JSON(group·counts·width_cm·gap_mm …)")
+    mk.add_argument("--result"); mk.add_argument("--emit-steps", action="store_true")
     sub.add_parser("font", help="쓰게 될 글꼴")
     a = ap.parse_args(argv)
     if a.cmd == "font":
         print(json.dumps(resolve_font(), ensure_ascii=False)); return 0
     try:
-        if a.cmd == "build":
+        if a.cmd == "graded":
+            rules = None
+            if a.rules_file:
+                with open(a.rules_file, encoding="utf-8") as f: rules = json.load(f)
+            r = graded_all(a.work, a.group, rules, a.check_view, {k: getattr(a, k) for k in SOURCE_KEYS}, emit=a.emit_steps)
+        elif a.cmd == "marker":
+            with open(a.request_file, encoding="utf-8") as f: req = json.load(f)
+            r = marker_all(a.work, a.graded, req, emit=a.emit_steps)
+        elif a.cmd == "build":
             r = build_all(a.work, {k: getattr(a, k) for k in SOURCE_KEYS}, a.groups, not a.no_aama, emit=a.emit_steps)
         elif a.cmd == "regrade":
             with open(a.rules_file, encoding="utf-8") as f: rules = json.load(f)
@@ -669,9 +1144,15 @@ def main(argv=None):
         tmp = a.result + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f: json.dump(r, f, ensure_ascii=False, indent=1)
         os.replace(tmp, a.result)
+    if r.get("mode") == "marker":                              # 마커 — 길이·요척·효율
+        sm = r["summary"]
+        what = f"마커 {sm.get('length_m')} m · 벌당 {sm.get('yield_m_per_bundle')} m · 효율 {sm.get('efficiency_pct')}%"
+    elif r.get("mode") == "graded":
+        what = "graded.json" + (f" · 버전과 차 {r['view_match']['max_mm']}mm" if r.get("view_match") else "")
+    else:
+        what = " · ".join(f"{k} {s['view_bytes']:,}B/{s['zip_bytes']:,}B" for k, s in r["styles"].items())
     print(f"[service] 끝 · 최고 메모리 {r['peak_rss_mb']} MB" + (f" · VmPeak {r['vm_peak_mb']} MB" if r.get("vm_peak_mb") else "")
-          + (f" · 안전띠 {r['guard']}" if r.get("guard") else "") + " · "
-          + " · ".join(f"{k} {s['view_bytes']:,}B/{s['zip_bytes']:,}B" for k, s in r["styles"].items()), flush=True)
+          + (f" · 안전띠 {r['guard']}" if r.get("guard") else "") + " · " + what, flush=True)
     return 0
 
 

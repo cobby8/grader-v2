@@ -9,7 +9,9 @@
 
 무엇을 베끼나:
   service.py(창구)에서 출발해 «서로 import 하는 엔진 파일» 을 끝까지 따라간 묶음 + 창구가 돌리는 스크립트 2개
-  + requirements.txt + 원본 .ai 4개(fixtures/gas-warmup-2026). 🚫 marker.py 등 창구가 안 쓰는 파일은 안 가져온다.
+  + requirements.txt + 원본 .ai 4개(fixtures/gas-warmup-2026). 🚫 창구가 안 쓰는 파일(style_import.py 등)은 안 가져온다.
+  F10 4단계부터 창구가 마커를 부르므로(service.marker_all → import marker) marker.py 도 «import 따라가기» 로 저절로 들어온다
+  — 목록을 손으로 적지 않는다(창구가 쓰는 것 = 복사하는 것).
   글자 파일(.py·.json·.txt)은 줄바꿈을 LF 로 맞춰 베끼고 그 바이트로 지문을 낸다(git 이 저장하는 모양과 같다).
 
 실행(저장소 루트):

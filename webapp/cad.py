@@ -43,6 +43,7 @@ import httpx
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 
 from . import state
 from .auth import admin_required, auth_required
@@ -523,8 +524,12 @@ def cad_me(request: Request) -> Dict[str, Any]:
         rebuildable = sorted(getattr(load_service(), "REBUILDABLE", {}))     # 서버에서 «다시 만들기» 가 되는 스타일
     except Exception:
         rebuildable = []
+    try:
+        markerable = rebuildable if hasattr(load_service(), "marker") else []   # 마커(F10 4단계)도 서버에 원본이 있는 스타일만
+    except Exception:
+        markerable = []
     return {"can_upload": _can_upload(request), "auth_required": auth_required(), "storage": bool(base),
-            "rebuildable": rebuildable}
+            "rebuildable": rebuildable, "markerable": markerable}
 
 
 @router.get("/styles")
@@ -676,7 +681,7 @@ def engine_dir() -> str:
 
 _ENGINE_LOCK = threading.Lock()                                      # 엔진 작업은 한 번에 하나(한 줄로 세우기)
 _QUEUE_LOCK = threading.Lock()
-_queue = {"waiting": 0}                                              # 줄 선(시작 전 + 돌고 있는) 작업 수
+_queue = {"waiting": 0, "marker": 0}                                # 줄 선(시작 전 + 돌고 있는) 작업 수 — 관리자 작업 · 직원 마커 따로
 REBUILD_QUEUE_MAX = 3                                                # 이보다 많이 밀리면 429 — 누가 단추를 연타해도 서버가 안 잠긴다
 _service_mod: Dict[str, Any] = {}
 CHILD_GUARD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "engine_child")   # 일꾼 안전띠(sitecustomize.py)
@@ -699,7 +704,7 @@ ENGINE_ENV_ALLOW = {"PATH", "HOME", "LANG", "LANGUAGE", "TZ", "TMP", "TMPDIR", "
 TOKEN_MIN_LEFT_S = 600                                               # 줄에 넣을 때 로그인이 이만큼은 남아 있어야(엔진 1분 + 줄 3건)
 RELOGIN_MSG = "로그인이 끝났거나 곧 끝납니다. 다시 로그인한 뒤 눌러 주세요."
 HEAVY_WAIT_S_DEFAULT = 600                                           # 엔진이 «돌던 합성이 끝나기» 를 기다리는 상한(초) — 넘으면 엔진 작업 실패
-JOB_KINDS = ("cad-rebuild", "cad-regrade", "cad-version")            # GET /jobs 로 볼 수 있는 재단 패턴 작업
+JOB_KINDS = ("cad-rebuild", "cad-regrade", "cad-version", "cad-marker")   # GET /jobs 로 볼 수 있는 재단 패턴 작업(마커 = F10 4단계)
 PREVIEW_KEEP = 20                                                    # 미리보기 결과 폴더를 최근 몇 개까지 남길지(디스크 절약)
 MAX_RULE_CHANGES_META = 300                                          # meta 에 적는 «바뀐 칸» 목록 상한
 
@@ -777,18 +782,37 @@ def _font_name(font: Optional[Dict[str, Any]]) -> Optional[str]:
 
 
 # ── 엔진 작업 공통(다시 만들기·미리보기·새 버전 저장) ─────────────────────────
-def _run_engine(job_id: str, svc: Any, call) -> Dict[str, Any]:
+class JobCancelled(Exception):
+    """직원이 «취소» 를 눌렀다(DELETE /api/cad/jobs/{job}) — 실패가 아니라 취소로 끝낸다"""
+
+
+def _run_engine(job_id: str, svc: Any, call, cancel: Optional[threading.Event] = None) -> Dict[str, Any]:
     """① 엔진끼리 한 줄(_ENGINE_LOCK) ② 돌던 합성이 끝나기를 기다림(상한 _heavy_wait_s — 넘으면 TimeoutError)
-    ③ call(on_step, timeout) — 일꾼 프로세스를 띄우는 service 함수. 반환: 엔진 결과(dict)"""
-    with _ENGINE_LOCK:
+    ③ call(on_step, timeout) — 일꾼 프로세스를 띄우는 service 함수. 반환: 엔진 결과(dict)
+    cancel: 줄 서 있는 동안 취소되면 엔진을 띄우지 않고 JobCancelled(마커 — 2026-10-20 보안 리뷰)"""
+    while not _ENGINE_LOCK.acquire(timeout=0.5):                     # 줄 서는 동안에도 취소를 본다
+        if cancel is not None and cancel.is_set():
+            raise JobCancelled()
+    try:
+        if cancel is not None and cancel.is_set():
+            raise JobCancelled()
         state.update_job(job_id, stage="wait_heavy", stage_ko="합성 작업이 끝나기를 기다림")
-        with state.HEAVY.exclusive_use(timeout=_heavy_wait_s()):        # 새 합성은 엔진 뒤로 — 기다리다 포기하면 대기 표시가 풀린다
+        try:
+            gate = state.HEAVY.exclusive_use(timeout=_heavy_wait_s(), cancel=cancel)
+            gate.__enter__()                                            # 새 합성은 엔진 뒤로 — 기다리다 포기·취소하면 대기 표시가 풀린다
+        except state.Cancelled:
+            raise JobCancelled()
+        try:
             state.update_job(job_id, stage="start", stage_ko="엔진 시작")
             timeout = float(os.environ.get("GRADER_CAD_ENGINE_TIMEOUT") or 1200)
 
             def on_step(i: int, n: int, name: str) -> None:
                 state.update_job(job_id, done=i - 1, total=n, stage=name, stage_ko=svc.STEP_KO.get(name, name))
             return call(on_step, timeout)
+        finally:
+            gate.__exit__(None, None, None)                             # 합성 문을 연다(엔진이 실패·취소돼도)
+    finally:
+        _ENGINE_LOCK.release()
 
 
 def _engine_run_info(res: Dict[str, Any]) -> Dict[str, Any]:
@@ -852,35 +876,43 @@ def _fail_job(job_id: str, work: str, what: str, e: Exception) -> None:
 
 
 def _start_engine_job(request: Request, kind: str, total: int, fields: Dict[str, Any], target, args: tuple,
-                      need_token: bool = True) -> Tuple[str, int]:
+                      need_token: bool = True, lane: str = "cad") -> Tuple[str, int]:
     """엔진 작업을 줄에 세우고 스레드를 띄운다 → (작업 번호, 앞에 선 작업 수). 줄이 가득 차면 429.
-    need_token: 창고에 넣을 작업(다시 만들기·새 버전)은 줄 서는 동안 로그인이 끝나면 안 된다 — 남은 시간을 먼저 본다."""
+    need_token: 창고에 넣을 작업(다시 만들기·새 버전)은 줄 서는 동안 로그인이 끝나면 안 된다 — 남은 시간을 먼저 본다.
+    lane: "cad"(관리자 다시 만들기·그레이딩, 3칸) · "marker"(직원 마커, MARKER_QUEUE_MAX 칸) — 칸을 따로 세서
+          직원 마커가 줄을 채워 관리자 작업이 429 로 막히는 일이 없게 한다(엔진은 여전히 한 번에 하나)."""
     jwt = _bearer(request)
+    key, cap = ("marker", _marker_queue_max()) if lane == "marker" else ("waiting", REBUILD_QUEUE_MAX)
     with _QUEUE_LOCK:
-        ahead_now = _queue["waiting"]
+        ahead_now = _queue["waiting"] + _queue["marker"]
     if need_token and auth_required() and jwt:
         exp = _jwt_exp(jwt)
         if exp is not None and exp - time.time() < TOKEN_MIN_LEFT_S + 90 * ahead_now:
             raise HTTPException(status_code=401, detail=RELOGIN_MSG)
     with _QUEUE_LOCK:
-        if _queue["waiting"] >= REBUILD_QUEUE_MAX:
+        if _queue[key] >= cap:
+            if lane == "marker":
+                raise HTTPException(status_code=429, detail="다른 마커를 만드는 중입니다(한 번에 하나). 끝난 뒤 다시 눌러 주세요.")
             raise HTTPException(status_code=429, detail=f"재단 패턴 작업이 {_queue['waiting']}건 밀려 있습니다. 끝난 뒤 다시 눌러 주세요.")
-        _queue["waiting"] += 1
-        ahead = _queue["waiting"] - 1
+        _queue[key] += 1
+        ahead = _queue["waiting"] + _queue["marker"] - 1
     try:
         job_id = state.create_job(total=total)
-        state.update_job(job_id, kind=kind, stage="queued", stage_ko="차례 기다림" if ahead else "곧 시작", ahead=ahead, **fields)
+        owner = getattr(request.state, "user_id", None) or getattr(request.state, "email", None)
+        state.update_job(job_id, kind=kind, stage="queued", stage_ko="차례 기다림" if ahead else "곧 시작", ahead=ahead,
+                         owner=owner, lane=lane, **fields)
         threading.Thread(target=target, daemon=True, args=(job_id, *args)).start()
     except Exception:
         with _QUEUE_LOCK:
-            _queue["waiting"] = max(0, _queue["waiting"] - 1)
+            _queue[key] = max(0, _queue[key] - 1)
         raise
     return job_id, ahead
 
 
-def _queue_done() -> None:
+def _queue_done(lane: str = "cad") -> None:
+    key = "marker" if lane == "marker" else "waiting"
     with _QUEUE_LOCK:
-        _queue["waiting"] = max(0, _queue["waiting"] - 1)
+        _queue[key] = max(0, _queue[key] - 1)
 
 
 def _rebuild_thread(job_id: str, style_id: str, from_ver: int, group: str, jwt: Optional[str], email: Optional[str], note: str) -> None:
@@ -1265,6 +1297,489 @@ def lock_version(style_id: str, ver: str, request: Request, payload: Optional[Di
 
 
 # ══════════════════════════════════════════════════════════════════════
+#  F10 4단계 — 마커·요척 (🔒 로그인 직원 누구나)
+# ══════════════════════════════════════════════════════════════════════
+# 왜(비유): 마커는 «원단 위에 조각을 테트리스처럼 까는 그림» 이다. 다 깐 길이 ÷ 벌수 = 벌당 요척(원단 m) → 원단 발주·원가.
+#   엔진(vendor service.marker)이 일꾼을 두 번 띄운다: ① 원본 → 그레이딩(이 버전과 재단선이 같은지 확인) ② 배치 + PDF·DXF·PNG.
+#   배치 계산은 stizshop marker.py 명령줄과 «같은 함수·같은 인자» 라 결과가 같다(시드 고정).
+#   무거우니 재단 패턴 작업 줄(_ENGINE_LOCK)·합성과 순서 정하기(HeavyGate exclusive)를 그대로 탄다.
+#   결과는 버전에 저장하지 않는다 — 작업 폴더(web_cadmk_*)에만 두고, 30일 자동 정리 + 최근 MARKER_KEEP 개만 남긴다.
+#   벌수: 손 입력 표 또는 주문서 엑셀(그레이더 parse_order 재사용 → 피스 규칙: 상의 = 상의 사이즈 칸이 찬 사람 수 · 하의 = 하의 칸).
+#   🚫 쇼핑몰 운영 DB 는 읽지 않는다 — 명단은 엑셀 업로드로만 들어온다.
+MARKER_KEEP = 30                                                     # 마커 결과 폴더를 최근 몇 개까지 남길지(디스크 절약)
+MARKER_ORDER_MAX_BYTES = 10 * 1024 * 1024                            # 주문서 엑셀 상한
+MARKER_ORDER_MAX_QTY = 5000                                          # 주문서 행 수량 합 상한(이상한 숫자로 명단이 부풀지 않게)
+# 마커 일꾼 주소 공간 상한(MB, 리눅스만 · 운영자 값이 없을 때만) — 근거:
+#   ① 입장 판정(admit_marker)이 일꾼 RAM 어림을 상자 512 − 서버 160 − 여유 20 = 332MB 이하로 묶는다(윈도우 실측 맞춤: 상의 24벌 252MB · 하의 15벌 250MB)
+#   ② 리눅스 «주소 공간 − RAM» 은 그레이딩 일꾼 실측 약 575MB(라이브러리 지도·스레드·malloc 예약)
+#   → 332 + 575 ≈ 907MB, 여유 27% 를 얹어 1152MB. 리눅스에서 마커를 직접 잰 값은 아니다(Render 첫 실행의 결과 memory.marker_vm_peak_mb 로 확인).
+#   «고장으로 끝없이 커질 때» 만 막는 백스톱이고, 서버를 지키는 것은 oom_score_adj=1000(일꾼부터 죽는다)과 입장 판정이다.
+MARKER_AS_LIMIT_MB_DEFAULT = 1152
+MARKER_QUEUE_MAX_DEFAULT = 1                                         # 마커 전용 칸 — 돌고 있는 것 포함 한 번에 하나(GRADER_MARKER_QUEUE_MAX)
+MARKER_TIMEOUT_S_DEFAULT = 180                                       # 마커 작업 전체(그레이딩 + 배치 + 파일) 상한 — 넘으면 일꾼을 죽이고 줄·합성 문을 연다
+_CANCEL: Dict[str, threading.Event] = {}                             # 작업 번호 → 취소 신호(마커)
+_CANCEL_LOCK = threading.Lock()                                      # 취소 창구 ↔ 작업 끝맺음이 엇갈리지 않게(신호가 남지 않게)
+
+
+def _marker_queue_max() -> int:
+    try:
+        return max(1, int(os.environ.get("GRADER_MARKER_QUEUE_MAX") or MARKER_QUEUE_MAX_DEFAULT))
+    except ValueError:
+        return MARKER_QUEUE_MAX_DEFAULT
+
+
+def _server_mb(svc: Any) -> float:
+    """입장 판정의 «서버 몫»(MB) = 지금 이 서버 프로세스의 실제 RAM + 요청 처리 여유 30MB. 못 재면 엔진 기본값(160)"""
+    try:
+        cur = svc.current_rss_mb()
+    except Exception:
+        cur = None
+    return float(cur) + 30.0 if isinstance(cur, (int, float)) and cur > 0 else float(getattr(svc, "MARKER_SERVER_MB", 160.0))
+
+
+def _marker_slow(svc: Any) -> float:
+    """서버가 엔진 실측 PC 보다 느린 배수(입장 판정의 시간 어림에 곱한다) — GRADER_MARKER_SLOW(0.5~10), 없으면 엔진 기본(2.0, 가정)"""
+    try:
+        return min(10.0, max(0.5, float(os.environ.get("GRADER_MARKER_SLOW") or svc.MARKER_SLOW)))
+    except (ValueError, AttributeError):
+        return 2.0
+
+
+def _marker_timeout_s() -> float:
+    """마커 작업 전체 시간 상한(초) — GRADER_MARKER_TIMEOUT_S 로 바꿀 수 있다(30~1200)"""
+    try:
+        return min(1200.0, max(30.0, float(os.environ.get("GRADER_MARKER_TIMEOUT_S") or MARKER_TIMEOUT_S_DEFAULT)))
+    except ValueError:
+        return float(MARKER_TIMEOUT_S_DEFAULT)
+MARKER_DL = {"pdf": ("application/pdf", "1:1 PDF"), "dxf": ("application/dxf", "DXF(R2000·mm)"),
+             "png": ("image/png", "미리보기 그림"), "json": ("application/json", "요약 JSON(조각 자리)")}
+
+
+def _marker_env() -> Dict[str, str]:
+    """마커 일꾼 환경 — 다시 만들기와 같은 허용 목록. 주소 공간 상한은 «운영자 값이 먼저»:
+    ① GRADER_MARKER_LIMIT_AS_MB(마커만) ② GRADER_ENGINE_LIMIT_AS_MB(운영자가 엔진 전체에 건 값 — 0 이면 끔) ③ 마커 기본값"""
+    env = _engine_env()
+    want = (os.environ.get("GRADER_MARKER_LIMIT_AS_MB") or "").strip()
+    if want:
+        env["GRADER_ENGINE_LIMIT_AS_MB"] = want
+    elif not (os.environ.get("GRADER_ENGINE_LIMIT_AS_MB") or "").strip():
+        env["GRADER_ENGINE_LIMIT_AS_MB"] = str(MARKER_AS_LIMIT_MB_DEFAULT)
+    return env
+
+
+def order_counts(path: str, svc: Any) -> Dict[str, Any]:
+    """주문서 엑셀 → {"top": {사이즈: 벌수}, "bottom": {…}, "rows", "people", "bottom_found", "warnings", "unknown", "sheet"}
+    마커 전용 읽기(read_order_members) — 합성이 쓰는 parse_order 는 «상의 사이즈 1차» 규칙이라 하의만 산 줄을 버린다(독립 시험 지적).
+    합성 결과를 바꾸지 않으려고 parse_order 는 그대로 두고, 마커는 같은 시트 고르기 규칙으로 상의·하의 열을 따로 읽는다.
+    명단 → 벌수는 service.counts_from_members(stizshop marker 와 같은 피스 규칙). 수량이 n 이면 그 줄을 n 벌로 센다."""
+    info = read_order_members(path)
+    members = info.pop("members")
+    return {"top": svc.counts_from_members(members, "top"), "bottom": svc.counts_from_members(members, "bottom"),
+            "people": info.get("rows", 0), "pieces_top_bottom": len(members), **info}
+
+
+# 머리글 이름(공백·nbsp 뺀 글자) — 열 찾기
+_HEAD_TOP = ("사이즈", "상의", "상의사이즈", "사이즈(상의)", "상의(사이즈)")
+_HEAD_BOT = ("하의", "하의사이즈", "사이즈(하의)", "하의(사이즈)")
+_HEAD_QTY = ("수량", "비고", "장수", "매수")
+_HEAD_NAME = ("이니셜", "이름")
+_HEAD_NUM = ("배번", "번호")
+_ORDER_SIZES = ("5XS", "4XS", "3XS", "2XS", "XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL")
+
+
+def _order_size(v: Any, normalize: Any) -> Tuple[str, bool]:
+    """칸 하나 → (사이즈, 못 읽음?) — 그레이더 사이즈 규칙(2 XL·L사이즈·10호) + XXL·XXXL 같은 X 여러 개도 받는다"""
+    if v is None or str(v).strip() == "":
+        return "", False
+    s = normalize(v)
+    if s:
+        return s, False
+    t = re.sub(r"(사이즈|SIZE)$", "", str(v).strip().upper().replace(" ", "").replace("-", ""))
+    m = re.fullmatch(r"(X{2,5})L", t)
+    if m:
+        return f"{len(m.group(1))}XL", False
+    return "", True
+
+
+_QTY_UNIT = r"\s*(?:장|벌|개|세트|set|SET|ea|EA)"                    # 수량으로 인정하는 단위 — 숫자 «바로 뒤» 에 붙어야 한다
+
+
+def _order_qty(v: Any, plain_numbers: bool = False) -> Tuple[int, int, bool]:
+    """수량·비고 칸 → (상의 벌수, 하의 벌수, 칸에서 수량을 읽었나).
+    숫자 «바로 뒤에 장·벌·개·세트» 가 붙은 것만 수량이다(2026-10-20 독립 시험: «11번으로 변경»·«2024 우승기념»·전화번호·«5XL 요청»
+    의 숫자를 벌수로 읽었다). «상의2장 하의1장» 은 따로, 한쪽만 적혀 있으면 그쪽만 그 수 · 다른 쪽은 1(사이즈 칸이 차 있으면 1피스),
+    «2장» 처럼 옷 없이 적히면 둘 다 그 수. plain_numbers: 머리글이 «수량·장수·매수» 인 칸 — 맨 숫자(4)도 수량으로 본다(비고는 아님)."""
+    if v is None or str(v).strip() == "":
+        return 1, 1, False
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        if plain_numbers:
+            n = max(0, int(v)); return n, n, True
+        return 1, 1, False                                              # 비고 칸의 맨 숫자는 수량이 아니다
+    t = str(v)
+    mt = re.search(r"상의\s*(\d+)" + _QTY_UNIT, t); mb = re.search(r"하의\s*(\d+)" + _QTY_UNIT, t)
+    if mt or mb:
+        return (int(mt.group(1)) if mt else 1), (int(mb.group(1)) if mb else 1), True
+    m = re.search(r"(?<![\d.\-])(\d+)" + _QTY_UNIT, t)
+    if m:
+        n = int(m.group(1)); return n, n, True
+    if plain_numbers and re.fullmatch(r"\s*\d+\s*", t):
+        n = int(t); return n, n, True
+    return 1, 1, False
+
+
+def _sheet_members(vals: List[List[Any]], normalize: Any, norm_header: Any, to_str: Any) -> Optional[Dict[str, Any]]:
+    """시트 하나 → {"members", "rows", "bottom_found", "skipped", "unknown"} — 머리글(상의/사이즈 열)을 못 찾으면 None"""
+    from engine.order import _FOOTER_KEYWORDS
+    for hr in range(min(25, len(vals))):
+        head = [norm_header(v) for v in vals[hr][:20]]
+        c_top = next((i for i, h in enumerate(head) if h in _HEAD_TOP), None)
+        c_comb = next((i for i, h in enumerate(head) if "상의" in h and "하의" in h), None)    # «상의|하의» 한 칸에 둘 다
+        if c_top is None and c_comb is None:
+            continue
+        c_bot = next((i for i, h in enumerate(head) if h in _HEAD_BOT), None)
+        c_qty = next((i for i, h in enumerate(head) if h in _HEAD_QTY), None)
+        plain = c_qty is not None and head[c_qty] in ("수량", "장수", "매수")   # 맨 숫자를 수량으로 보는 칸(비고는 아님)
+        c_name = next((i for i, h in enumerate(head) if h in _HEAD_NAME), None)
+        c_num = next((i for i, h in enumerate(head) if h in _HEAD_NUM), None)
+        start = hr + 1
+        if start < len(vals):                                            # 부제 줄(상의 | 하의) — 사이즈 칸 아래
+            sub = [norm_header(v) for v in vals[start][:20]]
+            if "상의" in sub or "하의" in sub:
+                if "상의" in sub: c_top = sub.index("상의")
+                if "하의" in sub and c_bot is None: c_bot = sub.index("하의")
+                start += 1
+        members, rows, skipped, unknown, qty_rows = [], 0, 0, {}, []
+        cell = lambda row, c: row[c] if (c is not None and c < len(row)) else None
+        for ri, row in enumerate(vals[start:], start=start + 1):
+            text = "".join(to_str(v) for v in row[:7]).replace(" ", "")
+            if any(k.replace(" ", "") in text for k in _FOOTER_KEYWORDS):
+                break                                                    # 배송 정보·연락처 칸 = 명단 끝
+            if c_comb is not None and c_top is None:
+                parts = re.split(r"[/|,]", to_str(cell(row, c_comb)) or "")
+                raw_t, raw_b = parts[0], (parts[1] if len(parts) > 1 else "")
+            else:
+                raw_t, raw_b = cell(row, c_top), cell(row, c_bot)
+            top, bad_t = _order_size(raw_t, normalize)
+            bot, bad_b = _order_size(raw_b, normalize)
+            for raw, bad in ((raw_t, bad_t), (raw_b, bad_b)):
+                if bad:
+                    k = to_str(raw)[:12]; unknown[k] = unknown.get(k, 0) + 1
+            if not top and not bot:
+                if to_str(cell(row, c_name)) or (c_num is not None and to_str(cell(row, c_num))):
+                    skipped += 1                                         # 이름·배번은 있는데 사이즈가 비었다 — 알려 준다
+                continue                                                 # 빈 줄은 건너뛰고 계속 읽는다(뒤 사람을 버리지 않는다)
+            qt, qb, read = _order_qty(cell(row, c_qty), plain)
+            if read and ((top and qt != 1) or (bot and qb != 1)):        # 1벌이 아닌 수를 칸에서 읽었다 — 직원이 확인하게 알린다
+                qty_rows.append(f"{ri}행 «{to_str(cell(row, c_qty))[:20]}» → " + " · ".join(
+                    x for x in ((f"상의 {top} {qt}벌" if top else ""), (f"하의 {bot} {qb}벌" if bot else "")) if x))
+            rows += 1
+            members += [{"topSize": top, "bottomSize": ""}] * (qt if top else 0)
+            members += [{"topSize": "", "bottomSize": bot}] * (qb if bot else 0)
+            if len(members) > MARKER_ORDER_MAX_QTY:
+                raise HTTPException(status_code=400, detail=f"주문서 수량 합이 {MARKER_ORDER_MAX_QTY}을 넘습니다 — 주문서를 확인해 주세요.")
+        if rows:
+            return {"members": members, "rows": rows, "bottom_found": c_bot is not None or c_comb is not None,
+                    "skipped": skipped, "unknown": unknown, "qty_rows": qty_rows}
+    return None
+
+
+def read_order_members(path: str) -> Dict[str, Any]:
+    """마커용 주문서 읽기 — 시트 고르기는 parse_order 와 같은 순서(«주문번호+수량» 표식 시트 → 데이터 있는 첫 시트).
+    열기 전에 xlsx_guard(항목별 크기·시트 수 — 엑셀 폭탄)로 막고, 읽기 상한(행 MAX_ROWS·열 MAX_COLS)도 같다.
+    파일은 «한 번만» 연다 — 머리글이 없는 사이즈 집계표(양식②)는 이미 읽은 값에 합성과 같은 양식 읽기(상의만)를 쓴다."""
+    import openpyxl
+    from engine.order import (MAX_ROWS, MAX_COLS, xlsx_guard, _has_order_mark, _normalize_size, _norm_header, _to_str,
+                              _parse_form1, _parse_form_stiz, _parse_form2)
+    warnings: List[str] = []
+    empty = {"members": [], "rows": 0, "bottom_found": False, "warnings": warnings, "unknown": {}, "sheet": None, "skipped": 0}
+    why = xlsx_guard(path)
+    if why:
+        warnings.append(why)
+        return empty
+    try:
+        wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    except Exception as e:                                               # 서버 경로는 내보내지 않는다
+        warnings.append(f"주문서를 열 수 없습니다(엑셀 파일이 아니거나 깨짐: {type(e).__name__}).")
+        return empty
+    marked = first = None
+    fb_marked = fb_first = fb_most = None                                 # 머리글 없는 집계표용(합성과 같은 읽기 · 같은 우선순위)
+    try:
+        for name in wb.sheetnames:
+            try:
+                ws = wb[name]
+                vals = [list(r) for r in ws.iter_rows(values_only=True, max_row=MAX_ROWS, max_col=MAX_COLS)]
+                if (ws.max_row or 0) > MAX_ROWS:
+                    warnings.append(f"시트 '{name[:20]}' 가 {MAX_ROWS}행을 넘어 위에서부터 {MAX_ROWS}행까지만 읽었습니다.")
+            except Exception as e:
+                warnings.append(f"시트 '{name[:20]}' 읽기 실패({type(e).__name__})."); continue
+            mark = _has_order_mark(vals)
+            got = _sheet_members(vals, _normalize_size, _norm_header, _to_str)
+            if got:
+                got["sheet"] = name
+                if marked is None and mark:
+                    marked = got
+                if first is None:
+                    first = got
+                continue
+            rows = _parse_form1(vals) or _parse_form_stiz(vals) or _parse_form2(vals)
+            if rows:
+                if fb_marked is None and mark: fb_marked = rows
+                if fb_first is None: fb_first = rows
+                if fb_most is None or len(rows) > len(fb_most): fb_most = rows
+    finally:
+        wb.close()
+    best = marked or first
+    if best is None:                                                     # 머리글 없는 집계표 — 상의만(파일을 다시 열지 않는다)
+        rows = fb_marked or fb_first or fb_most or []
+        members = []
+        for r in rows:
+            try:
+                q = max(0, int(str(r.get("qty") or "1")))
+            except ValueError:
+                q = 1
+            members += [{"topSize": r.get("size") or "", "bottomSize": ""}] * q
+            if len(members) > MARKER_ORDER_MAX_QTY:
+                raise HTTPException(status_code=400, detail=f"주문서 수량 합이 {MARKER_ORDER_MAX_QTY}을 넘습니다 — 주문서를 확인해 주세요.")
+        if rows:
+            warnings.append("명단 머리글(이니셜·사이즈)이 없는 집계표라 상의 사이즈만 셌습니다 — 하의는 표에 직접 넣어 주세요.")
+        else:
+            warnings.append("주문서에서 선수/사이즈 정보를 찾지 못했습니다.")
+        return {**empty, "members": members, "rows": len(rows), "warnings": warnings}
+    if not best["bottom_found"]:
+        warnings.append("하의 사이즈 열을 찾지 못했습니다 — 하의 벌수는 표에 직접 넣어 주세요.")
+    if best["skipped"]:
+        warnings.append(f"이름·배번은 있는데 사이즈가 빈 줄이 {best['skipped']}개 있습니다 — 빠진 사람이 없는지 확인해 주세요.")
+    if best["unknown"]:
+        warnings.append("사이즈로 못 읽은 칸: " + " · ".join(f"«{k}» {n}개" for k, n in list(best["unknown"].items())[:8]))
+    if best.get("qty_rows"):
+        q = best["qty_rows"]
+        warnings.append(f"수량 칸에서 1벌이 아닌 수를 읽은 줄 {len(q)}개 — 맞는지 확인해 주세요: " + " / ".join(q[:6])
+                        + (" …" if len(q) > 6 else ""))
+    return {**best, "warnings": warnings}
+
+
+async def _read_order_upload(up: Any) -> str:
+    """올린 주문서 → 디스크(uploads, 7일 정리) 경로. 엑셀이 아니거나 크면 400"""
+    name = (getattr(up, "filename", "") or "").lower()
+    if not name.endswith((".xlsx", ".xlsm")):
+        raise HTTPException(status_code=400, detail="주문서는 엑셀(.xlsx) 파일만 올릴 수 있습니다.")
+    data = await up.read(MARKER_ORDER_MAX_BYTES + 1)
+    if len(data) > MARKER_ORDER_MAX_BYTES:
+        raise HTTPException(status_code=400, detail=f"주문서가 너무 큽니다({MARKER_ORDER_MAX_BYTES // 2**20}MB 이하).")
+    if not data:
+        raise HTTPException(status_code=400, detail="주문서 파일이 비어 있습니다.")
+    up.file.seek(0)
+    return state.save_upload(up)
+
+
+@router.post("/order/counts")
+async def marker_order_counts(order: UploadFile = File(...)) -> Dict[str, Any]:
+    """🔒 주문서 엑셀 → 상의·하의 사이즈별 벌수(피스 규칙). 화면이 표를 채워 직원이 확인한 뒤 마커를 누르게 한다."""
+    svc = load_service()
+    path = await _read_order_upload(order)
+    info = await run_in_threadpool(order_counts, path, svc)              # 엑셀 읽기는 스레드에서 — 서버가 다른 요청을 계속 받게
+    if not info["rows"]:
+        raise HTTPException(status_code=400, detail=("주문서에서 선수·사이즈를 찾지 못했습니다. " + " ".join(info["warnings"]))[:300])
+    return info
+
+
+def _marker_piece_names(style_id: str, v: int) -> Tuple[List[str], List[str], str]:
+    """그 버전 view.json → (사이즈, 조각 이름, view 주소). 못 읽으면 400"""
+    vp = os.path.join(_vdir(style_id, v), "view.json")
+    try:
+        with open(vp, encoding="utf-8") as f:
+            st = json.load(f)["style"]
+        return list(st["sizes"]), list(st["pieces"]), vp
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"v{v} 의 화면 자료(view.json)를 읽지 못했습니다.")
+
+
+def _prune_markers(keep: int = MARKER_KEEP) -> None:
+    """마커 결과 폴더(web_cadmk_*)는 최근 keep 개만 — 30일 정리 규칙과 별개로 디스크가 한쪽으로 쌓이지 않게"""
+    try:
+        d = state.get_jobs_dir()
+        olds = sorted(n for n in os.listdir(d) if n.startswith("web_cadmk_"))
+        for n in olds[:-keep] if len(olds) > keep else []:
+            shutil.rmtree(os.path.join(d, n), ignore_errors=True)
+    except Exception:
+        pass
+
+
+def _marker_thread(job_id: str, style_id: str, from_ver: int, group: str, req: Dict[str, Any], rules: Optional[Dict[str, Any]],
+                   view_path: str) -> None:
+    work = os.path.join(state.get_jobs_dir(), f"web_cadmk_{time.strftime('%y%m%d_%H%M%S')}_{job_id[:6]}")
+    with _CANCEL_LOCK:
+        cancel = _CANCEL.setdefault(job_id, threading.Event())
+    try:
+        svc = load_service()
+        _prune_markers(MARKER_KEEP - 1)
+        state.update_job(job_id, out_dir=work)
+        limit = _marker_timeout_s()                                     # 전체 상한 — 넘으면 일꾼을 죽이고(=줄·합성 문이 열린다) 실패로
+        res = _run_engine(job_id, svc, lambda on_step, timeout: svc.marker(
+            work, group, req["counts"], width_cm=req["width_cm"], gap_mm=req["gap_mm"], nap=req["nap"], quick=req["quick"],
+            budget=req["budget"], cache_mb=req["cache_mb"], jobs=req["jobs"], seed=req["seed"], exclude=req["exclude"],
+            rules=rules, check_view=view_path, timeout=min(timeout, limit), on_step=on_step, env=_marker_env(), cancel=cancel),
+            cancel=cancel)
+        ver = res.get("verify") or {}
+        if not ver.get("ok"):                                            # 다시 잰 검산(겹침·간격·폭 밖·식서)이 하나라도 틀리면 내지 않는다
+            raise ValueError(f"다시 잰 검산이 맞지 않아 결과를 내지 않았습니다(겹침 {ver.get('overlaps')} · 폭 밖 {ver.get('outside')}"
+                             f" · 최소 간격 {ver.get('min_gap_mm')}mm · 식서 {'정상' if ver.get('grain_ok') else '틀림'}).")
+        root = os.path.realpath(work)                                   # 결과 주소는 이 작업 폴더 안의 파일만 받는다
+        paths = {k: f["path"] for k, f in (res.get("files") or {}).items() if k in MARKER_DL and isinstance(f.get("path"), str)
+                 and os.path.isfile(f["path"]) and os.path.commonpath([root, os.path.realpath(f["path"])]) == root}
+        for nm in os.listdir(work):                                     # 결과(marker/)·기록만 남기고 중간 결과(그레이딩·화면 자료)는 지운다
+            if nm not in ("marker", "engine.log", "engine_graded.log", "result.json", "marker_req.json"):
+                full = os.path.join(work, nm)
+                shutil.rmtree(full, ignore_errors=True) if os.path.isdir(full) else _remove_quiet(full)
+        gr = res.get("graded_run") or {}
+        run = _engine_run_info(res)
+        mem = {"marker_worker_mb": res.get("peak_rss_mb"), "graded_worker_mb": gr.get("peak_rss_mb"),
+               "worker_max_mb": res.get("peak_rss_mb_max"), "marker_vm_peak_mb": res.get("vm_peak_mb"),
+               "marker_vm_hwm_mb": res.get("vm_hwm_mb"), "server_peak_mb": svc.peak_rss_mb()}   # 서버 = 이 프로세스(엔진 밖)
+        if isinstance(mem["server_peak_mb"], (int, float)) and isinstance(mem["worker_max_mb"], (int, float)):
+            mem["sum_mb"] = round(mem["server_peak_mb"] + mem["worker_max_mb"], 1)          # 일꾼은 한 번에 하나라 «서버 + 큰 일꾼» 이 최고
+        summ = res.get("summary") or {}
+        files = {k: {"bytes": f.get("bytes"), "sha256": f.get("sha256"), "label": MARKER_DL[k][1],
+                     "url": f"/api/cad/jobs/{job_id}/files/{k}"} for k, f in (res.get("files") or {}).items() if k in paths}
+        state.update_job(job_id, status="done", done=len(svc.MARKER_STEPS), stage="done", stage_ko="끝", marker_files=paths,
+                         result={"style_id": style_id, "version": from_ver, "group": group, "request": req,
+                                 "summary": summ, "verify": ver, "files": files, "memory": mem,
+                                 "view_match": gr.get("view_match"), "rules_used": gr.get("rules_used"),
+                                 "graded_sha256": gr.get("graded_sha256"), **run})
+        _log(f"[cad] 마커 끝: {style_id} v{from_ver} · {summ.get('length_m')} m · 벌당 {summ.get('yield_m_per_bundle')} m"
+             f" · 효율 {summ.get('efficiency_pct')}% · 일꾼 최고 {mem['worker_max_mb']} MB · 서버 {mem['server_peak_mb']} MB"
+             f" · VmPeak {mem['marker_vm_peak_mb']} MB · {res.get('wall_s')}초")
+    except Exception as e:
+        if isinstance(e, JobCancelled) or cancel.is_set():               # 취소 — 실패가 아니다. 만든 것은 버린다
+            shutil.rmtree(work, ignore_errors=True)
+            state.update_job(job_id, status="error", error="취소했습니다.", cancelled=True)
+            _log(f"[cad] 마커 취소됨: {job_id}")
+        else:
+            _fail_job(job_id, work, "마커", e)
+    finally:
+        with _CANCEL_LOCK:                                              # 상태(done/error)를 적은 «뒤» 에 지운다 — 취소 창구는 같은 자물쇠 안에서 상태를 본다
+            _CANCEL.pop(job_id, None)
+        _queue_done("marker")
+
+
+def _marker_quick(p: Dict[str, Any], request: Request) -> bool:
+    """«빠르게»(한 번 깔기)가 서버 기본 — 여러 번 깔기(quick=false)는 관리자만.
+    근거(2026-10-20 실측): 일꾼 1명·120초 한도면 여러 번 깔기가 ①② 중간에서 멈춰 상의 8벌은 빠르게와 같은 길이를 4배 시간에 냈다.
+    그동안 합성(본업)이 기다리므로, 직원이 누르는 기본 길은 빠르게로 두고 여러 번 깔기는 관리자가 골라서만 쓴다."""
+    q = _bool_field(p, "quick", True)
+    return True if not _can_upload(request) else q
+
+
+def _bool_field(p: Dict[str, Any], key: str, default: bool = False) -> bool:
+    v = p.get(key, default)
+    if not isinstance(v, bool):
+        raise HTTPException(status_code=400, detail=f"{key} 는 참/거짓(true/false)이어야 합니다.")
+    return v
+
+
+@router.post("/styles/{style_id}/v/{ver}/marker")
+async def marker_start(style_id: str, ver: str, request: Request) -> JSONResponse:
+    """🔒 마커·요척 — 원단 폭(cm)·간격(mm)·nap·빠르게(quick)·사이즈별 벌수(counts) 또는 주문서 엑셀 → 작업 번호(202).
+    입력: JSON {width_cm, gap_mm, nap, quick, counts: {사이즈: 벌수}, exclude: [조각]}
+          또는 multipart: options=<위 JSON 글자> + order=<주문서 .xlsx> (주문서를 주면 그 옷의 벌수를 주문서에서 센다)
+    진행률·결과는 GET /api/cad/jobs/{job} · 파일은 GET /api/cad/jobs/{job}/files/{pdf|dxf|png|json}. 버전에는 저장하지 않는다."""
+    _check_style_id(style_id)
+    v = _resolve_ver(style_id, ver)
+    svc = load_service()
+    group = _group_of(style_id, svc)
+    if not group or not hasattr(svc, "marker"):
+        raise HTTPException(status_code=400, detail="이 스타일은 아직 서버에서 마커를 만들 수 없습니다(서버에 원본이 없음).")
+    order_info = None
+    if (request.headers.get("content-type") or "").lower().startswith("multipart/form-data"):
+        form = await request.form()
+        try:
+            payload = json.loads(form.get("options") or "{}")
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="options 는 JSON 글자여야 합니다.")
+        up = form.get("order")
+        if up is not None and hasattr(up, "filename"):
+            path = await _read_order_upload(up)
+            order_info = await run_in_threadpool(order_counts, path, svc)
+            if not order_info["rows"]:
+                raise HTTPException(status_code=400, detail=("주문서에서 선수·사이즈를 찾지 못했습니다. " + " ".join(order_info["warnings"]))[:300])
+            if group == "bottom" and not order_info["bottom_found"]:
+                raise HTTPException(status_code=400, detail="주문서에서 하의 사이즈 열을 찾지 못했습니다 — 하의 벌수를 표에 직접 넣어 주세요.")
+            if not isinstance(payload, dict):
+                payload = {}
+            # 이 스타일에 없는 사이즈(XS·아동 호수 등)는 빼고 경고로 남긴다 — 주문서 한 줄 때문에 마커 전체가 막히지 않게
+            vsizes = set(_marker_piece_names(style_id, v)[0])
+            got = order_info[group]
+            dropped = {s: n for s, n in got.items() if s not in vsizes}
+            payload["counts"] = {s: n for s, n in got.items() if s in vsizes}
+            order_info["dropped"] = dropped
+            if dropped:
+                order_info["warnings"].append("이 스타일에 없는 사이즈라 뺐습니다: " + " · ".join(f"{s} {n}벌" for s, n in dropped.items()))
+    else:
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="요청은 JSON 이어야 합니다({width_cm, gap_mm, counts …}).")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="요청 모양이 다릅니다({width_cm, gap_mm, counts …}).")
+    sizes, pieces, view_path = _marker_piece_names(style_id, v)
+    try:
+        req = svc.check_marker_request(group, payload.get("counts"), payload.get("width_cm", 150), payload.get("gap_mm", 3),
+                                       nap=_bool_field(payload, "nap"), quick=_marker_quick(payload, request),
+                                       exclude=payload.get("exclude") or [], sizes=sizes, pieces=pieces)
+        # 예상 메모리·시간(벌수 × 장수 실측식) — 서버 한도를 넘으면 «빠르게» 로 바꾸거나 거절(2026-10-20 보안 리뷰)
+        req = svc.admit_marker(req, time_limit_s=_marker_timeout_s(), slow=_marker_slow(svc), server_mb=_server_mb(svc))
+    except svc.ServiceError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    rules = None
+    if os.path.isfile(os.path.join(_vdir(style_id, v), "rules.json")):  # 다시 그레이딩한 버전 — 그 규칙표로 그레이딩해야 그 모양이다
+        rules, _src = _version_rules(style_id, v, group, svc)
+    job_id, ahead = _start_engine_job(request, "cad-marker", len(svc.MARKER_STEPS), {"style_id": style_id, "from_version": v},
+                                      _marker_thread, (style_id, v, group, req, rules, view_path), need_token=False, lane="marker")
+    return JSONResponse(status_code=202, content={"job_id": job_id, "total": len(svc.MARKER_STEPS), "ahead": ahead,
+                                                  "style_id": style_id, "version": v, "request": req, "order": order_info})
+
+
+@router.delete("/jobs/{job_id}")
+def cad_job_cancel(job_id: str, request: Request) -> Dict[str, Any]:
+    """🔒 마커 작업 취소 — 맡긴 본인 또는 관리자. 줄 서 있으면 엔진을 안 띄우고, 돌고 있으면 일꾼을 죽인다(줄·합성 문이 바로 열린다)."""
+    j = state.get_job(job_id) if re.fullmatch(r"[0-9a-f]{12}", job_id or "") else None
+    if not j or j.get("kind") != "cad-marker":
+        raise HTTPException(status_code=404, detail="취소할 마커 작업이 없습니다.")
+    me = getattr(request.state, "user_id", None) or getattr(request.state, "email", None)
+    if auth_required() and getattr(request.state, "role", None) != "admin" and j.get("owner") != me:
+        raise HTTPException(status_code=403, detail="맡긴 사람이나 관리자만 취소할 수 있습니다.")
+    with _CANCEL_LOCK:                                                  # 작업이 막 끝나는 순간과 겹쳐도: 끝난 작업엔 신호를 안 남기고 표시도 안 덮는다
+        cur = state.get_job(job_id) or {}
+        if cur.get("status") != "running":
+            return {"job_id": job_id, "status": cur.get("status"), "cancelled": bool(cur.get("cancelled"))}
+        _CANCEL.setdefault(job_id, threading.Event()).set()
+        state.update_job_if_running(job_id, stage="cancelling", stage_ko="취소하는 중")
+    _log(f"[cad] 마커 취소 요청: {job_id} · {me}")
+    return {"job_id": job_id, "status": "cancelling"}
+
+
+@router.get("/jobs/{job_id}/files/{kind}")
+def cad_job_file(job_id: str, kind: str):
+    """🔒 마커 결과 파일 — pdf · dxf · png · json (작업이 끝났을 때만, 서버가 다시 켜지면 사라진다 — 다시 만들면 된다)"""
+    if kind not in MARKER_DL:
+        raise HTTPException(status_code=400, detail="파일 종류는 " + " · ".join(MARKER_DL) + " 중 하나입니다.")
+    j = state.get_job(job_id) if re.fullmatch(r"[0-9a-f]{12}", job_id or "") else None
+    p = ((j or {}).get("marker_files") or {}).get(kind)
+    od = (j or {}).get("out_dir")
+    if (not j or j.get("kind") != "cad-marker" or j.get("status") != "done" or not p or not od or not os.path.isfile(p)
+            or os.path.commonpath([os.path.realpath(od), os.path.realpath(p)]) != os.path.realpath(od)):
+        raise HTTPException(status_code=404, detail="마커 결과가 없습니다(오래됐거나 서버가 다시 켜짐). 마커를 다시 눌러 주세요.")
+    r = j.get("result") or {}
+    name = f"{r.get('style_id') or 'marker'}_v{r.get('version')}_marker.{kind}"
+    ko = None
+    if kind != "json":
+        g_ko = "상의" if r.get("group") == "top" else "하의"
+        ko = f"마커_{g_ko}_{(r.get('summary') or {}).get('length_m')}m.{kind}"
+    return FileResponse(p, media_type=MARKER_DL[kind][0], headers={"Content-Disposition": _disposition(name, ko),
+                                                                   "Cache-Control": "no-store"})
+
+
+# ══════════════════════════════════════════════════════════════════════
 #  작업 진행률
 # ══════════════════════════════════════════════════════════════════════
 @router.get("/jobs/{job_id}")
@@ -1274,7 +1789,7 @@ def cad_job(job_id: str) -> Dict[str, Any]:
     if not j or j.get("kind") not in JOB_KINDS:
         raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다(서버 재시작 등). 다시 눌러 주세요.")
     return {k: j.get(k) for k in ("kind", "status", "done", "total", "stage", "stage_ko", "error", "result", "style_id",
-                                  "from_version", "ahead")}
+                                  "from_version", "ahead", "cancelled")}
 
 
 @router.get("/jobs/{job_id}/view")

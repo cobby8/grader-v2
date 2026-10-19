@@ -647,7 +647,9 @@ async def order_parse(file: UploadFile = File(...)) -> Dict[str, Any]:
 
     warnings: List[str] = []
     try:
-        rows = parse_order(saved_path, warnings)
+        # 엑셀 읽기는 스레드에서(2026-10-20 보안 리뷰) — 큰 파일을 읽는 동안 서버가 다른 요청을 못 받는 일이 없게
+        from starlette.concurrency import run_in_threadpool
+        rows = await run_in_threadpool(parse_order, saved_path, warnings)
     except Exception as e:
         # parse_order 는 보통 크래시하지 않지만, 만약을 위해 한국어 안내로 흘린다.
         return {

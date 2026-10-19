@@ -26,6 +26,7 @@ STIZ 표준 주문서는 실데이터 86개 전수 분석 결과 크게 2종이�
 from __future__ import annotations
 
 import re
+import zipfile
 
 import openpyxl
 
@@ -80,6 +81,63 @@ _HEADER_SIZE = ("사이즈",)             # '사이즈'
 # 양식③은 맨 앞에 '순번' 컬럼이 있고, '비고' 컬럼에 "4장" 식 수량이 적힌다.
 _HEADER_SEQ = ("순번",)                # '순\xa0\xa0 번' → nbsp/공백 제거 시 '순번'
 _HEADER_NOTE = ("비고",)              # '비  고' → 공백 제거 시 '비고'
+
+# ── 읽기 상한(2026-10-20 보안 리뷰 — «xlsx 폭탄») ─────────────────────────────
+# 4.8KB 짜리 파일이 «시트 크기 A1:AN300000» 과 맨 끝 칸 하나만 적어 두면, read_only 읽기가 그 사이 빈 줄을 전부 만들어
+# 30만 행 × 40칸(파이썬 메모리 약 250MB)이 됐다. 실제 주문서는 많아야 수백 행·10여 칸이라 아래 상한이면 넉넉하다.
+MAX_ROWS = 2000                    # 시트마다 위에서부터 이 행까지만 읽는다
+MAX_COLS = 40                      # 왼쪽부터 이 열(AN)까지만 읽는다
+MAX_UNZIPPED_BYTES = 30 * 1024 * 1024   # xlsx(=zip) 안 XML 을 풀었을 때 합계 상한(그림 xl/media 는 빼고 센다)
+# 항목별 상한(2026-10-20 재리뷰) — XML 은 파이썬 메모리로 올라오면 20~30배가 된다(실측: 스타일 37MB → 1,082MB · 시트 한 행 230만 칸
+#   48MB → 1,491MB · 공유 문자열 46MB → 291MB · 시트 3만 장 → CPU 530초). 실제 주문서 최대는 시트 216KB·공유 문자열 158KB·시트 20장.
+#   그래서 «합계» 가 아니라 «항목마다» 막는다. 숫자는 실제 최대의 약 5~10배.
+MAX_XML_BYTES = {"xl/styles.xml": 1 * 1024 * 1024, "xl/sharedStrings.xml": 5 * 1024 * 1024}
+MAX_SHEET_XML_BYTES = 2 * 1024 * 1024    # 시트 XML 한 장 — 실제 최대 216KB(2MB 면 파이썬에서 많아야 수십 MB)
+MAX_OTHER_XML_BYTES = 1 * 1024 * 1024    # 그 밖의 XML·rels(workbook.xml·[Content_Types].xml 등)
+MAX_SHEETS = 100                         # 시트 수 — 실제 최대 20장
+MAX_MEMBERS = 1000                       # zip 안 항목 수
+
+
+def xlsx_guard(path: str) -> str | None:
+    """엑셀(=zip) 을 «열기 전에» 항목별 크기·시트 수를 본다 → 넘으면 한국어 사유(서버 경로 없이), 괜찮으면 None.
+    zip 이 아니면 None — 여는 쪽(openpyxl)이 «깨진 파일» 로 따로 실패한다. 크기는 zip 목록에 적힌 값이고,
+    읽을 때 그 크기를 넘는 내용은 zipfile 이 잘라 낸다(적힌 값을 속여도 더 커지지 않는다)."""
+    try:
+        with zipfile.ZipFile(path) as z:
+            infos = z.infolist()
+    except Exception:
+        return None
+    if len(infos) > MAX_MEMBERS:
+        return f"엑셀 안 항목이 너무 많습니다({len(infos)}개)."
+    sheets = [i for i in infos if re.fullmatch(r"xl/worksheets/[^/]+\.xml", i.filename)]
+    if len(sheets) > MAX_SHEETS:
+        return f"시트가 너무 많습니다({len(sheets)}장 — {MAX_SHEETS}장까지)."
+    total = 0
+    for i in infos:
+        name = i.filename
+        if not name.lower().endswith((".xml", ".rels")):
+            continue                                                    # 그림(xl/media)은 read_only 로 읽지 않는다
+        total += i.file_size
+        cap = MAX_XML_BYTES.get(name) or (MAX_SHEET_XML_BYTES if i in sheets else MAX_OTHER_XML_BYTES)
+        if i.file_size > cap:
+            return f"엑셀 안 «{name.rsplit('/', 1)[-1][:40]}» 이 너무 큽니다({i.file_size // 1024:,}KB — {cap // 1024:,}KB까지)."
+    if total > MAX_UNZIPPED_BYTES:
+        return f"엑셀 내용이 너무 큽니다(풀면 {total // 2**20}MB — {MAX_UNZIPPED_BYTES // 2**20}MB까지)."
+    try:                                                                # 목록(workbook.xml)에 적힌 시트 수도 — 파일 없이 이름만 3만 개 적는 경우
+        with zipfile.ZipFile(path) as z:
+            wbx = z.read("xl/workbook.xml") if "xl/workbook.xml" in z.namelist() else b""
+        n = len(re.findall(rb"<(?:\w+:)?sheet[\s/>]", wbx))
+        if n > MAX_SHEETS:
+            return f"시트가 너무 많습니다({n}장 — {MAX_SHEETS}장까지)."
+    except Exception:
+        return None
+    return None
+
+
+def _too_big_unzipped(path: str) -> bool:
+    """(옛 이름) 상한을 넘으면 True — xlsx_guard 를 쓴다"""
+    return xlsx_guard(path) is not None
+
 
 # ── 이번 주문 표식 키워드 ────────────────────────────────────────────────────
 # STIZ 주문서는 한 xlsx 에 여러 접수분 시트가 누적된다(시트명=날짜 6자리).
@@ -464,10 +522,15 @@ def parse_order(xlsx_path: str, warnings: list | None = None) -> list[dict]:
 
     # data_only=True: 수식이 아닌 계산된 값을 읽는다(배번이 수식인 경우 대비).
     # read_only=True: 대용량/속도 최적화(시트를 메모리에 다 안 올림).
+    why = xlsx_guard(xlsx_path)              # 열기 전에 항목별 상한(엑셀 폭탄) — 서버 프로세스가 부풀지 않게
+    if why:
+        warn.append(f"⚠️ 주문서를 읽지 않았습니다: {why} 주문서를 확인해 주세요.")
+        return []
     try:
         wb = openpyxl.load_workbook(xlsx_path, data_only=True, read_only=True)
     except Exception as e:
-        warn.append(f"⚠️ 주문서를 열 수 없습니다: {xlsx_path} ({e})")
+        # 서버 파일 경로는 화면에 내보내지 않는다(보안 리뷰) — 오류 종류만
+        warn.append(f"⚠️ 주문서를 열 수 없습니다(엑셀 파일이 아니거나 깨짐: {type(e).__name__}).")
         return []
 
     # 시트를 순회하며 (파싱결과, 표식여부)를 순서대로 모은다.
@@ -480,9 +543,12 @@ def parse_order(xlsx_path: str, warnings: list | None = None) -> list[dict]:
             ws = wb[sheet_name]
             # 시트 전체 값을 2차원 리스트로 적재(read_only 모드 표준 방식).
             try:
-                rows = [list(r) for r in ws.iter_rows(values_only=True)]
+                # 상한(MAX_ROWS·MAX_COLS) 안만 — 시트에 적힌 크기가 커도 빈 줄을 끝까지 만들지 않는다
+                rows = [list(r) for r in ws.iter_rows(values_only=True, max_row=MAX_ROWS, max_col=MAX_COLS)]
+                if (ws.max_row or 0) > MAX_ROWS:
+                    warn.append(f"⚠️ 시트 '{sheet_name}' 가 {MAX_ROWS}행을 넘어 위에서부터 {MAX_ROWS}행까지만 읽었습니다.")
             except Exception as e:
-                warn.append(f"⚠️ 시트 '{sheet_name}' 읽기 실패: {e}")
+                warn.append(f"⚠️ 시트 '{sheet_name}' 읽기 실패({type(e).__name__}).")
                 continue
             if not rows:
                 continue
@@ -514,7 +580,7 @@ def parse_order(xlsx_path: str, warnings: list | None = None) -> list[dict]:
     best = marked or first_nonempty or most_rows
 
     if not best:
-        warn.append(f"⚠️ 주문서에서 선수/사이즈 정보를 찾지 못했습니다: {xlsx_path}")
+        warn.append("⚠️ 주문서에서 선수/사이즈 정보를 찾지 못했습니다.")
 
     # 사이즈가 비어 있는 행 수를 세어 안내(웹에서 붉게 강조할 대상).
     empty_size = sum(1 for row in best if not row["size"])

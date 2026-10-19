@@ -204,6 +204,16 @@ def update_job(job_id: str, **fields: Any) -> None:
             _JOBS[job_id].update(fields)
 
 
+def update_job_if_running(job_id: str, **fields: Any) -> bool:
+    """job 이 아직 running 일 때만 고친다(한 자물쇠 안에서 보고 고친다) — 끝난 작업의 표시를 덮지 않게. 고쳤으면 True"""
+    with _JOBS_LOCK:
+        j = _JOBS.get(job_id)
+        if not j or j.get("status") != "running":
+            return False
+        j.update(fields)
+        return True
+
+
 def bump_job_done(job_id: str, n: int = 1) -> None:
     """완료 카운트를 n 만큼 올린다(total 을 넘지 않게 보정). 진행바 갱신용."""
     with _JOBS_LOCK:
@@ -226,6 +236,10 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
 #     · 엔진이 차례를 기다리기 시작하면 새 합성은 엔진이 끝날 때까지 기다린다(엔진이 영영 밀리지 않게 — 쓰기 우선)
 #     · 엔진은 이미 돌고 있는 합성이 끝나기를 기다린다(돌던 것을 끊지 않는다)
 #   엔진은 관리자가 가끔 누르는 1분짜리라, 합성이 그동안 잠깐 기다리는 비용이 «둘 다 죽는» 위험보다 훨씬 작다.
+class Cancelled(Exception):
+    """엔진 차례를 기다리던 작업이 취소됐다"""
+
+
 class HeavyGate:
     def __init__(self) -> None:
         self._cv = threading.Condition()
@@ -255,7 +269,7 @@ class HeavyGate:
                 self._cv.notify_all()
 
     @contextlib.contextmanager
-    def exclusive_use(self, timeout=None):
+    def exclusive_use(self, timeout=None, cancel=None):
         """엔진 차례. timeout(초) 안에 돌던 합성이 안 끝나면 TimeoutError — 엔진 작업은 실패로 끝나고 «대기 표시» 가 풀린다.
         (상한이 없으면 멈춘 합성 하나에 엔진·그 뒤 합성까지 영영 묶인다 — 2단계 리뷰 지적)"""
         deadline = None if timeout is None else time.monotonic() + float(timeout)
@@ -266,7 +280,10 @@ class HeavyGate:
                     left = None if deadline is None else deadline - time.monotonic()
                     if left is not None and left <= 0:
                         raise TimeoutError("합성 작업이 끝나기를 기다리다 시간이 다 됐습니다")
-                    self._cv.wait(left)
+                    if cancel is not None and cancel.is_set():          # 기다리는 동안 «취소» 를 눌렀다(마커 — 2026-10-20 재리뷰)
+                        raise Cancelled()
+                    # 취소 신호를 보려고 0.5초마다 깬다(합성이 끝나면 notify 로 바로 깬다)
+                    self._cv.wait(0.5 if cancel is not None and (left is None or left > 0.5) else left)
             finally:
                 self.waiting_excl -= 1
                 self._cv.notify_all()            # 기다리다 포기(예외)해도 «엔진 뒤에 선» 합성들이 깨어나 다시 본다
