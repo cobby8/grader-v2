@@ -1,0 +1,627 @@
+{
+  "version": "2026-10-19.1",
+  "sizes": ["5XS", "4XS", "3XS", "2XS", "XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL"],
+  "rules": {
+    "photo": [
+      "테이블에 펴고 바로 위에서 찍기",
+      "전체 사진엔 쇠자를 옷 옆에 두기",
+      "한 장에 한 부위만, 가까이",
+      "안쪽은 옷을 뒤집어서"
+    ],
+    "measure": [
+      "봉제선 기준으로 재요 — 립·밑단의 바깥 끝이 아니라 박은 선에서",
+      "cm, 0.5 단위",
+      "못 잰 칸은 «못 잼» — 짐작해서 채우지 않기"
+    ]
+  },
+  "modes": {
+    "straight": "직선",
+    "along": "선을 따라",
+    "half": "단면 (펼친 폭)",
+    "vertical": "세로로 곧게"
+  },
+  "bases": [
+    {
+      "key": "sleeve_top",
+      "name": "소매 상의",
+      "ready": true,
+      "desc": "티·축구·배구·슈팅·하키·럭비·후드·웜업 상의",
+      "groups": [
+        {
+          "key": "neck", "name": "목 모양", "pick": "one", "default": "round_rib",
+          "options": [
+            { "key": "round_rib", "name": "라운드 (립)" },
+            { "key": "v_rib", "name": "V넥 (립)" },
+            { "key": "collar", "name": "칼라 (카라)", "hint": "단추 여밈이 있는 카라" },
+            { "key": "hood", "name": "후드" },
+            { "key": "zip_collar", "name": "지퍼 칼라 (하이넥)", "hint": "목이 서 있고 지퍼가 달린 것" }
+          ]
+        },
+        {
+          "key": "sleeve", "name": "소매 달기", "pick": "one", "default": "set_in",
+          "options": [
+            { "key": "set_in", "name": "일반", "hint": "어깨 봉제선이 있고 소매가 어깨끝에 달림" },
+            { "key": "raglan", "name": "래글런", "hint": "목에서 겨드랑이로 사선 이음선" }
+          ]
+        },
+        {
+          "key": "length", "name": "소매 길이", "pick": "one", "default": "short",
+          "options": [
+            { "key": "short", "name": "반팔" },
+            { "key": "long", "name": "긴팔" }
+          ]
+        },
+        {
+          "key": "cuff", "name": "소매 끝", "pick": "one", "default": "hem",
+          "options": [
+            { "key": "hem", "name": "접어박기" },
+            { "key": "rib", "name": "립 커프스" },
+            { "key": "elastic", "name": "고무줄" }
+          ]
+        },
+        {
+          "key": "hem", "name": "밑단", "pick": "one", "default": "fold",
+          "options": [
+            { "key": "fold", "name": "접어박기" },
+            { "key": "rib", "name": "립" },
+            { "key": "elastic", "name": "고무줄·스트링" }
+          ]
+        },
+        {
+          "key": "extra", "name": "더 붙은 것", "pick": "many", "default": [],
+          "options": [
+            { "key": "yoke", "name": "요크", "hint": "가슴·등에 가로로 지나는 이음선" },
+            { "key": "insert", "name": "인서트", "hint": "따로 덧댄 작은 조각 (V 아래 등)" },
+            { "key": "side_panel", "name": "옆 절개", "hint": "옆선 옆에 세로로 따로 붙인 판" },
+            { "key": "front_zip", "name": "앞 지퍼", "hint": "앞판이 위에서 아래까지 열림" },
+            { "key": "pocket", "name": "주머니" },
+            { "key": "side_slit", "name": "옆 트임", "hint": "밑단 옆선이 조금 벌어져 있음" },
+            { "key": "reversible", "name": "양면", "hint": "뒤집어 입을 수 있음" }
+          ]
+        }
+      ],
+
+      "shots": [
+        {
+          "key": "front_out", "title": "앞 전체 · 겉",
+          "where": "소매까지 펴서 옷 전체가 한 장에 들어오게",
+          "tips": ["바로 위에서 찍기", "옷 옆에 쇠자를 같이 두기"],
+          "mistakes": ["비스듬히 찍으면 길이 비율이 틀어져요"],
+          "why": "전체 모양과 조각이 어떻게 나뉘었는지 봐요",
+          "fig": [{ "view": "front", "frame": ["whole"], "ruler": true }]
+        },
+        {
+          "key": "back_out", "title": "뒤 전체 · 겉",
+          "where": "뒤판이 위로 오게 돌려서 전체",
+          "tips": ["바로 위에서 찍기", "옷 옆에 쇠자를 같이 두기"],
+          "mistakes": ["비스듬히 찍으면 길이 비율이 틀어져요"],
+          "why": "뒷목 모양·뒤 이음선·어깨 떨어짐을 봐요",
+          "fig": [{ "view": "back", "frame": ["whole"], "ruler": true }]
+        },
+        {
+          "key": "front_in", "title": "앞 전체 · 안쪽",
+          "where": "옷을 뒤집어서(안이 밖으로) 앞판이 위로 오게 전체",
+          "tips": ["봉제선이 다 보이게 펴기"],
+          "mistakes": ["겉만 찍으면 숨은 조각(인서트 등)을 놓쳐요"],
+          "why": "봉제선으로 조각이 몇 장인지 알 수 있어요",
+          "fig": [{ "view": "inside", "frame": ["whole"] }],
+          "variants": [
+            {
+              "when": ["extra:reversible"],
+              "title": "반대 면 · 앞 전체",
+              "where": "뒤집어서 반대 면이 위로 오게 앞 전체",
+              "why": "양면은 반대 면도 겉이에요 — 무늬·조각이 다를 수 있어요"
+            }
+          ]
+        },
+        {
+          "key": "neck_out", "title": "목 · 겉 가까이",
+          "where": "목 앞쪽을 가까이, 목 파임 맨 아래와 립이 끝나는 자리가 보이게",
+          "tips": ["한 장에 목만"],
+          "why": "목 모양과 마감을 봐요",
+          "fig": [{ "view": "front", "frame": ["neck"] }],
+          "variants": [
+            { "when": ["neck:v_rib"], "where": "V 꼭짓점과 립이 끝나는 자리가 보이게 가까이" },
+            { "when": ["neck:collar"], "where": "칼라를 놓인 그대로, 단추 여밈 아래 끝까지" },
+            { "when": ["neck:hood"], "where": "후드를 뒤로 넘기고, 후드가 목 앞에서 만나는 자리" },
+            { "when": ["neck:zip_collar"], "where": "지퍼를 끝까지 올리고 칼라 앞을 가까이" }
+          ]
+        },
+        {
+          "key": "neck_in", "title": "목 · 안쪽 가까이",
+          "where": "옷을 뒤집어서 같은 자리를 가까이 — 봉제선끼리 어떻게 물렸는지 보이게",
+          "tips": ["주름이 있어도 괜찮아요 — 이음선이 보이면 돼요"],
+          "why": "립·칼라가 어디서 끝나고 어디에 박혔는지 알 수 있어요",
+          "fig": [{ "view": "inside", "frame": ["neck"] }]
+        },
+        {
+          "key": "armpit_front", "title": "겨드랑이 · 앞",
+          "where": "어깨끝부터 겨드랑이까지, 소매와 몸판이 만나는 선 전체",
+          "tips": ["소매를 옆으로 펴고 찍기"],
+          "why": "둥근 쪽이 소매인지 몸판인지 봐요",
+          "fig": [{ "view": "front", "frame": ["armpit_l"] }],
+          "variants": [
+            {
+              "when": ["sleeve:raglan"], "title": "래글런선 · 앞",
+              "where": "목에서 겨드랑이까지 사선 이음선 전체",
+              "why": "래글런선이 곧은지 휘었는지 봐요"
+            }
+          ]
+        },
+        {
+          "key": "armpit_back", "title": "겨드랑이 · 뒤",
+          "where": "앞쪽과 같은 자리를 뒤에서",
+          "tips": ["소매를 옆으로 펴고 찍기"],
+          "why": "앞과 뒤의 소매 달림이 다른지 봐요",
+          "fig": [{ "view": "back", "frame": ["armpit_l"] }],
+          "variants": [
+            { "when": ["sleeve:raglan"], "title": "래글런선 · 뒤", "where": "앞쪽과 같은 사선 이음선을 뒤에서" }
+          ]
+        },
+        {
+          "key": "yoke", "title": "요크 이음선 · 어깨 쪽",
+          "when": ["extra:yoke"],
+          "where": "가로 이음선이 소매선과 만나는 곳을 가까이",
+          "why": "요크가 소매선까지 가는지, 어디서 끝나는지 봐요",
+          "fig": [{ "view": "front", "frame": ["yoke_l"] }]
+        },
+        {
+          "key": "cuff", "title": "소매 끝",
+          "where": "소매 끝을 가까이, 접어박은 폭이 보이게",
+          "why": "소매 끝 마감과 폭을 봐요",
+          "fig": [{ "view": "front", "frame": ["cuff_l"] }],
+          "variants": [
+            { "when": ["cuff:rib"], "where": "커프스와 소매가 이어진 곳 — 주름이 어떻게 잡혔는지 보이게" },
+            { "when": ["cuff:elastic"], "where": "고무줄 부분을 가까이 — 주름이 보이게" }
+          ]
+        },
+        {
+          "key": "hem_side", "title": "밑단 · 옆선",
+          "where": "밑단과 옆선이 만나는 모서리를 가까이, 접어박은 폭이 보이게",
+          "why": "밑단 마감 방식과 폭을 봐요",
+          "fig": [{ "view": "front", "frame": ["hem_side_l"] }],
+          "variants": [
+            { "when": ["hem:rib"], "where": "립과 몸판이 이어진 모서리를 가까이" },
+            { "when": ["hem:elastic"], "where": "고무줄(끈)이 든 밑단 끝을 가까이 — 끈 나오는 구멍까지" }
+          ]
+        },
+        {
+          "key": "label", "title": "케어라벨 · 사이즈 라벨",
+          "where": "혼용률(겉감·립)이 읽히게 가까이 — 라벨이 여러 장이면 다 펼쳐서",
+          "mistakes": ["글자가 흐리면 다시 — 혼용률을 못 읽으면 쓸모가 없어요"],
+          "why": "원단이 얼마나 늘고 줄어드는지 판단해요",
+          "fig": [{ "view": "inside", "frame": ["label"] }]
+        },
+        {
+          "key": "collar_open", "title": "칼라 · 펼친 모습",
+          "when": ["neck:collar"],
+          "where": "칼라를 세워서 펼치고 뒤 가운데까지 보이게",
+          "why": "칼라 모양(끝이 뾰족한지 둥근지)과 길이를 봐요",
+          "fig": [{ "view": "collar", "frame": ["collar_flat"] }]
+        },
+        {
+          "key": "hood_side", "title": "후드 · 옆으로 펼친 모습",
+          "when": ["neck:hood"],
+          "where": "후드를 옆으로 납작하게 펴서 전체",
+          "tips": ["가운데 띠 조각이 있는지 보이게"],
+          "why": "후드 조각이 2장인지 3장인지, 모양이 어떤지 봐요",
+          "fig": [{ "view": "hood", "frame": ["hood_flat"] }]
+        },
+        {
+          "key": "zip_ends", "title": "지퍼 · 위 끝과 아래 끝",
+          "when": ["neck:zip_collar", "extra:front_zip"],
+          "where": "지퍼가 시작하는 곳과 끝나는 곳을 한 장씩",
+          "why": "지퍼 끝을 어떻게 마감했는지 봐요",
+          "fig": [{ "view": "front", "frame": ["zip_top", "zip_bottom"] }]
+        },
+        {
+          "key": "insert", "title": "인서트 · 가까이",
+          "when": ["extra:insert"],
+          "where": "덧댄 조각과 그 둘레 봉제선이 보이게 — 겉 한 장, 안쪽 한 장",
+          "why": "조각 모양과 어디에 박혔는지 봐요",
+          "fig": [{ "view": "front", "frame": ["insert"] }]
+        },
+        {
+          "key": "side_panel", "title": "옆 절개 · 전체",
+          "when": ["extra:side_panel"],
+          "where": "겨드랑이부터 밑단까지 옆 판 전체",
+          "why": "옆 판 폭과 모양을 봐요",
+          "fig": [{ "view": "front", "frame": ["side_panel_l"] }]
+        },
+        {
+          "key": "pocket", "title": "주머니 · 입구와 안쪽",
+          "when": ["extra:pocket"],
+          "where": "주머니 입구를 가까이 한 장, 안쪽 주머니 천을 한 장",
+          "why": "주머니 종류와 크기를 봐요",
+          "fig": [{ "view": "front", "frame": ["pocket_l"] }]
+        },
+        {
+          "key": "slit", "title": "옆 트임 · 끝",
+          "when": ["extra:side_slit"],
+          "where": "트임이 끝나는 위쪽을 가까이 — 보강 박음이 보이게",
+          "why": "트임 길이와 마감을 봐요",
+          "fig": [{ "view": "front", "frame": ["slit_l"] }]
+        },
+        {
+          "key": "rev_back", "title": "반대 면 · 뒤 전체",
+          "when": ["extra:reversible"],
+          "where": "반대 면이 위로 오게 뒤 전체",
+          "tips": ["옷 옆에 쇠자를 같이 두기"],
+          "why": "반대 면의 뒤 모양을 봐요",
+          "fig": [{ "view": "back", "frame": ["whole"], "ruler": true }]
+        }
+      ],
+
+      "measures": [
+        {
+          "key": "body_length", "title": "총장", "mode": "vertical",
+          "where": "뒤 가운데: 뒷목 봉제선 → 밑단 끝",
+          "how": "뒤판이 위로 오게 놓고 세로로 곧게",
+          "mistakes": ["옆목점에서 재면 2~3cm 길게 나와요"],
+          "fig": [{ "view": "back", "lines": [{ "a": "BNP", "b": "HEM_C", "la": "뒷목 봉제선", "lb": "밑단 끝" }] }]
+        },
+        {
+          "key": "shoulder_width", "title": "어깨너비", "mode": "straight",
+          "unless": ["sleeve:raglan"],
+          "where": "어깨끝 ↔ 어깨끝",
+          "how": "어깨 봉제선과 소매 봉제선이 만나는 점끼리 직선",
+          "mistakes": ["어깨끝을 소매 쪽으로 넘겨 잡으면 길게 나와요"],
+          "fig": [{ "view": "back", "lines": [{ "a": "SP_L", "b": "SP_R" }] }]
+        },
+        {
+          "key": "chest_half", "title": "가슴 단면", "mode": "half",
+          "where": "겨드랑이점에서 2.5cm 아래, 옆선 ↔ 옆선",
+          "how": "앞판이 위로, 주름 없이 펴고 가로로",
+          "mistakes": ["둘레(×2)로 적지 마세요 — 펼친 폭 그대로"],
+          "fig": [{ "view": "front", "lines": [{ "a": "CH_L", "b": "CH_R" }], "refs": [{ "a": "AP_L", "b": "CH_L", "note": "2.5cm" }] }]
+        },
+        {
+          "key": "hem_half", "title": "밑단 단면", "mode": "half",
+          "where": "밑단 끝, 옆선 ↔ 옆선",
+          "how": "주름 없이 펴고 가로로",
+          "fig": [{ "view": "front", "lines": [{ "a": "HEM_L", "b": "HEM_R" }] }],
+          "variants": [
+            {
+              "when": ["hem:rib", "hem:elastic"],
+              "how": "그냥 놓은 폭과 손으로 최대한 늘린 폭, 둘 다",
+              "values": [{ "key": "relaxed", "label": "그냥 놓고" }, { "key": "stretched", "label": "최대한 늘려서" }]
+            }
+          ]
+        },
+        {
+          "key": "sleeve_length", "title": "소매 길이", "mode": "along",
+          "where": "어깨끝 → 소매 끝, 소매 윗선을 따라",
+          "how": "소매를 펴고 윗선(접힌 선)을 따라",
+          "fig": [{ "view": "front", "lines": [{ "a": "SP_L", "b": "CUFF_T_L" }] }],
+          "variants": [
+            { "when": ["cuff:rib"], "where": "어깨끝 → 커프스 끝, 소매 윗선을 따라" },
+            {
+              "when": ["sleeve:raglan"],
+              "where": "뒷목 가운데 → 어깨 → 소매 끝 (화장)",
+              "how": "뒤판이 위로, 뒷목 가운데에서 어깨 위를 지나 소매 끝까지 따라서",
+              "fig": [{ "view": "back", "lines": [{ "a": "BNP", "via": ["HPS_L", "SP_L"], "b": "CUFF_T_L", "la": "뒷목 가운데", "lb": "소매 끝" }] }]
+            }
+          ]
+        },
+        {
+          "key": "bicep_half", "title": "소매통", "mode": "half",
+          "where": "겨드랑이점에서 2.5cm 아래, 소매 폭",
+          "how": "소매 윗선과 직각으로",
+          "fig": [{ "view": "front", "lines": [{ "a": "BI_T_L", "b": "BI_U_L", "la": "소매 윗선", "lb": "겨드랑이 2.5cm 아래" }] }]
+        },
+        {
+          "key": "cuff_half", "title": "소매 입구", "mode": "half",
+          "where": "소매 끝 폭",
+          "how": "주름 없이 펴고 소매 끝을 가로로",
+          "fig": [{ "view": "front", "zoom": "cuff_l", "lines": [{ "a": "CUFF_T_L", "b": "CUFF_B_L" }] }],
+          "variants": [
+            {
+              "when": ["cuff:rib", "cuff:elastic"],
+              "how": "그냥 놓은 폭과 손으로 최대한 늘린 폭, 둘 다",
+              "values": [{ "key": "relaxed", "label": "그냥 놓고" }, { "key": "stretched", "label": "최대한 늘려서" }]
+            }
+          ]
+        },
+        {
+          "key": "armhole_depth", "title": "진동 깊이", "mode": "straight",
+          "unless": ["sleeve:raglan"],
+          "where": "어깨끝 → 겨드랑이점, 직선",
+          "fig": [{ "view": "front", "lines": [{ "a": "SP_L", "b": "AP_L" }] }]
+        },
+        {
+          "key": "neck_width", "title": "목너비", "mode": "straight",
+          "where": "옆목점 ↔ 옆목점, 직선",
+          "how": "옆목점 = 어깨 봉제선이 목 봉제선과 만나는 점. 립 바깥이 아니라 봉제선에서",
+          "fig": [{ "view": "front", "zoom": "neck", "lines": [{ "a": "HPS_L", "b": "HPS_R" }] }],
+          "variants": [
+            { "when": ["sleeve:raglan"], "how": "래글런은 어깨 봉제선이 없어요 — 옷을 반 접어 어깨가 접히는 선이 목 봉제선과 만나는 점" }
+          ]
+        },
+        {
+          "key": "front_neck_drop", "title": "앞목 깊이", "mode": "vertical",
+          "where": "두 옆목점을 잇는 선 → 앞목 봉제선 맨 아래",
+          "how": "두 옆목점에 자를 가로로 걸치고, 거기서 세로로 내려 재기",
+          "mistakes": ["옆목점에서 비스듬히 재면 2~3cm 달라져요"],
+          "fig": [{ "view": "front", "zoom": "neck", "lines": [{ "a": "NECK_MID", "b": "FNP" }], "refs": [{ "a": "HPS_L", "b": "HPS_R" }] }],
+          "variants": [
+            { "when": ["neck:v_rib"], "where": "두 옆목점을 잇는 선 → V 꼭짓점(봉제선)" }
+          ]
+        },
+        {
+          "key": "back_neck_drop", "title": "뒷목 깊이", "mode": "vertical",
+          "where": "두 옆목점을 잇는 선 → 뒷목 봉제선 가운데",
+          "how": "뒤판이 위로, 두 옆목점에 자를 걸치고 세로로",
+          "fig": [{ "view": "back", "zoom": "neck_b", "lines": [{ "a": "NECK_MID", "b": "BNP" }], "refs": [{ "a": "HPS_L", "b": "HPS_R" }] }]
+        },
+        {
+          "key": "shoulder_seam", "title": "어깨선 길이", "mode": "along",
+          "unless": ["sleeve:raglan"],
+          "where": "옆목점 → 어깨끝, 어깨 봉제선을 따라",
+          "fig": [{ "view": "front", "lines": [{ "a": "HPS_L", "b": "SP_L" }] }]
+        },
+        {
+          "key": "raglan_seam", "title": "래글런선 길이", "mode": "along",
+          "when": ["sleeve:raglan"],
+          "where": "목 봉제선 → 겨드랑이점, 래글런 이음선을 따라 (앞·뒤 각각)",
+          "values": [{ "key": "front", "label": "앞" }, { "key": "back", "label": "뒤" }],
+          "fig": [
+            { "view": "front", "tag": "앞", "lines": [{ "a": "RAG_F_L", "b": "AP_L" }] },
+            { "view": "back", "tag": "뒤", "lines": [{ "a": "RAG_B_L", "b": "AP_L" }] }
+          ]
+        },
+        {
+          "key": "yoke_pos", "title": "요크 위치", "mode": "vertical",
+          "when": ["extra:yoke"],
+          "where": "두 옆목점을 잇는 선 → 요크 이음선, 가운데에서 세로 (앞·뒤 각각)",
+          "how": "한쪽에만 있으면 없는 쪽은 «없음»",
+          "values": [{ "key": "front", "label": "앞", "na": true }, { "key": "back", "label": "뒤", "na": true }],
+          "fig": [
+            { "view": "front", "tag": "앞", "lines": [{ "a": "NECK_MID", "b": "YOKE_F_C", "lb": "요크 이음선" }], "refs": [{ "a": "HPS_L", "b": "HPS_R" }] },
+            { "view": "back", "tag": "뒤", "lines": [{ "a": "NECK_MID", "b": "YOKE_B_C", "lb": "요크 이음선" }], "refs": [{ "a": "HPS_L", "b": "HPS_R" }] }
+          ]
+        },
+        {
+          "key": "neck_rib_width", "title": "목 립 폭", "mode": "straight",
+          "when": ["neck:round_rib", "neck:v_rib"],
+          "where": "뒷목 가운데에서, 목 봉제선 → 립 끝 (완성 폭)",
+          "fig": [{ "view": "back", "zoom": "rib_b", "lines": [{ "a": "BNP", "b": "RIB_B", "la": "목 봉제선", "lb": "립 끝" }] }]
+        },
+        {
+          "key": "collar_height", "title": "칼라 높이", "mode": "straight",
+          "when": ["neck:collar"],
+          "where": "뒤 가운데에서, 목에 붙은 쪽 → 칼라 바깥 끝 (칼라를 세워서)",
+          "fig": [{ "view": "collar", "lines": [{ "a": "COL_IN_C", "b": "COL_OUT_C", "la": "목에 붙은 쪽", "lb": "바깥 끝" }] }]
+        },
+        {
+          "key": "collar_length", "title": "칼라 길이", "mode": "along",
+          "when": ["neck:collar"],
+          "where": "칼라를 펼쳐 놓고, 바깥 가장자리를 따라 한쪽 끝 → 반대쪽 끝",
+          "fig": [{ "view": "collar", "lines": [{ "path": "collar_outer", "la": "칼라 끝", "lb": "칼라 끝" }] }]
+        },
+        {
+          "key": "placket", "title": "단추 여밈", "mode": "straight",
+          "when": ["neck:collar"],
+          "where": "여밈 위 끝 → 아래 끝, 그리고 가로 폭",
+          "how": "여밈이 없으면 «없음»",
+          "values": [{ "key": "length", "label": "길이", "na": true }, { "key": "width", "label": "폭", "na": true }],
+          "fig": [{ "view": "front", "zoom": "placket", "lines": [
+            { "a": "PLK_T", "b": "PLK_B", "la": "", "lb": "", "mid": "길이" },
+            { "a": "PLK_W_L", "b": "PLK_W_R", "la": "", "lb": "", "mid": "폭" }
+          ] }]
+        },
+        {
+          "key": "hood_height", "title": "후드 높이", "mode": "vertical",
+          "when": ["neck:hood"],
+          "where": "후드를 옆으로 펴고, 목 봉제선 → 후드 꼭대기",
+          "fig": [{ "view": "hood", "lines": [{ "a": "HD_NECK", "b": "HD_TOP", "la": "목 봉제선", "lb": "꼭대기" }] }]
+        },
+        {
+          "key": "hood_width", "title": "후드 폭", "mode": "straight",
+          "when": ["neck:hood"],
+          "where": "후드를 옆으로 펴고, 가장 넓은 곳에서 얼굴 쪽 끝 → 뒤쪽 끝",
+          "fig": [{ "view": "hood", "lines": [{ "a": "HD_FACE", "b": "HD_BACK", "la": "얼굴 쪽", "lb": "뒤쪽" }] }]
+        },
+        {
+          "key": "zip_collar_height", "title": "칼라 높이", "mode": "vertical",
+          "when": ["neck:zip_collar"],
+          "where": "앞 가운데에서, 목 봉제선 → 칼라 위 끝",
+          "how": "지퍼를 끝까지 올리고",
+          "fig": [{ "view": "front", "zoom": "neck", "lines": [{ "a": "FNP", "b": "ZC_TOP", "la": "목 봉제선", "lb": "칼라 위 끝" }] }]
+        },
+        {
+          "key": "zip_length", "title": "지퍼 길이", "mode": "straight",
+          "when": ["neck:zip_collar", "extra:front_zip"],
+          "where": "지퍼 이빨이 있는 부분만, 위 끝 → 아래 끝",
+          "mistakes": ["지퍼 테이프 끝까지 재면 길게 나와요"],
+          "fig": [{ "view": "front", "lines": [{ "a": "ZIP_TOP", "b": "ZIP_BOT", "la": "이빨 위 끝", "lb": "이빨 아래 끝" }] }]
+        },
+        {
+          "key": "cuff_height", "title": "커프스 높이", "mode": "straight",
+          "when": ["cuff:rib"],
+          "where": "커프스 이은 봉제선 → 접힌 끝 (완성 높이)",
+          "fig": [{ "view": "front", "zoom": "cuff_l", "lines": [{ "a": "CS_T_L", "b": "CUFF_T_L", "la": "커프스 봉제선", "lb": "접힌 끝" }] }]
+        },
+        {
+          "key": "cuff_band", "title": "고무줄 밴드 폭", "mode": "straight",
+          "when": ["cuff:elastic"],
+          "where": "소매 끝 → 고무줄 박음선",
+          "fig": [{ "view": "front", "zoom": "cuff_l", "lines": [{ "a": "CS_T_L", "b": "CUFF_T_L", "la": "박음선", "lb": "소매 끝" }] }]
+        },
+        {
+          "key": "sleeve_end_half", "title": "소매 밑단 단면", "mode": "half",
+          "when": ["cuff:rib"],
+          "where": "커프스와 이은 봉제선에서, 소매 쪽 폭",
+          "how": "봉제선을 주름이 펴질 만큼만 당겨서 소매 쪽을 재기",
+          "mistakes": ["커프스 쪽을 재면 오그린 양을 알 수 없어요"],
+          "fig": [{ "view": "front", "zoom": "cuff_l", "lines": [{ "a": "CS_T_L", "b": "CS_B_L", "la": "커프스 봉제선", "lb": "" }] }]
+        },
+        {
+          "key": "cuff_fold", "title": "소매 끝 접어박기 폭", "mode": "straight",
+          "when": ["cuff:hem"],
+          "where": "소매 끝 → 박음선",
+          "fig": [{ "view": "front", "zoom": "cuff_l", "lines": [{ "a": "CF_T_L", "b": "CUFF_T_L", "la": "박음선", "lb": "소매 끝" }] }]
+        },
+        {
+          "key": "hem_fold", "title": "밑단 접어박기 폭", "mode": "straight",
+          "when": ["hem:fold"],
+          "where": "밑단 끝 → 박음선",
+          "fig": [{ "view": "front", "zoom": "hem_side_l", "lines": [{ "a": "HF_IN_L", "b": "HEM_IN_L", "la": "박음선", "lb": "밑단 끝" }] }]
+        },
+        {
+          "key": "hem_band", "title": "밑단 밴드 높이", "mode": "straight",
+          "when": ["hem:rib", "hem:elastic"],
+          "where": "몸판과 이은 봉제선 → 밑단 끝",
+          "fig": [{ "view": "front", "zoom": "hem_side_l", "lines": [{ "a": "HB_IN_L", "b": "HEM_IN_L", "la": "이은 봉제선", "lb": "밑단 끝" }] }]
+        },
+        {
+          "key": "insert_size", "title": "인서트 크기", "mode": "straight",
+          "when": ["extra:insert"],
+          "where": "덧댄 조각의 높이와 윗변 폭 (봉제선 기준)",
+          "values": [{ "key": "height", "label": "높이" }, { "key": "top", "label": "윗변 폭" }],
+          "fig": [{ "view": "front", "zoom": "insert", "lines": [
+            { "a": "INS_TC", "b": "INS_B", "la": "", "lb": "", "mid": "높이" },
+            { "a": "INS_T_L", "b": "INS_T_R", "la": "", "lb": "", "mid": "윗변" }
+          ] }]
+        },
+        {
+          "key": "side_panel_width", "title": "옆 판 폭", "mode": "half",
+          "when": ["extra:side_panel"],
+          "where": "옆 판의 가로 폭 — 겨드랑이 쪽과 밑단 쪽",
+          "values": [{ "key": "top", "label": "겨드랑이 쪽" }, { "key": "bottom", "label": "밑단 쪽" }],
+          "fig": [{ "view": "front", "zoom": "side_panel_l", "lines": [
+            { "a": "SPN_TO_L", "b": "SPN_T_L", "la": "", "lb": "", "mid": "겨드랑이 쪽" },
+            { "a": "HEM_L", "b": "SPN_B_L", "la": "", "lb": "", "mid": "밑단 쪽" }
+          ] }]
+        },
+        {
+          "key": "pocket_size", "title": "주머니", "mode": "straight",
+          "when": ["extra:pocket"],
+          "where": "입구 길이, 밑단에서 입구 아래 끝까지, 주머니 깊이",
+          "values": [{ "key": "opening", "label": "입구" }, { "key": "from_hem", "label": "밑단에서" }, { "key": "depth", "label": "깊이" }],
+          "fig": [{ "view": "front", "zoom": "pocket_l", "lines": [
+            { "a": "PK_A", "b": "PK_B", "la": "", "lb": "", "mid": "입구" },
+            { "a": "PK_B", "b": "PK_HEM", "la": "", "lb": "", "mid": "밑단에서" },
+            { "a": "PK_A", "b": "PK_D", "la": "", "lb": "", "mid": "깊이" }
+          ] }]
+        },
+        {
+          "key": "slit_length", "title": "옆 트임 길이", "mode": "straight",
+          "when": ["extra:side_slit"],
+          "where": "밑단 끝 → 트임 위 끝 (보강 박음)",
+          "fig": [{ "view": "front", "zoom": "slit_l", "lines": [{ "a": "HEM_L", "b": "SLIT_TOP_L", "la": "밑단 끝", "lb": "트임 끝" }] }]
+        },
+        {
+          "key": "binding_width", "title": "바인딩 폭", "mode": "straight",
+          "when": ["extra:reversible"],
+          "where": "목·소매 끝을 감싼 바인딩의 완성 폭",
+          "fig": [{ "view": "front", "zoom": "cuff_l", "lines": [{ "a": "CF_T_L", "b": "CUFF_T_L", "la": "", "lb": "", "mid": "바인딩" }] }]
+        },
+        {
+          "key": "seam_allowance", "title": "시접 폭", "mode": "straight",
+          "where": "안쪽 오버록 폭 (아무 봉제선 하나)",
+          "how": "옷을 뒤집어 옆선 하나에서",
+          "fig": [{ "view": "inside", "zoom": "seam_l", "lines": [{ "a": "SEAM_A_L", "b": "SEAM_B_L", "la": "봉제선", "lb": "오버록 끝" }] }]
+        }
+      ],
+
+      "questions": [
+        {
+          "key": "rib_layers", "title": "목 립은 몇 겹인가요?",
+          "when": ["neck:round_rib", "neck:v_rib"],
+          "options": ["1겹", "2겹 (반 접은 립)"],
+          "hint": "목 안쪽 사진에서 보여요"
+        },
+        {
+          "key": "rib_join", "title": "목 립을 이은 자리는 어디인가요?",
+          "when": ["neck:round_rib", "neck:v_rib"],
+          "options": ["뒤 가운데", "어깨 한쪽", "앞 (V 끝)", "이음 없음 (통으로 짜임)"]
+        },
+        {
+          "key": "v_end", "title": "V 끝은 어떻게 처리했나요?",
+          "when": ["neck:v_rib"],
+          "options": ["두 립을 겹쳐 박음", "두 립을 맞대어 비스듬히 이음", "두 립을 나란히 내려 아래 이음선에 물림", "모르겠음 (사진으로 판단)"],
+          "hint": "목 안쪽 사진으로 판단해도 돼요"
+        },
+        {
+          "key": "collar_kind", "title": "칼라는 어떤 칼라인가요?",
+          "when": ["neck:collar"],
+          "options": ["니트 칼라 (짜서 만든 것)", "원단 칼라 (몸판 원단 2겹)", "모르겠음"]
+        },
+        {
+          "key": "hood_pieces", "title": "후드는 몇 조각인가요?",
+          "when": ["neck:hood"],
+          "options": ["2장 (가운데 이음선 하나)", "3장 (가운데 띠 있음)", "모르겠음"]
+        },
+        {
+          "key": "hood_lining", "title": "후드 안감이 있나요?",
+          "when": ["neck:hood"],
+          "options": ["없음 (1겹)", "있음 (2겹)"]
+        },
+        {
+          "key": "zip_kind", "title": "지퍼는 어떤 것인가요?",
+          "when": ["neck:zip_collar", "extra:front_zip"],
+          "options": ["일반 지퍼 (이빨이 보임)", "숨은 지퍼 (이빨이 안 보임)"]
+        },
+        {
+          "key": "insert_how", "title": "인서트는 어떻게 붙였나요?",
+          "when": ["extra:insert"],
+          "options": ["겉에 올려 박음", "안쪽에 대고 박음", "모르겠음"]
+        },
+        {
+          "key": "insert_where", "title": "인서트는 어디에 있나요?",
+          "when": ["extra:insert"],
+          "type": "text",
+          "hint": "예: V 아래, 목 앞 가운데"
+        },
+        {
+          "key": "sleeve_curve", "title": "겨드랑이에서 둥근 쪽은 어디인가요?",
+          "unless": ["sleeve:raglan"],
+          "options": ["소매 쪽이 둥글고 몸판 쪽은 거의 곧음", "몸판 쪽이 둥글고 소매 쪽은 거의 곧음", "둘 다 비슷하게 둥긂"],
+          "hint": "겨드랑이 사진에서 보여요"
+        },
+        {
+          "key": "cuff_gather", "title": "소매 끝은 어떻게 줄였나요?",
+          "when": ["cuff:rib", "cuff:elastic"],
+          "options": ["고르게 오그림", "턱(주름)을 접음", "줄이지 않음 (소매 폭 그대로)"]
+        },
+        {
+          "key": "pocket_kind", "title": "주머니는 어떤 것인가요?",
+          "when": ["extra:pocket"],
+          "options": ["캥거루 (앞 가운데 한 개)", "옆 입구 (양쪽)", "옆선 안 주머니", "기타"]
+        },
+        {
+          "key": "reversible_join", "title": "양면은 어떻게 이었나요?",
+          "when": ["extra:reversible"],
+          "options": ["바인딩으로 감쌈", "맞박아 뒤집음 (바인딩 없음)"]
+        },
+        {
+          "key": "seam_kind", "title": "이음선은 어떻게 박았나요?",
+          "options": ["오버록", "평봉 (겉에서 한 줄 보임)", "삼봉 (겉에서 두세 줄 보임)", "모르겠음"],
+          "hint": "안쪽 사진에서 보여요"
+        },
+        {
+          "key": "hem_finish", "title": "밑단은 어떻게 마감했나요?",
+          "when": ["hem:fold"],
+          "options": ["접어서 평봉 (한 줄)", "접어서 삼봉 (두세 줄)", "오버록만", "모르겠음"]
+        },
+        {
+          "key": "fabric_same", "title": "몸판과 립(칼라)이 다른 원단인가요?",
+          "options": ["같은 원단", "다른 원단", "립·칼라 없음"]
+        },
+        {
+          "key": "fabric_stretch", "title": "몸판 원단은 얼마나 늘어나나요?",
+          "options": ["거의 안 늘어남", "가로로만 늘어남", "가로·세로 다 잘 늘어남"],
+          "hint": "손으로 가로·세로 당겨 보기"
+        },
+        {
+          "key": "composition", "title": "혼용률 (라벨에 적힌 그대로)",
+          "type": "text", "optional": true,
+          "hint": "라벨 사진이 읽히면 비워도 돼요"
+        }
+      ]
+    },
+    { "key": "sleeveless_top", "name": "민소매 상의", "ready": false, "desc": "농구 상의" },
+    { "key": "shorts", "name": "반바지", "ready": false, "desc": "농구·배구·축구 하의" },
+    { "key": "pants", "name": "긴바지", "ready": false, "desc": "웜업 팬츠" }
+  ]
+}
