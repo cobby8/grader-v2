@@ -127,6 +127,9 @@
 
   /* 칸 목록 */
   .ik-items { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .ik-pose { display: flex; align-items: center; gap: 6px; margin-top: 10px; font: var(--text-sm-strong); color: var(--text-strong); }   /* 사진 — 옷을 놓는 자세가 바뀌는 자리 */
+  .ik-pose:first-child { margin-top: 0; }
+  .ik-pose .material-symbols-outlined { font-size: 18px; color: var(--text-muted); }
   .ik-item { width: 100%; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 64px;
     padding: 10px 12px; text-align: left; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--surface-card); cursor: pointer; font: var(--text-body); color: var(--text-body); }
   .ik-item:hover { border-color: var(--border-strong); }
@@ -783,7 +786,7 @@ function renderStep() {
   if (step === 3 || step === 1) loadThumbs();
 }
 
-// «사진으로 옷 모양 맞추기» 카드 — 앞·뒤 전체 사진은 사진 1·2번 칸에 그대로 들어간다
+// «사진으로 옷 모양 맞추기» 카드 — 앞·뒤 전체 사진은 3단계의 «앞 전체 · 겉»·«뒤 전체 · 겉» 칸에 그대로 들어간다
 function aiCard() {
   if (!VISION || readOnly) return "";
   const shot = (key, label, view) => {
@@ -798,7 +801,8 @@ function aiCard() {
   const hasFront = (D.photos.front_out || []).length > 0;
   return '<section class="ik-ai"><div class="ik-ai__head"><span class="material-symbols-outlined">auto_awesome</span>사진으로 옷 모양 맞추기</div>' +
     '<p class="ik-ai__rule"><b>소매 끝·밑단까지 전부 화면 안에, 소매는 펴서</b> 위에서 찍어요.</p>' +
-    '<div class="ik-ai__shots">' + shot("front_out", "앞 전체", "front") + shot("back_out", "뒤 전체", "back") + "</div>" +
+    // 뒤 → 앞 순서 — 앞을 나중에 찍어야 옷이 앞판 위로 놓인 채 3단계 사진(앞판 쪽부터)으로 이어진다
+    '<div class="ik-ai__shots">' + shot("back_out", "뒤 전체", "back") + shot("front_out", "앞 전체", "front") + "</div>" +
     '<button class="btn btn--primary btn--block" type="button" data-edit id="aiRun"' + (!hasFront || aiBusy ? " disabled" : "") + ">" +
       (aiBusy ? '<span class="spinner ik-ai__spin"></span>옷 모양 보는 중…' : D.ai ? "다시 보기" : "옷 모양 보기") + "</button>" +
     (aiMsg ? '<div class="ik-ai__msg">' + esc(aiMsg).replace(/\n/g, "<br>") + "</div>" : "") + "</section>";
@@ -865,9 +869,16 @@ function stepList(kind) {
   const rules = kind === "shot" ? CAT.rules.photo : CAT.rules.measure;
   let h = '<h2 class="ik-h2">' + (kind === "shot" ? "사진" : "치수") + "</h2>";
   h += '<ul class="ik-rules">' + rules.map((r) => "<li>" + esc(r) + "</li>").join("") + "</ul>";
+  let pose = null;
   h += '<ol class="ik-items">' + items.map((it, i) => {
     const s = itemState(kind, it);
-    return '<li><button class="ik-item ' + s.cls + '" type="button" data-open="' + kind + '" data-i="' + i + '">' +
+    // 사진은 옷을 놓는 자세(앞판 위 → 뒤판 위 → 안팎 뒤집기)가 바뀌는 자리에 제목을 단다 — 같은 자세끼리 몰아 찍게
+    let head = "";
+    if (kind === "shot" && it.pose && it.pose !== pose) {
+      pose = it.pose;
+      head = '<li class="ik-pose"><span class="material-symbols-outlined">' + (pose === "front" ? "checkroom" : "flip") + "</span>" + esc(CAT.poses[pose] || "") + "</li>";
+    }
+    return head + '<li><button class="ik-item ' + s.cls + '" type="button" data-open="' + kind + '" data-i="' + i + '">' +
       '<span class="ik-item__num">' + (i + 1) + "</span>" +
       '<span class="ik-item__main"><b>' + esc(it.title) + "</b><small>" + esc(it.where) + "</small></span>" +
       '<span class="ik-item__state">' + s.html + "</span></button></li>";
@@ -1094,6 +1105,7 @@ function renderSheet() {
 
   let h = '<div class="ik-fig' + (it.fig.length > 1 ? " is-two" : "") + '">' + it.fig.map((p) => K.render(D.sel, p, { label: it.title })).join("") + "</div>";
   if (!isShot) h += '<div><span class="ik-mode">' + esc(CAT.modes[it.mode] || "") + "</span></div>";
+  else if (it.pose) h += '<div><span class="ik-mode">' + esc(CAT.poses[it.pose] || "") + "</span></div>";
   h += guideDl(it);
   h += '<div class="ik-ex hidden" id="exRow"></div>';
 
