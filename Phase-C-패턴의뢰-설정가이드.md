@@ -39,10 +39,13 @@
 -- Phase C: 패턴 의뢰(실물 수집) — 표 2개 + 사진 창고 1개 + 접근 규칙
 -- 다시 실행해도 안전하다(있으면 건너뛰거나 지우고 다시 만든다).
 -- =====================================================================
+-- ※ 함수 3개는 모두 search_path = '' 로 고정한다 (Supabase 보안 점검 권고).
+--   이름을 찾을 때 기본 내장과 적어 둔 스키마(public.·auth.·storage.)만 본다 —
+--   누가 같은 이름의 가짜 함수를 다른 곳에 만들어도 끼어들 수 없다.
 
 -- 0) 관리자 판정 — 기존 pattern_meta·pattern-presets 와 같은 기준
 create or replace function public.intake_is_admin()
-returns boolean language sql stable as $$
+returns boolean language sql stable set search_path = '' as $$
   select coalesce((auth.jwt() -> 'app_metadata' ->> 'role') = 'admin', false)
 $$;
 
@@ -79,7 +82,7 @@ create index if not exists pattern_intakes_creator_idx on public.pattern_intakes
 
 -- 1-1) 번호·시각 자동 채우기
 create or replace function public.pattern_intakes_stamp()
-returns trigger language plpgsql as $$
+returns trigger language plpgsql set search_path = '' as $$
 declare
   d   text := to_char(now() at time zone 'Asia/Seoul', 'YYMMDD');
   n   int;
@@ -175,7 +178,7 @@ on conflict (id) do update
 -- 3-1) 사진을 올릴 수 있는지 판정 — intakes/{의뢰id}/... 는 그 의뢰를 고칠 수 있는 사람만,
 --      examples/... 는 관리자만
 create or replace function public.intake_photo_writable(object_name text)
-returns boolean language sql stable as $$
+returns boolean language sql stable set search_path = '' as $$
   select case (storage.foldername(object_name))[1]
     when 'examples' then public.intake_is_admin()
     when 'intakes' then exists (
@@ -223,7 +226,10 @@ union all select '사진 창고 pattern-intake (비공개)', exists (select 1 fr
 union all select '의뢰 표 규칙 4개', (select count(*) = 4 from pg_policies where schemaname = 'public' and tablename = 'pattern_intakes')
 union all select '예시 표 규칙 2개', (select count(*) = 2 from pg_policies where schemaname = 'public' and tablename = 'intake_examples')
 union all select '사진 창고 규칙 4개', (select count(*) = 4 from pg_policies where schemaname = 'storage' and tablename = 'objects' and policyname like 'intake_photos_%')
-union all select '번호 자동 붙이기', exists (select 1 from pg_trigger where tgname = 'pattern_intakes_stamp');
+union all select '번호 자동 붙이기', exists (select 1 from pg_trigger where tgname = 'pattern_intakes_stamp')
+union all select '함수 3개 검색 경로 고정', (select count(*) = 3 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public' and p.proname in ('intake_is_admin', 'pattern_intakes_stamp', 'intake_photo_writable')
+    and p.proconfig @> array['search_path=""']);
 ```
 
 ⚠️ SQL Editor 는 관리자 권한으로 돌아서 «직원 계정이면 막히는지» 는 여기서 시험할 수 없다.
