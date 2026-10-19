@@ -36,10 +36,11 @@ GROUPS = ("neck", "sleeve", "length", "cuff", "hem")
 class VisionError(Exception):
     """화면에 그대로 보여 줄 한국어 안내와 HTTP 상태를 담는다."""
 
-    def __init__(self, status: int, message: str):
+    def __init__(self, status: int, message: str, detail: str = ""):
         super().__init__(message)
         self.status = status
         self.message = message
+        self.detail = detail          # 내부 기록용 실제 이유 — 화면에는 보이지 않는다
 
 
 def enabled() -> bool:
@@ -183,39 +184,81 @@ def normalize(raw: Dict[str, Any], cat: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-def build_request(images: List[Tuple[bytes, str, str]], cat: Dict[str, Any]) -> Dict[str, Any]:
-    """AI 에 보낼 요청 본문. images = [(바이트, 형식, 무슨 사진인지)]"""
+def _image_blocks(images: List[Tuple[bytes, str, str]]) -> List[Dict[str, Any]]:
     content: List[Dict[str, Any]] = []
     for i, (data, media_type, label) in enumerate(images, 1):
         content.append({"type": "text", "text": "사진 %d: %s" % (i, label)})
         content.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": base64.b64encode(data).decode("ascii")}})
-    content.append({"type": "text", "text": "위 사진의 옷 한 벌을 판단해 report_garment 도구로 답하라."})
-    return {
-        "model": MODEL,
-        "max_tokens": 2000,
-        "system": build_instructions(cat),
-        "tools": [{"name": "report_garment", "description": "사진 속 옷 모양 판단 결과를 보고한다", "input_schema": tool_schema(cat)}],
-        "tool_choice": {"type": "tool", "name": "report_garment"},
-        "messages": [{"role": "user", "content": content}],
-    }
+    return content
 
 
-def _error_for(status: int) -> VisionError:
+def build_request(images: List[Tuple[bytes, str, str]], cat: Dict[str, Any], plain: bool = False) -> Dict[str, Any]:
+    """AI 에 보낼 요청 본문. images = [(바이트, 형식, 무슨 사진인지)]
+
+    plain=False: 정해 둔 답 양식(도구)으로 답하게 한다 — 1차 시도
+    plain=True : 양식 없이 «JSON 글»로 답하게 한다 — 1차가 거절(400)되면 쓰는 2차 시도
+    """
+    content = _image_blocks(images)
+    if not plain:
+        content.append({"type": "text", "text": "위 사진의 옷 한 벌을 판단해 report_garment 도구로 답하라."})
+        return {
+            "model": MODEL,
+            "max_tokens": 2000,
+            "system": build_instructions(cat),
+            "tools": [{"name": "report_garment", "description": "사진 속 옷 모양 판단 결과를 보고한다", "input_schema": tool_schema(cat)}],
+            "tool_choice": {"type": "tool", "name": "report_garment"},
+            "messages": [{"role": "user", "content": content}],
+        }
+    example = {g: {"value": "...", "confidence": "high|medium|low", "reason": "한 줄"} for g in ("base",) + GROUPS}
+    example["extras"] = [{"key": "...", "confidence": "high|medium|low", "reason": "한 줄", "note": "other 일 때만"}]
+    example["photo_notes"] = ""
+    system = build_instructions(cat).replace("판단이 끝나면 report_garment 도구로 답한다.", "판단이 끝나면 아래 JSON 하나로만 답한다(설명 문장 없이).")
+    system += "\n\n## 답 형식 (JSON 만)\n" + json.dumps(example, ensure_ascii=False)
+    content.append({"type": "text", "text": "위 사진의 옷 한 벌을 판단해 JSON 하나로만 답하라."})
+    return {"model": MODEL, "max_tokens": 2000, "system": system, "messages": [{"role": "user", "content": content}]}
+
+
+def _detail(resp: Any) -> str:
+    """AI 쪽이 거절한 이유(내부 기록용 — 화면에는 보이지 않는다). 키는 들어 있지 않다."""
+    try:
+        e = (resp.json() or {}).get("error") or {}
+        return ("%s %s: %s" % (resp.status_code, e.get("type", ""), e.get("message", "")))[:400]
+    except Exception:
+        return str(getattr(resp, "status_code", ""))
+
+
+def _error_for(status: int, detail: str = "") -> VisionError:
     if status in (401, 403):
-        return VisionError(502, "AI 키가 맞지 않습니다(관리자에게 문의).")
-    if status == 429:
-        return VisionError(503, "AI 사용이 몰렸습니다. 잠시 후 다시 눌러 주세요.")
-    if status == 400:
-        return VisionError(400, "사진을 읽지 못했습니다. 다시 찍어 주세요.")
-    return VisionError(503, "AI 서버가 바쁩니다. 잠시 후 다시 눌러 주세요.")
+        err = VisionError(502, "AI 연결 설정이 맞지 않습니다(관리자에게 문의).")
+    elif status == 429:
+        err = VisionError(503, "AI 사용이 몰렸습니다. 잠시 후 다시 눌러 주세요.")
+    else:
+        err = VisionError(503, "AI 가 지금 판단하지 못했습니다. 잠시 후 다시 눌러 주세요.")
+    err.detail = detail
+    return err
+
+
+def _json_from_text(payload: Dict[str, Any]) -> Any:
+    """글로 온 답에서 JSON 하나를 꺼낸다(```json 울타리·앞뒤 설명 무시)."""
+    text = "".join(b.get("text", "") for b in payload.get("content", []) if b.get("type") == "text")
+    a, b = text.find("{"), text.rfind("}")
+    if a < 0 or b <= a:
+        return None
+    try:
+        return json.loads(text[a:b + 1])
+    except ValueError:
+        return None
 
 
 async def classify(images: List[Tuple[bytes, str, str]], client: Any = None) -> Dict[str, Any]:
-    """사진 1~2장 → 판단 결과. client 는 시험용(가짜 응답)으로 바꿔 끼울 수 있다."""
+    """사진 1~2장 → 판단 결과. client 는 시험용(가짜 응답)으로 바꿔 끼울 수 있다.
+
+    1차: 답 양식(도구) 강제 → 거절(400)되면 2차: 양식 없이 JSON 글로 → 그래도 안 되면 중립 안내.
+    거절 이유는 VisionError.detail 과 서버 기록에만 남긴다.
+    """
     if not enabled():
         raise VisionError(503, "사진 판단이 꺼져 있습니다(관리자에게 문의).")
     cat = load_catalog()
-    body = build_request(images, cat)
     headers = {
         "x-api-key": os.environ.get("ANTHROPIC_API_KEY", "").strip(),
         "anthropic-version": "2023-06-01",
@@ -223,21 +266,42 @@ async def classify(images: List[Tuple[bytes, str, str]], client: Any = None) -> 
     }
     own = client is None
     client = client or httpx.AsyncClient(timeout=TIMEOUT_S)
+
+    async def post(body: Dict[str, Any]) -> Any:
+        try:
+            return await client.post(API_URL, headers=headers, json=body)
+        except httpx.TimeoutException:
+            raise VisionError(504, "AI 응답이 늦습니다. 다시 눌러 주세요.")
+        except httpx.HTTPError:
+            raise VisionError(503, "AI 서버에 연결하지 못했습니다. 잠시 후 다시 눌러 주세요.")
+
     try:
-        resp = await client.post(API_URL, headers=headers, json=body)
-    except httpx.TimeoutException:
-        raise VisionError(504, "AI 응답이 늦습니다. 다시 눌러 주세요.")
-    except httpx.HTTPError:
-        raise VisionError(503, "AI 서버에 연결하지 못했습니다. 잠시 후 다시 눌러 주세요.")
+        resp = await post(build_request(images, cat))
+        first = ""
+        if resp.status_code == 400:
+            first = _detail(resp)
+            print("[intake-vision] 1차 거절 → 2차(JSON 글) 시도:", first, flush=True)
+            resp = await post(build_request(images, cat, plain=True))
     finally:
         if own:
             await client.aclose()
     if resp.status_code != 200:
-        raise _error_for(resp.status_code)
+        detail = ("1차 " + first + " / 2차 " if first else "") + _detail(resp)
+        print("[intake-vision] 실패:", detail, flush=True)
+        raise _error_for(resp.status_code, detail)
     try:
         payload = resp.json()
-        block = next(b for b in payload.get("content", []) if b.get("type") == "tool_use" and b.get("name") == "report_garment")
-        raw = block.get("input") or {}
     except Exception:
-        raise VisionError(502, "AI 답을 읽지 못했습니다. 다시 눌러 주세요.")
+        raise _error_for(502, "응답 JSON 아님")
+    raw = None
+    for b in payload.get("content", []) or []:
+        if b.get("type") == "tool_use" and b.get("name") == "report_garment":
+            raw = b.get("input") or {}
+            break
+    if raw is None:
+        raw = _json_from_text(payload)
+    if not isinstance(raw, dict):
+        detail = "답에서 판단 결과를 찾지 못함" + (" (1차 " + first + ")" if first else "")
+        print("[intake-vision] 실패:", detail, flush=True)
+        raise VisionError(502, "AI 가 지금 판단하지 못했습니다. 잠시 후 다시 눌러 주세요.", detail)
     return {"model": payload.get("model", MODEL), "catalog_version": cat.get("version", ""), "result": normalize(raw, cat)}

@@ -629,7 +629,8 @@ async def intake_classify(front: Optional[UploadFile] = File(None), back: Option
     try:
         return await gv.classify(images)
     except gv.VisionError as e:
-        return JSONResponse(status_code=e.status, content={"error": e.message})
+        # detail = 실제 거절 이유(화면엔 안 보이고 의뢰 기록에만 남겨 원인을 찾는 데 쓴다)
+        return JSONResponse(status_code=e.status, content={"error": e.message, "detail": e.detail})
 
 
 # ── 주문서 파싱 엔드포인트 ────────────────────────────────────────────────

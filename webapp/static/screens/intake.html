@@ -1223,7 +1223,12 @@ async function runAi() {
     const token = await store.token();
     const res = await fetch("/api/intake/classify", { method: "POST", body: fd, headers: token ? { Authorization: "Bearer " + token } : {} });
     const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.error || (res.status === 401 ? "로그인이 끝났어요. 다시 로그인해 주세요." : "옷 모양을 보지 못했어요"));
+    if (!res.ok) {
+      // 실제 실패 이유는 화면에 보이지 않고 의뢰 기록에만 남긴다(원인 찾기용)
+      if (body.detail) { D.aiError = { at: new Date().toISOString(), status: res.status, detail: String(body.detail).slice(0, 400) }; change(); }
+      throw new Error(body.error || (res.status === 401 ? "로그인이 끝났어요. 다시 로그인해 주세요." : "옷 모양을 보지 못했어요"));
+    }
+    delete D.aiError;
     applyAi(body);
   } catch (e) {
     aiMsg = "⚠ " + errText(e);
