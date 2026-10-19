@@ -125,6 +125,9 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 | 결과 |
 |------|---------|------|------|
+| 2026-10-19 | developer | [F10 1단계 검증 수정 10건] XSS(숫자 자리 Number+서버 숫자 검사)·압축 폭탄 상한·백업 실패 시 버전 지우고 502·fullmatch·이상한 모양 400·깨진 meta 404·복원 시각 잠금 안+성공 때만·+dirty·메뉴 배경·작은 조각 이름 | tests.test_cad 16/16 · 커밋 대기(PM) |
+| 2026-10-19 | reviewer | [F10 1단계 보안 리뷰] cad.py·cad.html·main.py·메뉴·창고 정책(pg_policies 읽기)·advisors | 높음 0 · 중간 3(view.tol_check 미이스케이프 XSS · ZIP 압축폭탄 · 창고 백업 실패 버전 재시도 불가) · 낮음 5(정규식 $ 줄바꿈 등) · 정책 정상 |
+| 2026-10-19 | developer | [F10 1단계 재단 패턴 보기 전용] webapp/cad.py(/api/cad/* · 새 버전만 · 창고 pattern-cad 백업+되읽기 · 로그인 요청 때 복원) + screens/cad.html(사이즈 전환·9색 겹쳐 보기·두 점 길이·검산표·내려받기) + 메뉴 4화면 + tests/test_cad.py 6개 | 시험 6/6 · 브라우저 검산 80칸 최대 0.053mm · 파일 62/62 지문 동일 · 커밋 대기(PM) |
 | 2026-09-22 | tester | [제안⑦ 검증] 정적 6종 · 삭제 안전 51(정션/심볼릭/running/_trash/TTL0/patterns 오지정) · TestClient disabled/enabled+401+루프 예외 생존 · order_name 7케이스 · 브라우저 실마우스 4단계+work body 캡처 | **통과** 실패 0 · data 51/49/2 불변 · 정리 완료 |
 | 2026-09-22 | developer | [제안⑦ 자동 정리·이력 주문서명·시드 안내] cleanup_old_files(7일/30일·web_ 만·realpath)+24h daemon+maintenance/status · order_name→job_meta · 점선/카운트 배너 | 단위+TestClient+브라우저 통과 · 실데이터 무변동 · 커밋 대기(PM) |
 | 2026-09-22 | developer | [제안⑥ 삭제→Storage zip 삭제+묘비] delete_backup(JWT 릴레이)·.tombstones.json·restore 가드 1줄·DELETE /patterns/backup/{name}·UI 토스트/버튼 | 단위 40/40 · 인증 ON 401 · 브라우저 실클릭 · selftest PASS · storage_backup 삭제줄 0 · 커밋 대기(PM) |
@@ -134,4 +137,3 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 | 2026-09-22 | tester | [제안④ 검증] 정적 3종·TestClient 46·인증 ON 401·브라우저 DOM(연타 1회·HTML 이스케이프·잠금)·안전 4 | **통과** 실패 0 · 참고 3(토스트 문구·mtime 정렬·대용량 대기) · 정리 완료 |
 | 2026-09-22 | developer | [제안④ 이력 재다운로드] job_meta.json · /jobs format/design/skipped/has_files · history 버튼 3개+접이식 요약표 | TestClient 15/15 · 브라우저 확인 · selftest PASS · 커밋 대기(PM) |
 | 2026-09-22 | tester | [ZIP 주문요약 검증] 정적 3종·e2e 38행 both·csv/xlsx/manifest 대조·회귀·주입·인젝션 | 기능 70/70 통과 · 수정 권장 1(csv/xlsx 인젝션) · errors.md 1건 |
-| 2026-09-22 | developer | [ZIP 주문요약] order_rows.json 보존 · 주문요약.csv/xlsx 동봉 · /manifest API · work 안내 1줄 | e2e 38행 수량합 87 일치 · selftest PASS · 커밋 대기(PM) |

@@ -37,6 +37,9 @@ app = FastAPI(
 #     (require_auth 는 GRADER_REQUIRE_AUTH 가 꺼져 있으면 검증 없이 통과 = 로컬 회귀 0)
 app.include_router(public_router)
 app.include_router(api_router, dependencies=[Depends(require_auth)])
+# 재단 패턴(F10 1단계 «보기 전용») — /api/cad/* 도 같은 로그인 게이트 아래(올리기는 cad.py 안에서 관리자만).
+from .cad import router as cad_router
+app.include_router(cad_router, dependencies=[Depends(require_auth)])
 
 # ── 정적 화면 마운트 ──
 # webapp/static 폴더(핸드오프 복사본)를 /static 아래로 통째 서빙한다.

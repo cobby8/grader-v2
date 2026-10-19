@@ -55,3 +55,9 @@
 - **발견자**: planner-architect
 - **내용**: 기존 일러는 디자인을 통짜로 얹지 않았다. 디자인 AI를 레이어로 분해('몸판'=배경색, '패턴선'=기준면적 측정용, '요소'/'요소_표_앞'=로고·배번·이름)하고, ①몸판색만 추출해 패턴 SVG 조각에 칠하고 ②요소를 면적비 스케일 `linearScale=√(targetArea/baseArea)`(보정지수 0.95 적용)로 키우고 ③각 요소를 소속 조각(body) 기준 상대벡터(X=중심기준, Y=하단기준)로 개별 재배치했다. 좌→우 cx 정렬 idx로 디자인body↔SVGbody 매칭, 양면은 4분면(좌우×상하) 매칭. 즉 **절대좌표 정합이 아니라 의미기반 재조립**. grader-v2 engine은 정반대로 디자인 PDF를 분해 없이 무손실 통짜 임베드+클리핑하므로, 일러의 요소 재조립 로직은 직접 이식 불가 → preset.json이 "통짜→조각 클립+cm변환" 정보만 제공하는 더 단순한 구조로 대체한다.
 - **참조횟수**: 0
+
+### [2026-10-19] 재단 패턴(F10 1단계 «보기 전용») — webapp/cad.py + screens/cad.html
+- **분류**: architecture
+- **발견자**: developer
+- **내용**: 서버에 패턴 엔진 없음. stizshop `tools/pattern-engine/cad_view.py` 가 만든 view.json(점 0.05mm 줄이기·0.01mm 정수) + exports.zip(manifest sha256) 을 관리자가 `POST /api/cad/styles` 로 올리면 `data/cad/{style}/v{n}/` 에 **새 버전으로만** 쌓는다(덮어쓰기 없음). 창고 `pattern-cad`(비공개·읽기 authenticated·INSERT admin·UPDATE/DELETE 규칙 없음) 열쇠 `{style}/v{n}/view|exports|meta` — 영문 소문자·숫자·-·/ 만(점도 안 씀, `object_key` 가 어기면 예외). 올린 뒤 되읽어 sha256 비교, 결과는 로컬 backup.json. **창고 읽기가 로그인 전용이라 부팅 복원은 불가(비밀키 금지)** → 로그인 사용자가 `GET /api/cad/styles` 를 부를 때 그 토큰으로 디스크에 없는 버전만 복원(10분 간격, meta 지문 불일치면 버림). 내려받기 `files/{zip|dxf|pdf|ai|aama|rul|allsizes|a4}?size=` 는 ZIP 안 원본 그대로(X-Content-SHA256). 화면은 viewBox 만 바꿔 확대·이동하고 길이는 데이터 mm 로 잰다(검산표 = 같은 두 기준점 사이 재봉선 길이를 브라우저가 다시 재서 검산.json 과 비교). 시험 `tests/test_cad.py`(가짜 창고로 백업·복원·권한), `GRADER_CAD_DIR` 로 저장 폴더 바꿈.
+- **참조횟수**: 0

@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>STIZ grader · 재단 패턴</title>
+<link rel="icon" href="../assets/logos/stiz-favicon-32.png" />
+<link rel="stylesheet" href="../styles.css" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-25..0" />
+<link rel="stylesheet" href="app.css" />
+<style>
+  /* ===== 재단 패턴(F10 1단계 «보기 전용») =====
+     색은 디자인 변수만 쓴다. 사이즈 9색은 이 화면 전용 변수로 한 곳에 모았다. */
+  :root {
+    --cad-s1: var(--blue-600); --cad-s2: var(--red-600); --cad-s3: var(--green-600);
+    --cad-s4: var(--amber-600); --cad-s5: #7c3aed; --cad-s6: #0d9488;
+    --cad-s7: #db2777; --cad-s8: #92400e; --cad-s9: var(--ink-900);
+    --cad-cut: var(--ink-900); --cad-seam: var(--blue-600); --cad-int: var(--green-600); --cad-new: var(--amber-600);
+    --cad-fill: color-mix(in srgb, var(--blue-bg) 55%, transparent);
+    --cad-hi: var(--red-600); --cad-node: var(--stiz-red);
+  }
+  .cad-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .cad-head p { font: var(--text-sm); color: var(--text-muted); margin: 0; max-width: 720px; }
+  .cad-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+  .cad-card { padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; }
+  .cad-card__name { font: var(--text-sm-strong); color: var(--text-strong); }
+  .cad-card__sub { font: var(--text-caption); color: var(--text-muted); }
+  .cad-card__row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+
+  .cad-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .cad-bar h2 { font: var(--text-lg-strong, 600 18px/1.4 sans-serif); color: var(--text-strong); margin: 0; flex: 1 1 240px; min-width: 0; }
+  .cad-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
+  .cad-stage { padding: 10px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .cad-tools { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+  .cad-tools .sep { width: 1px; height: 22px; background: var(--border-subtle); }
+  .cad-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border-radius: var(--radius-pill, 999px);
+          border: 1px solid var(--border-default); background: var(--surface-card); font: var(--text-sm); color: var(--text-body); cursor: pointer; }
+  .chip.is-active { background: var(--stiz-black); color: var(--paper); border-color: var(--stiz-black); }
+  .chip .sw { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .chip input { margin: 0; }
+  .cad-svgwrap { position: relative; height: min(68vh, 760px); min-height: 320px; border: 1px solid var(--border-subtle);
+                 border-radius: var(--radius-md); background: var(--surface-card); overflow: hidden; touch-action: none; }
+  .cad-svgwrap svg { width: 100%; height: 100%; display: block; user-select: none; cursor: grab; }
+  .cad-svgwrap.is-measure svg { cursor: crosshair; }
+  .cad-hint { position: absolute; left: 8px; bottom: 6px; font: var(--text-caption); color: var(--text-subtle); pointer-events: none; }
+  .cad-zoom { position: absolute; right: 8px; top: 8px; display: flex; flex-direction: column; gap: 4px; }
+  .cad-zoom .btn { width: 34px; padding: 0; justify-content: center; }
+  .cad-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .cad-side .card { padding: 12px 14px; }
+  .cad-side h3 { font: var(--text-sm-strong); color: var(--text-strong); margin: 0 0 8px; display: flex; align-items: center; gap: 6px; }
+  .cad-side h3 .material-symbols-outlined { font-size: 18px; color: var(--text-subtle); }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font: var(--text-sm); }
+  .kv dt { color: var(--text-muted); } .kv dd { margin: 0; color: var(--text-strong); font-variant-numeric: tabular-nums; text-align: right; }
+  .kv dd.big { font: var(--text-md-strong, 600 15px/1.4 sans-serif); }
+  .ctable { width: 100%; border-collapse: collapse; font: var(--text-caption); }
+  .ctable th { text-align: left; color: var(--text-muted); font-weight: 600; padding: 4px 4px; border-bottom: 1px solid var(--border-subtle); }
+  .ctable td { padding: 5px 4px; border-bottom: 1px solid var(--border-subtle); vertical-align: top; font-variant-numeric: tabular-nums; }
+  .ctable td.num, .ctable th.num { text-align: right; }
+  .ctable tr.is-pick td { background: var(--surface-selected); }
+  .ctable button { font: var(--text-caption); }
+  .dl-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+  .muted-note { font: var(--text-caption); color: var(--text-subtle); margin-top: 6px; }
+  .cad-modal { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; padding: 16px;
+               background: rgba(0,0,0,.45); }
+  .cad-modal__panel { width: 100%; max-width: 440px; }
+  .cad-field { margin-bottom: 12px; } .cad-field label { display: block; font: var(--text-sm); color: var(--text-subtle); margin-bottom: 6px; }
+  .cad-field input[type=file] { width: 100%; font: var(--text-sm); }
+  .cad-field .input { width: 100%; }
+  .acct__btn { cursor: pointer; background: none; }
+  .acct__btn .name { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* SVG 선 — 확대해도 굵기가 같게(non-scaling-stroke) */
+  svg .cut { fill: var(--cad-fill); stroke: var(--cad-cut); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+  svg .seam { fill: none; stroke: var(--cad-seam); stroke-width: 1; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; }
+  svg .int { fill: none; stroke: var(--cad-int); stroke-width: .8; vector-effect: non-scaling-stroke; }
+  svg .int.new { stroke: var(--cad-new); }
+  svg .notch { stroke: var(--cad-cut); stroke-width: 1.4; vector-effect: non-scaling-stroke; }
+  svg .hole { fill: none; stroke: var(--cad-cut); stroke-width: 1; vector-effect: non-scaling-stroke; }
+  svg .grain { stroke: var(--ink-500); stroke-width: 1; vector-effect: non-scaling-stroke; marker-start: url(#arrS); marker-end: url(#arrE); }
+  svg .fold { stroke: var(--green-700); stroke-width: 1; stroke-dasharray: 8 3 2 3; vector-effect: non-scaling-stroke; }
+  svg .ov { fill: none; stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+  svg .node { fill: var(--cad-node); }
+  svg .lbl { fill: var(--text-muted); paint-order: stroke; stroke: var(--paper); stroke-width: 3px; vector-effect: non-scaling-stroke; }
+  svg .pname { fill: var(--text-strong); font-weight: 600; paint-order: stroke; stroke: var(--paper); stroke-width: 3px; pointer-events: none; }
+  svg .pname.is-tiny { visibility: hidden; }                 /* 작은 조각: 글자 길이를 재야 해서 display 대신 visibility */
+  svg .pname.is-tiny.is-hover { visibility: visible; }
+  svg .hi { fill: none; stroke: var(--cad-hi); stroke-width: 3.2; vector-effect: non-scaling-stroke; stroke-linecap: round; opacity: .85; }
+  svg .hi2 { fill: none; stroke: var(--cad-hi); stroke-width: 1.2; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+  svg .mpt { fill: var(--cad-hi); stroke: var(--paper); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+  svg.no-lbl .lbl, svg.no-node .node { display: none; }
+  svg.no-cut .cut { stroke: none; } svg.no-int .int, svg.no-notch .notch, svg.no-hole .hole, svg.no-grain .grain, svg.no-fold .fold { display: none; }
+
+  /* ===== 왼쪽 메뉴 배경: 메뉴 자체는 화면 높이(sticky)라 긴 페이지 아래쪽이 비어 보였다 → 같은 폭의 띠를 바탕에 칠한다 ===== */
+  .app { background: linear-gradient(to right, var(--surface-card) calc(var(--sidebar-w) - 1px),
+                                     var(--border-subtle) calc(var(--sidebar-w) - 1px), var(--border-subtle) var(--sidebar-w),
+                                     var(--surface-canvas) var(--sidebar-w)); }
+
+  /* ===== 좁은 화면(휴대폰): 왼쪽 메뉴를 위쪽 띠로, 오른쪽 패널을 아래로 ===== */
+  @media (max-width: 900px) {
+    .cad-layout { grid-template-columns: minmax(0, 1fr); }
+  }
+  @media (max-width: 760px) {
+    .app { flex-direction: column; background: var(--surface-canvas); }
+    .sidebar { width: 100%; height: auto; position: static; flex-direction: row; align-items: center; flex-wrap: wrap;
+               padding: 8px 12px; gap: 6px; border-right: none; border-bottom: 1px solid var(--border-subtle); }
+    .sidebar__brand { padding: 0 6px 0 0; }
+    .sidebar__foot { display: none; }
+    .nav { flex-direction: row; flex-wrap: wrap; gap: 2px; }
+    .nav__item { width: auto; padding: 6px 8px; gap: 6px; }
+    .topbar { padding: 0 12px; }
+    .content { padding: 12px; }
+    .cad-svgwrap { height: 62vh; }
+    .acct__btn .name { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="sidebar__brand">
+      <img src="../assets/logos/stiz-logo-black.png" alt="STIZ" />
+      <span class="tag">grader</span>
+    </div>
+    <nav class="nav">
+      <a class="nav__item" href="work.html"><span class="material-symbols-outlined">add_box</span>작업</a>
+      <a class="nav__item" href="patterns.html"><span class="material-symbols-outlined">dashboard_customize</span>패턴 관리</a>
+      <a class="nav__item is-active" href="cad.html"><span class="material-symbols-outlined">content_cut</span>재단 패턴</a>
+      <a class="nav__item" href="history.html"><span class="material-symbols-outlined">history</span>작업 기록</a>
+      <a class="nav__item" href="settings.html"><span class="material-symbols-outlined">settings</span>설정</a>
+    </nav>
+    <div class="sidebar__foot">
+      <div class="server-pill"><span class="dot"></span>서버 연결됨</div>
+      <div class="sidebar__note">스티즈 전사유니폼 출력 자동화</div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar__left"><h1 class="page-title">재단 패턴</h1></div>
+      <div class="topbar__right">
+        <div class="acct" id="acct">
+          <button class="user-pill acct__btn" id="acctBtn" type="button" title="로그아웃">
+            <span class="name" id="acctEmail">로그인</span><span class="avatar" id="acctAvatar">S</span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main class="content stack-5">
+      <!-- ===== 목록 ===== -->
+      <section id="listView" class="stack-4">
+        <div class="cad-head">
+          <p>공장에 보내는 재단 패턴(재봉선·재단선·노치)을 사이즈별로 봅니다. 두 점을 눌러 길이를 재고, 검산표로 맞물림을 확인하고, DXF·RUL·PDF 를 내려받습니다.</p>
+          <button class="btn btn--primary hidden" id="uploadBtn" type="button"><span class="material-symbols-outlined">upload</span>올리기</button>
+        </div>
+        <div id="styleGrid" class="cad-grid"></div>
+      </section>
+
+      <!-- ===== 스타일 보기 ===== -->
+      <section id="styleView" class="stack-4 hidden">
+        <div class="cad-bar">
+          <button class="btn btn--sm btn--ghost" id="backBtn" type="button"><span class="material-symbols-outlined">arrow_back</span>목록</button>
+          <h2 id="styleTitle"></h2>
+          <select class="input" id="verSel" style="width:auto;height:32px" aria-label="버전"></select>
+          <span id="backupBadge"></span>
+        </div>
+
+        <div class="cad-layout">
+          <div class="cad-stage card">
+            <div class="cad-tools">
+              <div class="seg" id="modeSeg" role="tablist">
+                <button type="button" data-mode="one" class="is-active">한 사이즈</button>
+                <button type="button" data-mode="overlay">겹쳐 보기</button>
+              </div>
+              <select class="input" id="pieceSel" style="width:auto;height:32px" aria-label="조각"></select>
+              <button class="btn btn--sm btn--secondary" id="measureBtn" type="button"><span class="material-symbols-outlined">straighten</span>길이 재기</button>
+            </div>
+            <div class="cad-chips" id="sizeChips"></div>
+            <div class="cad-tools hidden" id="overlayTools">
+              <label class="cad-card__sub">맞춤
+                <select class="input" id="alignSel" style="width:auto;height:30px"></select></label>
+              <button class="btn btn--sm btn--ghost" id="ovAll" type="button">모두</button>
+              <button class="btn btn--sm btn--ghost" id="ovNone" type="button">비우기</button>
+              <label class="chip"><input type="checkbox" id="ovCut" />재단선도</label>
+            </div>
+            <div class="cad-tools" id="layerTools">
+              <label class="chip"><input type="checkbox" data-layer="cut" checked />재단선</label>
+              <label class="chip"><input type="checkbox" data-layer="int" checked />안쪽선</label>
+              <label class="chip"><input type="checkbox" data-layer="notch" checked />노치</label>
+              <label class="chip"><input type="checkbox" data-layer="hole" checked />구멍</label>
+              <label class="chip"><input type="checkbox" data-layer="grain" checked />식서</label>
+              <label class="chip"><input type="checkbox" data-layer="fold" checked />접는선</label>
+              <label class="chip"><input type="checkbox" data-layer="node" checked />기준점</label>
+              <label class="chip"><input type="checkbox" data-layer="lbl" checked />이름</label>
+            </div>
+            <div class="cad-svgwrap" id="svgWrap">
+              <svg id="svg" xmlns="http://www.w3.org/2000/svg" aria-label="재단 패턴 그림">
+                <defs>
+                  <marker id="arrE" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink-500)"/></marker>
+                  <marker id="arrS" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink-500)"/></marker>
+                </defs>
+                <g id="gDraw"></g><g id="gHi"></g>
+              </svg>
+              <div class="cad-zoom">
+                <button class="btn btn--sm btn--secondary" id="zIn" type="button" aria-label="확대"><span class="material-symbols-outlined">add</span></button>
+                <button class="btn btn--sm btn--secondary" id="zOut" type="button" aria-label="축소"><span class="material-symbols-outlined">remove</span></button>
+                <button class="btn btn--sm btn--secondary" id="zFit" type="button" aria-label="맞춤"><span class="material-symbols-outlined">fit_screen</span></button>
+              </div>
+              <div class="cad-hint" id="hint">끌어서 이동 · 휠/두 손가락으로 확대</div>
+            </div>
+          </div>
+
+          <aside class="cad-side">
+            <div class="card">
+              <h3><span class="material-symbols-outlined">straighten</span>길이 재기 <span class="cad-card__sub" id="measureSize"></span></h3>
+              <div id="measureBox" class="cad-card__sub">«길이 재기» 를 켜고 재봉선 위 두 점을 누르세요. 같은 조각이면 재봉선 따라 길이도 잽니다(단위 mm, 그림 확대와 무관).</div>
+            </div>
+            <div class="card">
+              <h3><span class="material-symbols-outlined">fact_check</span>검산표 <span class="cad-card__sub" id="checkSize"></span></h3>
+              <div id="checkBox"></div>
+            </div>
+            <div class="card">
+              <h3><span class="material-symbols-outlined">download</span>내려받기</h3>
+              <div id="dlBox" class="dl-grid"></div>
+              <div class="muted-note">올린 파일 그대로(지문 같음) 내려받습니다.</div>
+            </div>
+            <div class="card" id="infoCard">
+              <h3><span class="material-symbols-outlined">info</span>이 판</h3>
+              <div id="infoBox" class="cad-card__sub"></div>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<!-- ===== 올리기(관리자) ===== -->
+<div class="cad-modal hidden" id="upModal">
+  <div class="cad-modal__panel card card--pad" role="dialog" aria-modal="true" aria-labelledby="upTitle">
+    <h2 class="cad-card__name" id="upTitle" style="font-size:17px;margin:0 0 6px">재단 패턴 올리기</h2>
+    <p class="cad-card__sub" style="margin:0 0 14px">stizshop <code>tools/pattern-engine/cad_view.py</code> 가 만든 두 파일을 함께 올립니다. 같은 스타일이면 새 버전으로 쌓이고 옛 버전은 그대로 남습니다.</p>
+    <div class="cad-field"><label for="upView">view.json</label><input type="file" id="upView" accept=".json,application/json" /></div>
+    <div class="cad-field"><label for="upZip">exports.zip</label><input type="file" id="upZip" accept=".zip,application/zip" /></div>
+    <div class="cad-field"><label for="upNote">메모(선택)</label><input class="input" id="upNote" maxlength="500" placeholder="예: 2XL 수정본 · 공장 1차" /></div>
+    <div class="cad-card__sub" id="upMsg" style="min-height:18px;margin-bottom:10px"></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px">
+      <button class="btn" type="button" id="upCancel">닫기</button>
+      <button class="btn btn--primary" type="button" id="upSubmit">올리기</button>
+    </div>
+  </div>
+</div>
+
+<div class="toaster" id="toaster"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+// ====== 공통 인증 fetch 래퍼 (다른 화면과 같다) ======
+const TOKEN_KEY = "grader_access_token";
+async function apiFetch(url, opts) {
+  opts = opts || {};
+  const headers = new Headers(opts.headers || {});
+  const token = sessionStorage.getItem(TOKEN_KEY);
+  if (token) headers.set("Authorization", "Bearer " + token);
+  const res = await fetch(url, Object.assign({}, opts, { headers }));
+  if (res.status === 401) {
+    sessionStorage.removeItem(TOKEN_KEY);
+    location.replace("/static/screens/login.html");
+    throw new Error("로그인이 필요합니다.");
+  }
+  return res;
+}
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;" }[c]));
+const fmt = (v, d) => (v == null || isNaN(v)) ? "—" : Number(v).toFixed(d == null ? 1 : d);
+function toast(tone, icon, title, body) {
+  const el = document.createElement("div");
+  el.className = "toast toast--" + tone;
+  el.innerHTML = `<span class="material-symbols-outlined toast__icon">${icon}</span><div><div class="toast__title">${esc(title)}</div><div class="toast__body">${esc(body || "")}</div></div>`;
+  $("#toaster").appendChild(el); setTimeout(() => el.remove(), 3600);
+}
+async function apiError(res) { try { const j = await res.json(); return j.detail || j.error || ""; } catch (e) { return ""; } }
+
+// ====== 상태 ======
+const S = {
+  styles: [], canUpload: false,
+  style: null, ver: null, view: null,       // 지금 연 스타일·버전·view.json
+  mode: "one", size: null, overlay: new Set(), align: "none", ovCut: false,
+  piece: "", measure: false, picks: [], pickCheck: null,
+  vb: null, base: null,                      // 지금 viewBox · 전체 맞춤 viewBox
+};
+const SVGNS = "http://www.w3.org/2000/svg";
+const sizeColor = (sid) => `var(--cad-s${S.view.style.sizes.indexOf(sid) + 1})`;
+const sizeLabel = (sid) => (S.view.style.size_labels || {})[sid] || sid;
+
+// ── view.json 의 납작 정수 배열 → mm 점 ──
+function pts(flat) { const q = S.view.q, out = []; for (let k = 0; k < flat.length; k += 2) out.push([flat[k] * q, flat[k + 1] * q]); return out; }
+// 조각 하나의 mm 자료를 한 번만 풀어 둔다(재봉선 누적 길이까지 — 길이 재기용)
+const CACHE = new Map();
+function P(sid, name) {
+  const key = S.style + "|" + S.ver + "|" + sid + "|" + name;
+  if (CACHE.has(key)) return CACHE.get(key);
+  const raw = S.view.sizes[sid].pieces.find((p) => p.name === name);
+  const seam = pts(raw.seam), cum = [0];
+  for (let i = 0; i < seam.length; i++) { const a = seam[i], b = seam[(i + 1) % seam.length]; cum.push(cum[i] + Math.hypot(b[0] - a[0], b[1] - a[1])); }
+  const xs = seam.map((p) => p[0]), ys = seam.map((p) => p[1]);
+  const o = { raw, seam, cum, per: cum[cum.length - 1], cut: pts(raw.cut),
+              box: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)] };
+  CACHE.set(key, o); return o;
+}
+// ── 재봉선 위 위치(누적 길이 s) 두 개 사이 길이 — 앞으로·뒤로 둘 다 ──
+function along(o, s1, s2) { const f = ((s2 - s1) % o.per + o.per) % o.per; return { fwd: f, back: o.per - f, short: Math.min(f, o.per - f) }; }
+const posOfIndex = (o, i) => o.cum[i];
+// 기준점 이름 또는 "#번호" → 고리 번호
+function idxOf(o, key) { return key[0] === "#" ? parseInt(key.slice(1), 10) : o.raw.nodes[key]; }
+// 검산표 칸 하나를 화면 자료로 다시 잰다(window.CAD.measureNodes 와 같은 길)
+function measureNodes(sid, piece, from, to) {
+  const o = P(sid, piece); const a = idxOf(o, from), b = idxOf(o, to);
+  if (a == null || b == null) return null;
+  return along(o, posOfIndex(o, a), posOfIndex(o, b)).short;
+}
+function measureParts(sid, parts) { return parts.reduce((t, p) => t + measureNodes(sid, p.piece, p.from, p.to) * (Number(p.mult) || 0), 0); }
+function checkValue(sid, c) {
+  if (c.kind === "pair") return measureParts(sid, c.a.parts) - measureParts(sid, c.b.parts);
+  if (c.kind === "sum") return measureParts(sid, c.parts);
+  if (c.kind === "band") return c.band == null ? null : measureParts(sid, c.a.parts) - c.band;
+  return null;
+}
+
+// ====== 목록 ======
+async function loadMe() {
+  try { const r = await apiFetch("/api/cad/me"); if (r.ok) { const j = await r.json(); S.canUpload = !!j.can_upload; } } catch (e) {}
+  $("#uploadBtn").classList.toggle("hidden", !S.canUpload);
+}
+async function loadList() {
+  const grid = $("#styleGrid");
+  grid.innerHTML = `<div class="card cad-card"><div class="cad-card__sub">불러오는 중…</div></div>`;
+  try {
+    const r = await apiFetch("/api/cad/styles");
+    if (!r.ok) throw new Error(await apiError(r) || ("서버 응답 " + r.status));
+    const j = await r.json(); S.styles = j.styles || [];
+  } catch (e) {
+    if (/로그인/.test(String(e.message))) return;
+    grid.innerHTML = `<div class="card"><div class="empty"><div class="empty__title">목록을 불러오지 못했어요</div><div class="empty__desc">${esc(e.message)}</div></div></div>`;
+    return;
+  }
+  if (!S.styles.length) {
+    grid.innerHTML = `<div class="card" style="grid-column:1/-1"><div class="empty"><div class="empty__icon"><span class="material-symbols-outlined">content_cut</span></div>
+      <div class="empty__title">올린 재단 패턴이 없습니다</div><div class="empty__desc">관리자가 «올리기» 로 view.json 과 exports.zip 을 올리면 여기에 보입니다.</div></div></div>`;
+    return;
+  }
+  grid.innerHTML = S.styles.map((s) => {
+    const L = s.latest || {}; const b = L.backup;
+    const bb = !b ? "" : b.ok ? `<span class="badge badge--pass badge--sm">창고 보관</span>` : b.skipped ? `<span class="badge badge--neutral badge--sm">로컬만</span>` : `<span class="badge badge--warn badge--sm">창고 미보관</span>`;
+    return `<button type="button" class="card card--interactive cad-card" data-style="${esc(s.id)}" style="text-align:left">
+      <div class="cad-card__name">${esc(s.name || s.id)}</div>
+      <div class="cad-card__sub">${esc(s.garment || "")} · ${(s.sizes || []).length}벌 · v${esc(L.version)} (${(s.versions || []).length}개 버전)</div>
+      <div class="cad-card__sub">${esc((L.uploaded_at || "").replace("T", " "))}${L.uploaded_by ? " · " + esc(L.uploaded_by) : ""}</div>
+      <div class="cad-card__row">${bb}${L.note ? `<span class="cad-card__sub">${esc(L.note)}</span>` : ""}</div>
+    </button>`;
+  }).join("");
+  grid.querySelectorAll("[data-style]").forEach((el) => el.addEventListener("click", () => openStyle(el.dataset.style)));
+}
+
+// ====== 스타일 열기 ======
+async function openStyle(id, ver) {
+  const s = S.styles.find((x) => x.id === id);
+  ver = ver || (s && s.latest ? s.latest.version : "latest");
+  let view;
+  try {
+    const r = await apiFetch(`/api/cad/styles/${encodeURIComponent(id)}/v/${encodeURIComponent(ver)}/view`);
+    if (!r.ok) throw new Error(await apiError(r) || ("서버 응답 " + r.status));
+    view = await r.json();
+    ver = r.headers.get("X-Cad-Version") || ver;          // «latest» 로 열었으면 실제 번호로
+  } catch (e) { if (!/로그인/.test(String(e.message))) toast("fail", "error", "열지 못했어요", e.message); return; }
+  S.style = id; S.ver = ver; S.view = view; S.picks = []; S.pickCheck = null;
+  const sizes = view.style.sizes;
+  S.size = sizes.includes(view.style.base_size) ? view.style.base_size : sizes[0];
+  S.overlay = new Set(sizes.filter((x) => x !== view.style.graded_from));
+  $("#listView").classList.add("hidden"); $("#styleView").classList.remove("hidden");
+  $("#styleTitle").textContent = view.style.name || id;
+  const vs = (s && s.versions) || [ver];
+  $("#verSel").innerHTML = vs.slice().reverse().map((v) => `<option value="${Number(v)}" ${String(v) === String(ver) ? "selected" : ""}>v${Number(v)}</option>`).join("");
+  const b = s && s.latest && s.latest.backup;
+  $("#backupBadge").innerHTML = !b ? "" : b.ok ? `<span class="badge badge--pass badge--sm">창고 보관</span>` : b.skipped ? `<span class="badge badge--neutral badge--sm">로컬만</span>` : `<span class="badge badge--warn badge--sm">창고 미보관</span>`;
+  $("#pieceSel").innerHTML = `<option value="">조각 전체</option>` + view.style.pieces.map((n) => `<option>${esc(n)}</option>`).join("");
+  S.piece = "";
+  buildAlign(); renderChips(); renderInfo(); renderDownloads(); fitView(); draw(); renderChecks(); renderMeasure();
+  try { history.replaceState(null, "", `#${id}/v${ver}`); } catch (e) {}
+}
+
+function renderChips() {
+  const sizes = S.view.style.sizes;
+  $("#overlayTools").classList.toggle("hidden", S.mode !== "overlay");
+  $("#sizeChips").innerHTML = sizes.map((sid) => {
+    const sw = `<span class="sw" style="background:${sizeColor(sid)}"></span>`;
+    if (S.mode === "overlay")
+      return `<label class="chip"><input type="checkbox" data-ov="${esc(sid)}" ${S.overlay.has(sid) ? "checked" : ""}/>${sw}${esc(sizeLabel(sid))}</label>`;
+    return `<button type="button" class="chip ${sid === S.size ? "is-active" : ""}" data-size="${esc(sid)}">${esc(sizeLabel(sid))}</button>`;
+  }).join("");
+  $("#sizeChips").querySelectorAll("[data-size]").forEach((b) => b.addEventListener("click", () => setSize(b.dataset.size)));
+  $("#sizeChips").querySelectorAll("[data-ov]").forEach((c) => c.addEventListener("change", () => {
+    c.checked ? S.overlay.add(c.dataset.ov) : S.overlay.delete(c.dataset.ov); draw();
+  }));
+  $("#measureSize").textContent = "· " + sizeLabel(S.size);
+}
+function setSize(sid) { S.size = sid; S.picks = []; S.pickCheck = null; renderChips(); draw(); renderChecks(); renderMeasure(); renderDownloads(); }
+
+// 겹쳐 보기 맞춤: 원래 자리(그레이딩 기준점 고정) · 조각 가운데 · 기준점 하나
+function buildAlign() {
+  const names = new Set();
+  S.view.sizes[S.view.style.sizes[0]].pieces.forEach((p) => { if (!S.piece || p.name === S.piece) Object.keys(p.nodes || {}).forEach((n) => names.add(n)); });
+  $("#alignSel").innerHTML = `<option value="none">원래 자리</option><option value="center">조각 가운데</option>` +
+    [...names].map((n) => `<option value="node:${esc(n)}">기준점 ${esc(n)}</option>`).join("");
+  if (![...$("#alignSel").options].some((o) => o.value === S.align)) S.align = "none";
+  $("#alignSel").value = S.align;
+}
+// 겹쳐 볼 때 사이즈 sid 의 조각을 기준 사이즈에 맞추는 이동량
+function alignShift(sid, name) {
+  if (S.mode !== "overlay" || S.align === "none") return [0, 0];
+  const ref = P(S.size, name), o = P(sid, name);
+  if (S.align === "center") return [((ref.box[0] + ref.box[2]) - (o.box[0] + o.box[2])) / 2, ((ref.box[1] + ref.box[3]) - (o.box[1] + o.box[3])) / 2];
+  const nn = S.align.slice(5); const a = ref.raw.nodes[nn], b = o.raw.nodes[nn];
+  if (a == null || b == null) return [0, 0];
+  return [ref.seam[a][0] - o.seam[b][0], ref.seam[a][1] - o.seam[b][1]];
+}
+
+// ====== 그리기 ======
+const d = (arr, close) => arr.length ? "M" + arr.map((p) => p[0].toFixed(2) + "," + p[1].toFixed(2)).join("L") + (close ? "Z" : "") : "";
+function el(tag, attrs, parent) { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+function shownPieces() { return S.view.style.pieces.filter((n) => !S.piece || n === S.piece); }
+function draw() {
+  const g = $("#gDraw"); g.innerHTML = "";
+  const names = shownPieces();
+  if (S.mode === "overlay") {
+    const sizes = S.view.style.sizes.filter((s) => S.overlay.has(s));
+    for (const sid of sizes) {
+      const gs = el("g", { "data-size": sid, style: `stroke:${sizeColor(sid)}` }, g);
+      for (const n of names) {
+        const o = P(sid, n); const [dx, dy] = alignShift(sid, n);
+        const gp = el("g", { transform: `translate(${dx.toFixed(3)},${dy.toFixed(3)})`, "data-piece": n }, gs);
+        el("title", {}, gp).textContent = n + " · " + sizeLabel(sid);
+        el("path", { class: "ov", d: d(o.seam, true), style: `stroke:${sizeColor(sid)}` }, gp);
+        if (S.ovCut) el("path", { class: "ov", d: d(o.cut, true), style: `stroke:${sizeColor(sid)};stroke-dasharray:4 3;opacity:.7` }, gp);
+      }
+    }
+    drawLabels(g, names, S.size, false);
+  } else {
+    for (const n of names) {
+      const o = P(S.size, n), raw = o.raw; const gp = el("g", { "data-piece": n }, g);
+      el("title", {}, gp).textContent = n + (Number(raw.qty) > 1 ? ` ×${Number(raw.qty)}` : "");   // 마우스를 올리면 조각 이름
+      el("path", { class: "cut", d: d(o.cut, true) }, gp);
+      el("path", { class: "seam", d: d(o.seam, true) }, gp);
+      for (const it of raw.internal || []) el("path", { class: "int" + (it.n ? " new" : ""), d: d(pts(it.p), !!it.c) }, gp);
+      for (const nt of raw.notches || []) { const p = pts(nt); el("line", { class: "notch", x1: p[0][0], y1: p[0][1], x2: p[1][0], y2: p[1][1] }, gp); }
+      for (const h of raw.holes || []) el("circle", { class: "hole", cx: h[0] * S.view.q, cy: h[1] * S.view.q, r: h[2] * S.view.q }, gp);
+      if (raw.grain) { const p = pts(raw.grain); el("line", { class: "grain", x1: p[0][0], y1: p[0][1], x2: p[1][0], y2: p[1][1] }, gp); }
+      if (raw.fold) { const p = pts(raw.fold); el("line", { class: "fold", x1: p[0][0], y1: p[0][1], x2: p[1][0], y2: p[1][1] }, gp); }
+    }
+    drawLabels(g, names, S.size, true);
+  }
+  applyLayers(); drawHi(); applyVB();
+}
+function drawLabels(g, names, sid, nodes) {
+  const gl = el("g", { id: "gLbl" }, g);
+  for (const n of names) {
+    const o = P(sid, n), raw = o.raw;
+    const t = el("text", { class: "pname", x: (o.box[0] + o.box[2]) / 2, y: (o.box[1] + o.box[3]) / 2, "text-anchor": "middle", "data-fs": "13",
+                           "data-name": n, "data-bw": (o.box[2] - o.box[0]).toFixed(1), "data-bh": (o.box[3] - o.box[1]).toFixed(1) }, gl);
+    t.textContent = n + (Number(raw.qty) > 1 ? ` ×${Number(raw.qty)}` : "");
+    if (!nodes) continue;
+    for (const [nm, i] of Object.entries(raw.nodes || {})) {
+      const p = o.seam[i];
+      el("circle", { class: "node", cx: p[0], cy: p[1], r: 2.2, "data-r": "3" }, gl);
+      const tt = el("text", { class: "lbl", x: p[0], y: p[1], dx: 0, "data-fs": "10", "data-dy": "-6" }, gl); tt.textContent = nm;
+    }
+  }
+}
+// 조각 위에 마우스 → 그 조각 이름표를 잠깐 보이게(작은 조각용)
+$("#gDraw").addEventListener("pointerover", (e) => {
+  const g = e.target.closest && e.target.closest("[data-piece]"); const name = g && g.dataset.piece;
+  document.querySelectorAll("#svg .pname").forEach((t) => t.classList.toggle("is-hover", t.dataset.name === name));
+});
+$("#gDraw").addEventListener("pointerleave", () => document.querySelectorAll("#svg .pname.is-hover").forEach((t) => t.classList.remove("is-hover")));
+function applyLayers() {
+  const svg = $("#svg");
+  document.querySelectorAll("#layerTools [data-layer]").forEach((c) => svg.classList.toggle("no-" + c.dataset.layer, !c.checked));
+}
+
+// ── 화면 확대·이동: viewBox 만 바꾼다(데이터 좌표 mm 는 그대로 → 길이는 확대와 무관) ──
+function fitView() {
+  const names = shownPieces(); let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  const sizes = S.mode === "overlay" ? S.view.style.sizes : [S.size];
+  for (const sid of sizes) for (const n of names) { const b = P(sid, n).box, c = P(sid, n).cut; for (const p of c) { x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]); } }
+  const m = Math.max(x1 - x0, y1 - y0) * 0.04 + 10;
+  S.base = [x0 - m, y0 - m, x1 - x0 + 2 * m, y1 - y0 + 2 * m]; S.vb = S.base.slice(); applyVB();
+}
+function pxPerMm() { const r = $("#svg").getBoundingClientRect(); return Math.min(r.width / S.vb[2], r.height / S.vb[3]) || 1; }
+function applyVB() {
+  if (!S.vb) return;
+  const svg = $("#svg"); svg.setAttribute("viewBox", S.vb.map((v) => v.toFixed(3)).join(" "));
+  const k = 1 / pxPerMm();                                     // 화면 1px = k mm → 글자·점 크기를 화면 기준으로 고정
+  svg.querySelectorAll("[data-fs]").forEach((t) => { t.setAttribute("font-size", (t.dataset.fs * k).toFixed(3)); if (t.dataset.dy) t.setAttribute("dy", (t.dataset.dy * k).toFixed(3)); });
+  // 조각 이름이 조각 상자보다 크면 «작은 조각» — 숨겨 두고 마우스를 올렸을 때만 보인다(겹쳐서 못 읽는 글자 방지)
+  svg.querySelectorAll(".pname").forEach((t) => {
+    let w = 0; try { w = t.getComputedTextLength(); } catch (e) {}
+    const tiny = w > t.dataset.bw * 0.92 || t.dataset.fs * k * 1.4 > t.dataset.bh;
+    t.classList.toggle("is-tiny", tiny);
+  });
+  svg.querySelectorAll("[data-r]").forEach((c) => c.setAttribute("r", (c.dataset.r * k).toFixed(3)));
+}
+function clientToMm(cx, cy) {
+  const svg = $("#svg"); const pt = svg.createSVGPoint(); pt.x = cx; pt.y = cy;
+  const p = pt.matrixTransform(svg.getScreenCTM().inverse()); return [p.x, p.y];
+}
+function zoomAt(f, cx, cy) {
+  const [mx, my] = cx == null ? [S.vb[0] + S.vb[2] / 2, S.vb[1] + S.vb[3] / 2] : clientToMm(cx, cy);
+  const w = S.vb[2] / f, h = S.vb[3] / f;
+  if (w < 5 || w > S.base[2] * 8) return;
+  S.vb = [mx - (mx - S.vb[0]) / f, my - (my - S.vb[1]) / f, w, h]; applyVB();
+}
+(function bindPanZoom() {
+  const svg = $("#svg"); const ptrs = new Map(); let pan = null, pinch = null, moved = false;
+  svg.addEventListener("wheel", (e) => { if (!S.vb) return; e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.2 : 1 / 1.2, e.clientX, e.clientY); }, { passive: false });
+  svg.addEventListener("pointerdown", (e) => {
+    if (!S.vb) return; svg.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, [e.clientX, e.clientY]); moved = false;
+    if (ptrs.size === 1) pan = { x: e.clientX, y: e.clientY, vb: S.vb.slice(), k: 1 / pxPerMm() };
+    if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch = { dist: Math.hypot(a[0] - b[0], a[1] - b[1]), vb: S.vb.slice() }; pan = null; }
+  });
+  svg.addEventListener("pointermove", (e) => {
+    if (!ptrs.has(e.pointerId)) return; ptrs.set(e.pointerId, [e.clientX, e.clientY]);
+    if (pinch && ptrs.size === 2) {
+      const [a, b] = [...ptrs.values()]; const dist = Math.hypot(a[0] - b[0], a[1] - b[1]); const f = dist / pinch.dist;
+      S.vb = pinch.vb.slice(); applyVB(); zoomAt(f, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2); moved = true; return;
+    }
+    if (pan) {
+      const dx = e.clientX - pan.x, dy = e.clientY - pan.y; if (Math.hypot(dx, dy) > 4) moved = true;
+      if (moved) { S.vb = [pan.vb[0] - dx * pan.k, pan.vb[1] - dy * pan.k, pan.vb[2], pan.vb[3]]; applyVB(); }
+    }
+  });
+  const up = (e) => {
+    const was = ptrs.has(e.pointerId); ptrs.delete(e.pointerId);
+    if (ptrs.size < 2) pinch = null;
+    if (was && !moved && ptrs.size === 0 && S.measure && e.type === "pointerup") pick(e.clientX, e.clientY);
+    if (ptrs.size === 0) pan = null;
+  };
+  svg.addEventListener("pointerup", up); svg.addEventListener("pointercancel", up);
+})();
+
+// ====== 길이 재기 ======
+// 누른 자리에서 가장 가까운 재봉선 위 점(꼭짓점 6px 안이면 꼭짓점에 붙인다) — 지금 사이즈에서만
+function snap(mx, my) {
+  const k = 1 / pxPerMm(); let best = null;
+  for (const n of shownPieces()) {
+    const o = P(S.size, n); const [sx, sy] = alignShift(S.size, n); const L = o.seam.length;
+    for (let i = 0; i < L; i++) {
+      const a = o.seam[i], b = o.seam[(i + 1) % L];
+      const ax = a[0] + sx, ay = a[1] + sy, bx = b[0] + sx, by = b[1] + sy;
+      const vx = bx - ax, vy = by - ay, ll = vx * vx + vy * vy;
+      let t = ll ? ((mx - ax) * vx + (my - ay) * vy) / ll : 0; t = Math.max(0, Math.min(1, t));
+      const px = ax + t * vx, py = ay + t * vy, dd = Math.hypot(mx - px, my - py);
+      if (!best || dd < best.dd) best = { dd, piece: n, i, t, x: px - sx, y: py - sy };
+    }
+  }
+  if (!best || best.dd > 16 * k) return null;
+  const o = P(S.size, best.piece); const L = o.seam.length; const segLen = o.cum[best.i + 1] - o.cum[best.i];
+  // 꼭짓점 자석: 6px 안
+  for (const j of [best.i, (best.i + 1) % L]) {
+    const v = o.seam[j]; if (Math.hypot(v[0] - best.x, v[1] - best.y) <= 6 * k) { best = { piece: best.piece, idx: j, x: v[0], y: v[1], s: o.cum[j] }; break; }
+  }
+  if (best.s == null) best.s = o.cum[best.i] + best.t * segLen;
+  const node = best.idx != null ? Object.entries(o.raw.nodes || {}).find(([, v]) => v === best.idx) : null;
+  best.name = node ? node[0] : (best.idx != null ? `점 #${best.idx}` : "선 위 점");
+  return best;
+}
+function pick(cx, cy) {
+  const [mx, my] = clientToMm(cx, cy); const p = snap(mx, my);
+  if (!p) { toast("info", "touch_app", "재봉선 가까이를 눌러 주세요", ""); return; }
+  S.pickCheck = null;
+  if (S.picks.length >= 2) S.picks = [];
+  S.picks.push(p); drawHi(); renderMeasure(); renderChecks();
+}
+function measurement() {
+  if (S.picks.length < 2) return null;
+  const [a, b] = S.picks; const out = { a, b, straight: Math.hypot(b.x - a.x, b.y - a.y) };
+  if (a.piece === b.piece) { const o = P(S.size, a.piece); Object.assign(out, along(o, a.s, b.s)); }
+  return out;
+}
+// 재봉선 위 s1 → s2 길이(dir=+1 앞으로) 구간을 점 목록으로
+function arcPts(o, s1, len, dir) {
+  const out = []; const N = o.seam.length; const per = o.per;
+  const at = (s) => { s = ((s % per) + per) % per; let i = 0; while (i < N - 1 && o.cum[i + 1] < s) i++; const a = o.seam[i], b = o.seam[(i + 1) % N];
+    const sl = o.cum[i + 1] - o.cum[i]; const t = sl ? (s - o.cum[i]) / sl : 0; return [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])]; };
+  const steps = Math.max(2, Math.ceil(len / 2)); for (let k = 0; k <= steps; k++) out.push(at(s1 + dir * len * k / steps));
+  return out;
+}
+function drawHi() {
+  const g = $("#gHi"); g.innerHTML = "";
+  const sh = (n) => alignShift(S.size, n);
+  const segs = [];
+  if (S.pickCheck) {                              // 검산표 «보기» — 그 칸의 구간을 붉게
+    for (const p of S.pickCheck) { const o = P(S.size, p.piece); const a = idxOf(o, p.from), b = idxOf(o, p.to); const m = along(o, o.cum[a], o.cum[b]);
+      segs.push({ n: p.piece, pts: m.fwd <= m.back ? arcPts(o, o.cum[a], m.fwd, 1) : arcPts(o, o.cum[a], m.back, -1), ends: [o.seam[a], o.seam[b]] }); }
+  }
+  const m = measurement();
+  if (m && m.short != null) { const o = P(S.size, m.a.piece); segs.push({ n: m.a.piece, pts: m.fwd <= m.back ? arcPts(o, m.a.s, m.fwd, 1) : arcPts(o, m.a.s, m.back, -1) }); }
+  for (const sgm of segs) { const [dx, dy] = sh(sgm.n); const gg = el("g", { transform: `translate(${dx},${dy})` }, g); el("path", { class: "hi", d: d(sgm.pts, false) }, gg);
+    for (const e of sgm.ends || []) el("circle", { class: "mpt", cx: e[0], cy: e[1], r: 3, "data-r": "4" }, gg); }
+  if (S.picks.length) {
+    for (const p of S.picks) { const [dx, dy] = sh(p.piece); el("circle", { class: "mpt", cx: p.x + dx, cy: p.y + dy, r: 3, "data-r": "5" }, g); }
+    if (m) { const [ax, ay] = sh(m.a.piece), [bx, by] = sh(m.b.piece); el("line", { class: "hi2", x1: m.a.x + ax, y1: m.a.y + ay, x2: m.b.x + bx, y2: m.b.y + by }, g); }
+  }
+  applyVB();
+}
+function renderMeasure() {
+  $("#measureSize").textContent = "· " + sizeLabel(S.size);
+  const box = $("#measureBox");
+  if (!S.measure && !S.picks.length) { box.innerHTML = "«길이 재기» 를 켜고 재봉선 위 두 점을 누르세요. 같은 조각이면 재봉선 따라 길이도 잽니다(단위 mm, 그림 확대와 무관)."; return; }
+  if (!S.picks.length) { box.innerHTML = "첫 점을 누르세요(재봉선 가까이 — 기준점·꼭짓점에 자석처럼 붙습니다)."; return; }
+  const a = S.picks[0];
+  if (S.picks.length === 1) { box.innerHTML = `<dl class="kv"><dt>점 1</dt><dd>${esc(a.piece)} · ${esc(a.name)}</dd></dl><div class="muted-note">둘째 점을 누르세요.</div>`; return; }
+  const m = measurement();
+  box.innerHTML = `<dl class="kv">
+    <dt>점 1</dt><dd>${esc(m.a.piece)} · ${esc(m.a.name)}</dd>
+    <dt>점 2</dt><dd>${esc(m.b.piece)} · ${esc(m.b.name)}</dd>
+    ${m.short != null ? `<dt>재봉선 따라</dt><dd class="big" id="mShort">${fmt(m.short, 2)} mm</dd><dt>반대쪽으로</dt><dd>${fmt(Math.max(m.fwd, m.back), 2)} mm</dd>` : `<dt>재봉선 따라</dt><dd>다른 조각 — 직선만</dd>`}
+    <dt>직선 거리</dt><dd id="mStraight">${fmt(m.straight, 2)} mm</dd></dl>
+    <button class="btn btn--sm btn--ghost" type="button" id="mClear" style="margin-top:6px">지우기</button>`;
+  $("#mClear").addEventListener("click", () => { S.picks = []; drawHi(); renderMeasure(); });
+}
+
+// ====== 검산표 — 화면 자료로 다시 재서 검산.json 과 견준다 ======
+function renderChecks() {
+  const sz = S.view.sizes[S.size]; const tol = Number(S.view.tol_check) || 0.1;   // 업로드 자료 — 숫자로만 쓴다(XSS 방지)
+  $("#checkSize").textContent = "· " + sizeLabel(S.size);
+  const rows = (sz.checks || []).map((c, k) => {
+    const v = checkValue(S.size, c); const has = c.ref != null && v != null; const diff = has ? v - c.ref : null;
+    const ok = has ? Math.abs(diff) <= tol : null;
+    const badge = ok == null ? `<span class="badge badge--neutral badge--sm">기준 없음</span>` : ok ? `<span class="badge badge--pass badge--sm">맞음</span>` : `<span class="badge badge--fail badge--sm">어긋남</span>`;
+    const parts = c.kind === "pair" ? [...c.a.parts, ...c.b.parts] : c.kind === "sum" ? c.parts : c.a.parts;
+    const detail = c.kind === "pair" ? `${esc(c.a.label)} ${fmt(measureParts(S.size, c.a.parts), 2)} · ${esc(c.b.label)} ${fmt(measureParts(S.size, c.b.parts), 2)}`
+                 : c.kind === "band" ? `옆선 ${fmt(measureParts(S.size, c.a.parts), 2)} · 배색 ${fmt(c.band, 1)}` : parts.map((p) => `${esc(p.piece)}${Number(p.mult) > 1 ? "×" + Number(p.mult) : ""}`).join(" + ");
+    return `<tr data-ck="${k}" title="${esc(c.ref_src || "")}"><td>${esc(c.label)}<div class="cad-card__sub">${detail}</div></td>
+      <td class="num" data-val="${v == null ? "" : v.toFixed(3)}">${fmt(v, 2)}</td><td class="num">${fmt(c.ref, 2)}</td><td>${badge}</td>
+      <td><button class="btn btn--sm btn--ghost" type="button" data-show="${k}">보기</button></td></tr>`;
+  }).join("");
+  const meas = sz.measures ? Object.entries(sz.measures).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${fmt(v, 1)} mm</dd>`).join("") : "";
+  $("#checkBox").innerHTML = (rows ? `<table class="ctable"><thead><tr><th>항목</th><th class="num">화면에서 잰 값</th><th class="num">검산.json</th><th></th><th></th></tr></thead><tbody>${rows}</tbody></table>
+      <div class="muted-note">같은 두 기준점 사이 재봉선 길이를 이 화면 자료로 다시 잰 값 · 허용 ${tol}mm</div>` : `<div class="cad-card__sub">검산 항목 없음</div>`)
+    + (meas ? `<h3 style="margin-top:12px">치수</h3><dl class="kv">${meas}</dl>` : "");
+  $("#checkBox").querySelectorAll("[data-show]").forEach((b) => b.addEventListener("click", () => {
+    const c = sz.checks[+b.dataset.show]; S.picks = [];
+    S.pickCheck = c.kind === "pair" ? [...c.a.parts, ...c.b.parts] : c.kind === "sum" ? c.parts : c.a.parts;
+    if (S.mode !== "one") { S.mode = "one"; syncMode(); }
+    drawHi(); renderMeasure();
+    $("#checkBox").querySelectorAll("tr").forEach((tr) => tr.classList.toggle("is-pick", tr.dataset.ck === b.dataset.show));
+  }));
+}
+
+// ====== 내려받기 ======
+const KIND_LABEL = { dxf: "DXF", pdf: "PDF 1:1", ai: ".ai", aama: "AAMA DXF", rul: "RUL 규칙표", allsizes: "전 사이즈 DXF", a4: "A4 분할 PDF" };
+function renderDownloads() {
+  const files = S.view.files || []; const btns = [`<button class="btn btn--sm btn--primary" type="button" data-dl="zip">전체 ZIP</button>`];
+  for (const k of ["dxf", "pdf", "ai"]) if (files.some((f) => f.kind === k && f.size === S.size))
+    btns.push(`<button class="btn btn--sm btn--secondary" type="button" data-dl="${k}" data-size="${esc(S.size)}">${KIND_LABEL[k]} · ${esc(sizeLabel(S.size))}</button>`);
+  for (const k of ["aama", "rul", "allsizes", "a4"]) if (files.some((f) => f.kind === k))
+    btns.push(`<button class="btn btn--sm btn--secondary" type="button" data-dl="${k}">${KIND_LABEL[k]}</button>`);
+  $("#dlBox").innerHTML = btns.join("");
+  $("#dlBox").querySelectorAll("[data-dl]").forEach((b) => b.addEventListener("click", () => download(b, b.dataset.dl, b.dataset.size)));
+}
+function fileNameFrom(disp) {
+  if (!disp) return ""; const m = /filename\*=UTF-8''([^;]+)/i.exec(disp);
+  if (m) { try { return decodeURIComponent(m[1].trim()); } catch (e) {} }
+  const m2 = /filename="?([^";]+)"?/i.exec(disp); return m2 ? m2[1].trim() : "";
+}
+function fileUrl(kind, size) { return `/api/cad/styles/${encodeURIComponent(S.style)}/v/${encodeURIComponent(S.ver)}/files/${kind}` + (size ? `?size=${encodeURIComponent(size)}` : ""); }
+async function download(btn, kind, size) {
+  btn.disabled = true;
+  try {
+    const res = await apiFetch(fileUrl(kind, size));
+    if (!res.ok) { toast("fail", "error", "내려받지 못했어요", await apiError(res) || ("서버 응답 " + res.status)); return; }
+    const blob = await res.blob(); const url = URL.createObjectURL(blob); const a = document.createElement("a");
+    a.href = url; a.download = fileNameFrom(res.headers.get("Content-Disposition")) || (kind + (size ? "_" + size : ""));
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 4000);
+    toast("pass", "download", "내려받기 시작", a.download);
+  } catch (e) { if (!/로그인/.test(String(e.message))) toast("fail", "error", "내려받지 못했어요", "서버에 연결하지 못했습니다."); }
+  finally { btn.disabled = false; }
+}
+function renderInfo() {
+  const s = S.styles.find((x) => x.id === S.style) || {}; const L = s.latest || {}; const src = S.view.source || {};
+  $("#infoBox").innerHTML = `<dl class="kv">
+    <dt>스타일</dt><dd>${esc(S.style)}</dd><dt>버전</dt><dd>v${esc(S.ver)}</dd>
+    <dt>사이즈</dt><dd>${S.view.style.sizes.map(sizeLabel).map(esc).join(" · ")}</dd>
+    <dt>조각</dt><dd>${S.view.style.pieces.length}종</dd>
+    <dt>엔진</dt><dd>${esc(src.commit || "—")}</dd><dt>만든 때</dt><dd>${esc((src.made_at || "").replace("T", " "))}</dd>
+    ${L.uploaded_at ? `<dt>올린 때</dt><dd>${esc(L.uploaded_at.replace("T", " "))}</dd>` : ""}</dl>
+    <div class="muted-note">${esc(src.note || "")}</div>`;
+}
+
+// ====== 단추들 ======
+function syncMode() {
+  $("#modeSeg").querySelectorAll("button").forEach((x) => x.classList.toggle("is-active", x.dataset.mode === S.mode));
+  $("#layerTools").classList.toggle("hidden", S.mode === "overlay"); renderChips(); fitView(); draw();
+}
+$("#modeSeg").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { S.mode = b.dataset.mode; S.pickCheck = null; syncMode(); }));
+$("#pieceSel").addEventListener("change", (e) => { S.piece = e.target.value; S.picks = []; buildAlign(); fitView(); draw(); renderMeasure(); });
+$("#alignSel").addEventListener("change", (e) => { S.align = e.target.value; S.picks = []; draw(); renderMeasure(); });
+$("#ovAll").addEventListener("click", () => { S.overlay = new Set(S.view.style.sizes); renderChips(); draw(); });
+$("#ovNone").addEventListener("click", () => { S.overlay = new Set(); renderChips(); draw(); });
+$("#ovCut").addEventListener("change", (e) => { S.ovCut = e.target.checked; draw(); });
+document.querySelectorAll("#layerTools [data-layer]").forEach((c) => c.addEventListener("change", applyLayers));
+$("#measureBtn").addEventListener("click", () => {
+  S.measure = !S.measure; $("#measureBtn").classList.toggle("btn--primary", S.measure); $("#measureBtn").classList.toggle("btn--secondary", !S.measure);
+  $("#svgWrap").classList.toggle("is-measure", S.measure);
+  $("#hint").textContent = S.measure ? "재봉선 위 두 점을 누르세요 · 끌면 이동" : "끌어서 이동 · 휠/두 손가락으로 확대";
+  if (!S.measure) S.picks = []; drawHi(); renderMeasure();
+});
+$("#zIn").addEventListener("click", () => zoomAt(1.4)); $("#zOut").addEventListener("click", () => zoomAt(1 / 1.4));
+$("#zFit").addEventListener("click", () => { S.vb = S.base.slice(); applyVB(); });
+window.addEventListener("resize", () => applyVB());
+$("#backBtn").addEventListener("click", () => { $("#styleView").classList.add("hidden"); $("#listView").classList.remove("hidden"); S.view = null; try { history.replaceState(null, "", location.pathname); } catch (e) {} loadList(); });
+$("#verSel").addEventListener("change", (e) => { CACHE.clear(); openStyle(S.style, e.target.value); });
+
+// ── 올리기(관리자) ──
+const upModal = $("#upModal");
+$("#uploadBtn").addEventListener("click", () => { $("#upMsg").textContent = ""; upModal.classList.remove("hidden"); });
+$("#upCancel").addEventListener("click", () => upModal.classList.add("hidden"));
+upModal.addEventListener("click", (e) => { if (e.target === upModal) upModal.classList.add("hidden"); });
+$("#upSubmit").addEventListener("click", async () => {
+  const v = $("#upView").files[0], z = $("#upZip").files[0];
+  if (!v || !z) { $("#upMsg").textContent = "view.json 과 exports.zip 을 둘 다 고르세요."; return; }
+  const fd = new FormData(); fd.append("view", v); fd.append("exports", z); fd.append("note", $("#upNote").value || "");
+  $("#upSubmit").disabled = true; $("#upMsg").textContent = "올리는 중… (창고 보관·되읽기 확인까지)";
+  try {
+    const res = await apiFetch("/api/cad/styles", { method: "POST", body: fd });
+    if (!res.ok) { $("#upMsg").textContent = (res.status === 403 ? "관리자만 올릴 수 있습니다. " : "") + (await apiError(res) || ("서버 응답 " + res.status)); return; }
+    const j = await res.json(); const b = j.backup || {};
+    upModal.classList.add("hidden");
+    toast(b.ok ? "pass" : "warn", b.ok ? "cloud_done" : "cloud_off", `${j.style_id} v${j.version} 올림`, b.ok ? "창고에 보관하고 되읽어 확인했습니다." : ("창고 보관: " + (b.reason || "안 됨")));
+    await loadList();
+  } catch (e) { if (!/로그인/.test(String(e.message))) $("#upMsg").textContent = "서버에 연결하지 못했습니다."; }
+  finally { $("#upSubmit").disabled = false; }
+});
+
+// ── 계정(이메일 표시 · 누르면 로그아웃) ──
+let acctSupa = null;
+(async function initAccount() {
+  let cfg = {}; try { cfg = await (await fetch("/api/public-config")).json(); } catch (e) { return; }
+  if (!cfg.auth_required) { $("#acct").classList.add("hidden"); return; }
+  if (!cfg.supabase_url || !cfg.supabase_publishable_key || !window.supabase) return;
+  acctSupa = window.supabase.createClient(cfg.supabase_url, cfg.supabase_publishable_key);
+  try { const s = await acctSupa.auth.getSession(); const em = s && s.data && s.data.session && s.data.session.user && s.data.session.user.email;
+    if (em) { $("#acctEmail").textContent = em; $("#acctAvatar").textContent = em.charAt(0).toUpperCase(); } } catch (e) {}
+})();
+$("#acctBtn").addEventListener("click", async () => {
+  if (!confirm("로그아웃할까요?")) return;
+  try { if (acctSupa) await acctSupa.auth.signOut(); } catch (e) {}
+  sessionStorage.removeItem(TOKEN_KEY); location.replace("/static/screens/login.html");
+});
+
+// ── 시험·자동 확인용 창구(화면 동작에는 쓰지 않는다) ──
+window.CAD = { state: S, measureNodes, checkValue, open: openStyle, setSize,
+  setMode: (m) => { S.mode = m; syncMode(); }, pickAt: (sid, piece, node) => { const o = P(sid, piece); const i = o.raw.nodes[node];
+    return { piece, idx: i, x: o.seam[i][0], y: o.seam[i][1], s: o.cum[i], name: node }; },
+  measurePicks: (a, b) => { S.picks = [a, b]; drawHi(); renderMeasure(); return measurement(); } };
+
+(async function boot() {
+  await loadMe(); await loadList();
+  const m = /^#([a-z0-9-]+)\/v(\d+)$/.exec(location.hash || "");
+  if (m && S.styles.some((s) => s.id === m[1])) openStyle(m[1], m[2]);
+})();
+</script>
+</body>
+</html>
