@@ -20,6 +20,11 @@
 #     명령줄:  python tools/pattern-engine/service.py build --work <폴더> [--groups top bottom] [--no-aama] [--result r.json]
 #              python tools/pattern-engine/service.py view  --src <gas-warmup 결과 폴더> --out <폴더> [--aama <aama 폴더>]
 #              python tools/pattern-engine/service.py font          ← 지금 어떤 글꼴을 쓰게 되는지
+#   F10 3단계(기준점 끌어서 다시 그레이딩):
+#     서버:    service.regrade(work, "top", 전체_규칙표, full=False|True, on_step=…)   ← 같은 일꾼 길(미리보기 약 10초 · 저장용 full 약 1분)
+#     명령줄:  python tools/pattern-engine/service.py regrade --work <폴더> --group top --rules-file <표.json> [--full]
+#     규칙표 = {조각: {기준점: {사이즈: [Δx, Δy]}}} (RULE_FRAME 참고) — rules_from_view(view) 로 기존 버전에서 읽고,
+#              merge_rules(표, 바꾼칸) 으로 합치고, mesh_checks 가 맞물림(래글런·옆선·소매 밑선·안솔기)을 초록/빨강으로 판정한다
 #   🚫 쇼핑몰 운영 DB·드라이브를 읽지도 쓰지도 않는다. 결과는 <work> 안에만 생긴다.
 #   🚫 marker.py 는 부르지 않는다(4단계 · 다른 작업자가 효율 개선 중).
 import sys, os, json, math, time, shutil, argparse, datetime, contextlib, subprocess, threading, runpy, hashlib
@@ -47,6 +52,38 @@ REBUILDABLE = {"gas-warmup-2026-top": "top", "gas-warmup-2026-bottom": "bottom"}
 STEP_MARK = "@@STEP"                                       # 일꾼이 «지금 몇 번째 단계» 를 부모에게 알리는 줄머리(진행률)
 STEPS = ["build", "grade", "spec", "aama", "view"]
 STEP_KO = {"build": "2XL 수정", "grade": "S~5XL 그레이딩", "spec": "조각 명세", "aama": "AAMA·A4 내보내기", "view": "화면 자료·묶음"}
+
+# ════════ 그레이딩 규칙표(F10 3단계) — «기준점마다 사이즈별 이동량(Δx,Δy)» ════════
+#   규칙 값의 틀 = gas_warmup_grade.py 의 «최종 규칙»(검산.json «상의 규칙»·«하의 규칙» 과 같다): 조각 기준 좌표, 2XL 대비 mm, y 위(+).
+#   화면(view.json, y 아래로 +)에서 기준점이 움직인 양 = (sx × Δx, −Δy) — sx 는 조각마다 «x 가 화면에서 어느 쪽인가».
+#     뒤판: 좌우 대칭이라 한 규칙이 두 점(R=+1·L=−1)을 움직인다 · 앞판·소매 −1 · 바지 앞판 −1 · 뒤판 +1
+#     (gas_warmup_grade.py top_cards·pants_cards 의 카드 이동량 부호 그대로 — 시험이 «view 에서 읽은 규칙 = 검산.json 규칙» 으로 확인)
+GRADE_SIZES = ["S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL"]
+BASE_SIZE = "2XL"                                           # 규칙의 0 점 — 이 사이즈는 움직이지 않는다
+RULE_FRAME = {
+    "top": {
+        "뒤판": {"옆밑단": [["옆밑단R", 1], ["옆밑단L", -1]], "겨드랑이": [["겨드랑이R", 1], ["겨드랑이L", -1]],
+                 "목옆": [["목옆R", 1], ["목옆L", -1]], "뒤목중심": [["뒤목중심", 1]]},
+        "앞판": {k: [[k, -1]] for k in ("앞중심목", "목옆", "겨드랑이", "옆밑단")},
+        "소매": {k: [[k, -1]] for k in ("밑단앞", "밑단뒤", "겨드랑이앞", "겨드랑이뒤", "목앞", "목뒤", "어깨")},
+    },
+    "bottom": {
+        "앞판": {k: [[k, -1]] for k in ("옆밑단", "안솔기밑단", "가랑이", "허리옆", "허리중심")},
+        "뒤판": {k: [[k, 1]] for k in ("옆밑단", "안솔기밑단", "가랑이", "허리옆", "허리중심")},
+    },
+}
+LOCK_X = [["top", "뒤판", "뒤목중심"], ["top", "앞판", "앞중심목"]]   # 가운데선 점 — 가로로 움직이면 좌우가 비뚤어진다(세로만)
+RULE_MAX_MM = 400.0                                         # 규칙 값 상한(오타 방어 — 실제 규칙은 ±100mm 안)
+# 맞물림 검산(«미리보기» 초록/빨강) — 검산.json 값이 목표에서 허용 안이면 초록. 목표 None = 2XL 값(원본 차를 지킨다)
+MESH = {
+    "top": [("raglan_front", "앞 래글런 몸판=소매", "상의 검산", "앞 래글런 몸판−소매", 0.0, 0.5),
+            ("raglan_back", "뒤 래글런 몸판=소매", "상의 검산", "뒤 래글런 몸판−소매", 0.0, 0.5),
+            ("side", "옆선 앞=뒤", "상의 검산", "옆선 앞−뒤", 0.0, 0.5),
+            ("sleeve_under", "소매 밑선 앞=뒤", "상의 검산", "소매 밑선 앞−뒤", 0.0, 0.5)],
+    "bottom": [("inseam", "안솔기 앞−뒤(2XL 차 유지)", "하의 검산", "안솔기 앞−뒤", None, 0.5),
+               ("pants_side_front", "앞판 옆선=앞배색", "하의 검산", "앞판 옆선−앞배색", 0.0, 1.0),
+               ("pants_side_back", "뒤판 옆선=뒤배색", "하의 검산", "뒤판 옆선−뒤배색", 0.0, 1.0)],
+}
 
 
 class ServiceError(RuntimeError):
@@ -169,6 +206,161 @@ def engine_version():
     return {"commit": head, "dirty": bool(head and head.endswith("+dirty")), "source": "git"}
 
 
+def vm_status_mb():
+    """리눅스 /proc/self/status 의 VmPeak(주소 공간 최고치)·VmHWM(실제 RAM 최고치) MB — 안전띠 상한(RLIMIT_AS)과 견줄 숫자.
+    리눅스가 아니면 빈 dict"""
+    out = {}
+    try:
+        with open("/proc/self/status", encoding="ascii", errors="replace") as f:
+            for line in f:
+                for key, name in (("VmPeak:", "vm_peak_mb"), ("VmHWM:", "vm_hwm_mb")):
+                    if line.startswith(key):
+                        out[name] = round(int(line.split()[1]) / 1024, 1)        # kB → MB
+    except Exception:
+        pass
+    return out
+
+
+# ════════ 규칙표 — 읽기·검사·합치기·맞물림 판정 (표준 라이브러리만 — 서버가 불러와도 엔진이 돌지 않는다) ════════
+def _num(v):
+    """진짜 유한한 숫자인가 — 참·거짓·NaN·무한대, float 로 못 바꾸는 아주 큰 정수(400자리 등 → OverflowError)는 아니다"""
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        return False
+    try:
+        f = float(v)
+    except (OverflowError, ValueError):
+        return False
+    return f == f and abs(f) != float("inf")
+
+
+def rules_from_view(view):
+    """view.json 에서 규칙표를 읽어 낸다 — 기준점이 사이즈마다 움직인 양을 2XL 대비로 재서 RULE_FRAME 부호로 되돌린다.
+    반환 {조각: {기준점: {사이즈: [Δx, Δy]}}} (0.01mm 반올림 — view.json 좌표 단위가 0.01mm 라 그 이상은 정확하지 않다).
+    왜: 1단계에서 올린 버전·2단계 다시 만든 버전에는 규칙표 파일이 없다. 그 버전이 «실제로 보여 주는 모양» 의 규칙을 그대로 꺼낸다."""
+    try:
+        group = view["style"]["group"]; q = float(view["q"])
+        frame = RULE_FRAME[group]
+    except Exception:
+        raise ServiceError("이 스타일은 그레이딩 규칙을 읽을 수 없습니다(옷 종류를 모름).")
+    if BASE_SIZE not in view.get("sizes", {}):
+        raise ServiceError(f"view.json 에 기준 사이즈({BASE_SIZE})가 없습니다.")
+    sizes = [s for s in GRADE_SIZES if s in view["sizes"]]
+    cache = {}
+
+    def node(sid, piece, nm):
+        k = (sid, piece)
+        if k not in cache:
+            cache[k] = next((p for p in view["sizes"][sid]["pieces"] if p.get("name") == piece), None)
+        p = cache[k]
+        if p is None or nm not in (p.get("nodes") or {}):
+            raise ServiceError(f"view.json 의 {sid} {piece} 에 기준점 «{nm}» 이 없습니다.")
+        i = p["nodes"][nm]
+        return p["seam"][2 * i] * q, p["seam"][2 * i + 1] * q
+
+    out = {}
+    for pc, pts in frame.items():
+        out[pc] = {}
+        for k, nodes in pts.items():
+            out[pc][k] = {}
+            for s in sizes:
+                xs, ys = [], []
+                for nm, sx in nodes:
+                    (x, y), (bx, by) = node(s, pc, nm), node(BASE_SIZE, pc, nm)
+                    xs.append(sx * (x - bx)); ys.append(-(y - by))
+                out[pc][k][s] = [round(sum(xs) / len(xs), 2) + 0.0, round(sum(ys) / len(ys), 2) + 0.0]   # +0.0 = -0.0 없애기
+    return out
+
+
+def check_rules(group, table, full=False):
+    """규칙표(일부 또는 전체)를 검사해 깨끗한 사본을 돌려준다. 틀리면 ServiceError(한국어 — 화면에 그대로 보여도 된다).
+    full=True 면 RULE_FRAME 의 모든 조각·기준점·사이즈가 있어야 한다(엔진에 넘기는 표)."""
+    frame = RULE_FRAME.get(group)
+    if frame is None:
+        raise ServiceError(f"모르는 옷 종류: {group}")
+    if not isinstance(table, dict):
+        raise ServiceError("규칙표는 {조각: {기준점: {사이즈: [Δx, Δy]}}} 모양이어야 합니다.")
+    lock = {(g, p, k) for g, p, k in LOCK_X}
+    out = {}
+    for pc, pts in table.items():
+        if pc not in frame:
+            raise ServiceError(f"그레이딩할 수 없는 조각: {str(pc)[:30]}")
+        if not isinstance(pts, dict):
+            raise ServiceError(f"{pc} 규칙 모양이 다릅니다.")
+        for k, bys in pts.items():
+            if k not in frame[pc]:
+                raise ServiceError(f"{pc} 에 «{str(k)[:30]}» 기준점이 없습니다.")
+            if not isinstance(bys, dict):
+                raise ServiceError(f"{pc} {k} 규칙 모양이 다릅니다.")
+            for s, v in bys.items():
+                if s not in GRADE_SIZES:
+                    raise ServiceError(f"모르는 사이즈: {str(s)[:20]}")
+                if not (isinstance(v, (list, tuple)) and len(v) == 2 and all(_num(a) for a in v)):
+                    raise ServiceError(f"{pc} {k} {s} 값은 숫자 두 개 [Δx, Δy] 여야 합니다.")
+                dx, dy = float(v[0]), float(v[1])
+                if abs(dx) > RULE_MAX_MM or abs(dy) > RULE_MAX_MM:
+                    raise ServiceError(f"{pc} {k} {s} 이동량이 너무 큽니다(±{RULE_MAX_MM:.0f}mm 이하).")
+                if s == BASE_SIZE and (abs(dx) > 1e-6 or abs(dy) > 1e-6):
+                    raise ServiceError(f"기준 사이즈({BASE_SIZE})는 움직이지 않습니다 — {pc} {k}")
+                if (group, pc, k) in lock and abs(dx) > 1e-6:
+                    raise ServiceError(f"{pc} {k} 는 가운데선 점이라 가로(Δx)는 0 이어야 합니다.")
+                out.setdefault(pc, {}).setdefault(k, {})[s] = [dx, dy]
+    if full:
+        miss = [f"{pc}/{k}/{s}" for pc, pts in frame.items() for k in pts for s in GRADE_SIZES if s not in out.get(pc, {}).get(k, {})]
+        if miss:
+            raise ServiceError("규칙표에 빠진 칸이 있습니다: " + ", ".join(miss[:5]) + (" …" if len(miss) > 5 else ""))
+    return out
+
+
+def merge_rules(base, changes):
+    """base(전체 표) 위에 changes(일부 — 바꾼 칸만, 값은 최종 규칙)를 얹은 새 표"""
+    out = {pc: {k: {s: list(v) for s, v in bys.items()} for k, bys in pts.items()} for pc, pts in base.items()}
+    for pc, pts in (changes or {}).items():
+        for k, bys in pts.items():
+            for s, v in bys.items():
+                out.setdefault(pc, {}).setdefault(k, {})[s] = [float(v[0]), float(v[1])]
+    return out
+
+
+def diff_rules(base, new, eps=0.005):
+    """바뀐 칸 목록 — [{"piece","point","size","from","to"}] (기록·화면 표시용)"""
+    out = []
+    for pc, pts in new.items():
+        for k, bys in pts.items():
+            for s, v in bys.items():
+                b = base.get(pc, {}).get(k, {}).get(s)
+                if b is None or abs(b[0] - v[0]) > eps or abs(b[1] - v[1]) > eps:
+                    out.append({"piece": pc, "point": k, "size": s, "from": b, "to": [round(v[0], 2), round(v[1], 2)]})
+    return out
+
+
+def mesh_checks(report, group):
+    """맞물림 판정 — 검산.json(그레이딩이 잰 값)을 목표·허용과 견준다 → {"ok", "sizes": {사이즈: [칸…]}}"""
+    rows_by, all_ok = {}, True
+    for s in GRADE_SIZES:
+        if s not in report: continue
+        rows = []
+        for key, label, sect, name, target, tol in MESH[group]:
+            v = (report[s].get(sect) or {}).get(name)
+            t = target if target is not None else (report.get(BASE_SIZE, {}).get(sect) or {}).get(name)
+            ok = None if (not _num(v) or not _num(t)) else abs(v - t) <= tol + 1e-9
+            if ok is False: all_ok = False
+            rows.append({"key": key, "label": label, "value": v, "target": t, "tol": tol, "ok": ok})
+        rows_by[s] = rows
+    return {"ok": all_ok, "sizes": rows_by}
+
+
+def max_rule_gap(a, b):
+    """두 규칙표가 가장 크게 다른 칸(mm) — «넘긴 규칙» 과 «만든 모양에서 다시 읽은 규칙» 견주기(부호·틀 실수 잡기)"""
+    worst = 0.0
+    for pc, pts in a.items():
+        for k, bys in pts.items():
+            for s, v in bys.items():
+                w = (b.get(pc, {}).get(k, {}) or {}).get(s)
+                if w is None: return float("inf")
+                worst = max(worst, abs(v[0] - w[0]), abs(v[1] - w[1]))
+    return round(worst, 4)
+
+
 # ════════ 단계 — 일꾼 프로세스 안에서만 돈다 ════════
 def _run_script(name, argv):
     """명령줄 인자를 import 시점에 읽는 엔진 파일을 «그 인자를 쥐여 준 채» 새 이름공간에서 돌린다(파일은 안 고친다)"""
@@ -207,6 +399,11 @@ def _view_step(src, aama_dir, out, groups, when, ev):
         bad = [r for r in rep if r[4] is False]
         styles[G["style_id"]] = {"group": g, "view": vpath, "zip": zpath, "files": len(files), "view_bytes": os.path.getsize(vpath),
                                  "zip_bytes": os.path.getsize(zpath), "checks_bad": [list(r) for r in bad]}
+        try:                                                  # 맞물림 판정(3단계 화면의 초록/빨강) — 다시 만들기에도 같이 싣는다
+            with open(os.path.join(src, "graded", "검산.json"), encoding="utf-8") as f:
+                styles[G["style_id"]]["mesh"] = mesh_checks(json.load(f), g)
+        except Exception:
+            styles[G["style_id"]]["mesh"] = None
     return styles
 
 
@@ -253,6 +450,61 @@ def build_all(work, sources=None, groups=("top", "bottom"), aama=True, font=None
             "made_at": when}
 
 
+def regrade_all(work, group, rules, sources=None, full=False, font=None, emit=False):
+    """F10 3단계 — 규칙표(전체)를 받아 그 옷을 다시 그레이딩한다. 일꾼 프로세스 안에서 부른다.
+       full=False(미리보기): 그레이딩 시트·AAMA 를 안 만든다(약 10초) — 화면 자료와 맞물림 판정만
+       full=True(새 버전 저장): 사이즈별 DXF·PDF·.ai + AAMA·RUL·A4 까지(다시 만들기와 같은 묶음)
+       돌려주는 것: build_all 과 같은 모양 + rules(넘긴 표) · mesh(맞물림) · rules_echo_max_mm(만든 모양에서 다시 읽은 규칙과의 차)"""
+    if group not in RULE_FRAME:
+        raise ServiceError(f"모르는 옷 종류: {group}")
+    table = check_rules(group, rules, full=True)                # 엔진에 넘기기 전에 — 빠진 칸이 있으면 트루잉 없는 표준 값이 섞인다
+    src = _check_sources(sources)
+    work = os.path.abspath(work); os.makedirs(work, exist_ok=True)
+    gw = os.path.join(work, "gas-warmup"); d2, dg, ds = (os.path.join(gw, x) for x in ("2xl", "graded", "spec"))
+    da, dc = os.path.join(work, "aama"), os.path.join(work, "cad")
+    if HERE not in sys.path: sys.path.insert(0, HERE)
+    fnt = font or resolve_font()
+    when = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    ev = engine_version()
+    rpath = os.path.join(work, "rules_in.json")
+    with open(rpath, "w", encoding="utf-8") as f:
+        json.dump({group: table}, f, ensure_ascii=False)
+    timings, t0 = {}, time.time()
+    with font_shim(fnt["path"]):
+        _step(1, "build", emit); t = time.time()
+        _run_script("gas_warmup_build.py", [src["top"], src["bottom"], d2]); timings["build"] = round(time.time() - t, 1)
+        _step(2, "grade", emit); t = time.time()
+        _run_script("gas_warmup_grade.py", ["--pieces", os.path.join(d2, "pieces_after.json"), "--std-top", src["std_top"],
+                                            "--std-pants", src["std_pants"], "--src-top", src["top"], "--src-bottom", src["bottom"],
+                                            "--out", dg, "--rules", rpath] + ([] if full else ["--no-export"]))
+        timings["grade"] = round(time.time() - t, 1)
+        _step(3, "spec", emit); t = time.time()
+        import gas_warmup_spec
+        gas_warmup_spec.main(["--pieces", os.path.join(d2, "pieces_after.json"), "--graded", os.path.join(dg, "graded.json"),
+                              "--out", ds]); timings["spec"] = round(time.time() - t, 1)
+        _step(4, "aama", emit); t = time.time()
+        if full:
+            import aama as A, tile_pdf
+            A.FONT = fnt["path"]
+            A.main(["--graded", os.path.join(dg, "graded.json"), "--out", da])
+            ko, en = ("상의", "TOP") if group == "top" else ("하의", "BOTTOM")
+            one = os.path.join(da, f"GAS_WARMUP_{en}_2XL_1대1.pdf")
+            if os.path.isfile(one):
+                tile_pdf.tile(one, os.path.join(da, f"{ko}_2XL_A4분할.pdf"))
+        timings["aama"] = round(time.time() - t, 1)
+        _step(5, "view", emit); t = time.time()
+        styles = _view_step(gw, da if full else None, dc, [group], when, ev); timings["view"] = round(time.time() - t, 1)
+    for sid, s in styles.items():                               # 넘긴 규칙이 정말 그대로 들어갔나 — 만든 모양에서 다시 읽어 견준다
+        with open(s["view"], encoding="utf-8") as f:
+            echo = rules_from_view(json.load(f))
+        s["rules_echo_max_mm"] = max_rule_gap(table, echo)
+        if s["rules_echo_max_mm"] > 0.1:
+            raise ServiceError(f"넘긴 규칙과 만든 모양이 {s['rules_echo_max_mm']}mm 어긋납니다(엔진·화면 부호 확인 필요).")
+    timings["total"] = round(time.time() - t0, 1)
+    return {"ok": True, "mode": "regrade", "full": bool(full), "work": work, "styles": styles, "font": fnt, "engine": ev,
+            "rules": table, "timings_s": timings, "peak_rss_mb": peak_rss_mb(), "made_at": when}
+
+
 def build_view(src, out, aama_dir=None, groups=("top", "bottom")):
     """입력 B — 이미 만든 명세·그레이딩 결과 폴더에서 화면 자료만(⑤). 엔진 계산을 다시 하지 않아 가볍다."""
     if HERE not in sys.path: sys.path.insert(0, HERE)
@@ -271,12 +523,33 @@ def rebuild(work, groups=("top", "bottom"), sources=None, aama=True, timeout=180
              ③ 엔진이 죽어도 서버는 산다.
     on_step(i, total, name) — 단계가 넘어갈 때마다(진행률). 반환: build_all 의 결과 + log(일꾼 출력 파일 주소)."""
     work = os.path.abspath(work); os.makedirs(work, exist_ok=True)
-    res_path, log_path = os.path.join(work, "result.json"), os.path.join(work, "engine.log")
+    res_path = os.path.join(work, "result.json")
     cmd = [python or sys.executable, os.path.abspath(__file__), "build", "--work", work, "--result", res_path, "--emit-steps",
            "--groups", *groups]
     if not aama: cmd.append("--no-aama")
     for k in SOURCE_KEYS:
         if sources and sources.get(k): cmd += [f"--{k.replace('_', '-')}", sources[k]]
+    return _spawn(cmd, work, res_path, timeout, on_step, env)
+
+
+def regrade(work, group, rules, full=False, sources=None, timeout=900, python=None, on_step=None, env=None):
+    """서버가 부르는 함수(F10 3단계) — 규칙표(전체)로 다시 그레이딩. rebuild 와 같은 «따로 띄운 일꾼» 길.
+    rules 는 부모에서 먼저 검사한다(틀린 표로 1분짜리 일꾼을 띄우지 않게)."""
+    table = check_rules(group, rules, full=True)
+    work = os.path.abspath(work); os.makedirs(work, exist_ok=True)
+    res_path, rfile = os.path.join(work, "result.json"), os.path.join(work, "rules_req.json")
+    with open(rfile, "w", encoding="utf-8") as f:
+        json.dump(table, f, ensure_ascii=False)
+    cmd = [python or sys.executable, os.path.abspath(__file__), "regrade", "--work", work, "--group", group, "--rules-file", rfile,
+           "--result", res_path, "--emit-steps"] + (["--full"] if full else [])
+    for k in SOURCE_KEYS:
+        if sources and sources.get(k): cmd += [f"--{k.replace('_', '-')}", sources[k]]
+    return _spawn(cmd, work, res_path, timeout, on_step, env)
+
+
+def _spawn(cmd, work, res_path, timeout, on_step, env):
+    """일꾼 프로세스를 띄워 출력은 engine.log 에, 단계 줄(@@STEP)은 on_step 으로 — 끝나면 result.json 을 읽어 돌려준다"""
+    log_path = os.path.join(work, "engine.log")
     e = dict(os.environ if env is None else env); e["PYTHONIOENCODING"] = "utf-8"; e.setdefault("PYTHONUTF8", "1")
     t0 = time.time()
     p = subprocess.Popen(cmd, cwd=work, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
@@ -369,6 +642,12 @@ def main(argv=None):
     v = sub.add_parser("view", help="이미 만든 명세·검산 결과 → view.json + exports.zip (입력 B)")
     v.add_argument("--src", required=True); v.add_argument("--out", required=True); v.add_argument("--aama")
     v.add_argument("--groups", nargs="*", default=["top", "bottom"]); v.add_argument("--result")
+    g = sub.add_parser("regrade", help="규칙표(전체 JSON) → 그 옷만 다시 그레이딩 (F10 3단계)")
+    g.add_argument("--work", required=True); g.add_argument("--group", required=True, choices=sorted(RULE_FRAME))
+    g.add_argument("--rules-file", required=True, help="{조각: {기준점: {사이즈: [Δx, Δy]}}} — 전체 표")
+    g.add_argument("--full", action="store_true", help="그레이딩 시트·AAMA 까지(새 버전 저장용). 없으면 미리보기")
+    g.add_argument("--result"); g.add_argument("--emit-steps", action="store_true")
+    for k in SOURCE_KEYS: g.add_argument(f"--{k.replace('_', '-')}")
     sub.add_parser("font", help="쓰게 될 글꼴")
     a = ap.parse_args(argv)
     if a.cmd == "font":
@@ -376,17 +655,23 @@ def main(argv=None):
     try:
         if a.cmd == "build":
             r = build_all(a.work, {k: getattr(a, k) for k in SOURCE_KEYS}, a.groups, not a.no_aama, emit=a.emit_steps)
+        elif a.cmd == "regrade":
+            with open(a.rules_file, encoding="utf-8") as f: rules = json.load(f)
+            r = regrade_all(a.work, a.group, rules, {k: getattr(a, k) for k in SOURCE_KEYS}, a.full, emit=a.emit_steps)
         else:
             r = build_view(a.src, a.out, a.aama, a.groups)
     except ServiceError as e:
         print(f"[service] 실패: {e}", flush=True); return 2
     r["peak_rss_mb"] = peak_rss_mb()                          # 끝난 뒤 다시 — 마지막 단계까지 포함한 최고치
+    r["guard"] = os.environ.get("GRADER_ENGINE_GUARD")        # 그레이더 일꾼 안전띠(sitecustomize)가 건 것 — 없으면 None(명령줄)
+    r.update(vm_status_mb())                                  # 리눅스: VmPeak·VmHWM (안전띠 상한과 견줄 숫자)
     if getattr(a, "result", None):
         tmp = a.result + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f: json.dump(r, f, ensure_ascii=False, indent=1)
         os.replace(tmp, a.result)
-    print(f"[service] 끝 · 최고 메모리 {r['peak_rss_mb']} MB · " + " · ".join(f"{k} {s['view_bytes']:,}B/{s['zip_bytes']:,}B"
-                                                                       for k, s in r["styles"].items()), flush=True)
+    print(f"[service] 끝 · 최고 메모리 {r['peak_rss_mb']} MB" + (f" · VmPeak {r['vm_peak_mb']} MB" if r.get("vm_peak_mb") else "")
+          + (f" · 안전띠 {r['guard']}" if r.get("guard") else "") + " · "
+          + " · ".join(f"{k} {s['view_bytes']:,}B/{s['zip_bytes']:,}B" for k, s in r["styles"].items()), flush=True)
     return 0
 
 

@@ -234,9 +234,17 @@ class HeavyGate:
         self.waiting_excl = 0        # 차례를 기다리는 엔진 수
 
     @contextlib.contextmanager
-    def shared_use(self):
+    def shared_use(self, on_wait=None):
+        """합성 차례. on_wait — 엔진 때문에 «기다려야 할 때» 한 번 불린다(작업 화면에 «재단 패턴 작업이 끝나기를 기다림»)."""
         with self._cv:
+            told = False
             while self.exclusive or self.waiting_excl:
+                if on_wait and not told:
+                    told = True
+                    try:
+                        on_wait()
+                    except Exception:
+                        pass                     # 표시 실패로 합성이 멈추면 안 된다
                 self._cv.wait()
             self.shared += 1
         try:
@@ -247,14 +255,21 @@ class HeavyGate:
                 self._cv.notify_all()
 
     @contextlib.contextmanager
-    def exclusive_use(self):
+    def exclusive_use(self, timeout=None):
+        """엔진 차례. timeout(초) 안에 돌던 합성이 안 끝나면 TimeoutError — 엔진 작업은 실패로 끝나고 «대기 표시» 가 풀린다.
+        (상한이 없으면 멈춘 합성 하나에 엔진·그 뒤 합성까지 영영 묶인다 — 2단계 리뷰 지적)"""
+        deadline = None if timeout is None else time.monotonic() + float(timeout)
         with self._cv:
             self.waiting_excl += 1
             try:
                 while self.exclusive or self.shared:
-                    self._cv.wait()
+                    left = None if deadline is None else deadline - time.monotonic()
+                    if left is not None and left <= 0:
+                        raise TimeoutError("합성 작업이 끝나기를 기다리다 시간이 다 됐습니다")
+                    self._cv.wait(left)
             finally:
                 self.waiting_excl -= 1
+                self._cv.notify_all()            # 기다리다 포기(예외)해도 «엔진 뒤에 선» 합성들이 깨어나 다시 본다
             self.exclusive = True
         try:
             yield

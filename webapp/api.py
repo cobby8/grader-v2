@@ -948,7 +948,14 @@ def _run_job_thread(job_id: str, preset_path: str, design_path: str,
     """
     try:
         # 재단 패턴 엔진이 도는 동안에는 기다렸다가 시작한다(메모리 512MB — state.HEAVY 설명). 합성끼리는 지금처럼 같이 돈다.
-        with state.HEAVY.shared_use():
+        waited = []
+
+        def _on_wait():                       # 엔진 때문에 기다리는 동안 화면에 사유를 보인다(멈춘 줄 알지 않게)
+            waited.append(1)
+            state.update_job(job_id, stage="wait_engine", stage_ko="재단 패턴 작업이 끝나기를 기다림")
+        with state.HEAVY.shared_use(on_wait=_on_wait):
+            if waited:
+                state.update_job(job_id, stage="running", stage_ko=None)
             result = run_job(
                 preset=preset_path,
                 design_pdf=design_path,

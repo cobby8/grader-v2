@@ -88,6 +88,17 @@
   svg .hi2 { fill: none; stroke: var(--cad-hi); stroke-width: 1.2; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
   svg .mpt { fill: var(--cad-hi); stroke: var(--paper); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
   svg.no-lbl .lbl, svg.no-node .node { display: none; }
+  /* 그레이딩(F10 3단계) — 끌 수 있는 기준점 손잡이 · 옮긴 자리까지 점선 */
+  svg .gh { fill: var(--paper); stroke: var(--stiz-red); stroke-width: 2; vector-effect: non-scaling-stroke; cursor: grab; }
+  svg .gh.is-moved { fill: var(--amber-600); }
+  svg .gh.is-sel { stroke: var(--blue-600); stroke-width: 3; }
+  svg .gh.is-ro { cursor: pointer; }
+  svg .gl { stroke: var(--amber-600); stroke-width: 1.2; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; }
+  .gtable input { width: 70px; height: 26px; padding: 0 4px; font: var(--text-caption); text-align: right; }
+  .gtable td.is-changed input { background: color-mix(in srgb, var(--amber-600) 18%, transparent); }
+  .mesh td.ok { color: var(--green-700); } .mesh td.bad { color: var(--red-600); font-weight: 700; }
+  .mesh td.na { color: var(--text-subtle); }
+  .grade-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
   svg.no-cut .cut { stroke: none; } svg.no-int .int, svg.no-notch .notch, svg.no-hole .hole, svg.no-grain .grain, svg.no-fold .fold { display: none; }
 
   /* ===== 왼쪽 메뉴 배경: 메뉴 자체는 화면 높이(sticky)라 긴 페이지 아래쪽이 비어 보였다 → 같은 폭의 띠를 바탕에 칠한다 ===== */
@@ -164,6 +175,8 @@
           <h2 id="styleTitle"></h2>
           <select class="input" id="verSel" style="width:auto;height:32px" aria-label="버전"></select>
           <span id="backupBadge"></span>
+          <span id="lockBadge"></span>
+          <button class="btn btn--sm btn--secondary hidden" id="lockBtn" type="button" title="공장에 보낸 판으로 잠급니다 — 이후 이 버전은 고칠 수 없습니다(관리자)"><span class="material-symbols-outlined">lock</span>공장 보냄으로 잠그기</button>
           <button class="btn btn--sm btn--secondary hidden" id="rebuildBtn" type="button" title="서버의 엔진으로 원본부터 다시 만들어 새 버전으로 쌓습니다(관리자)"><span class="material-symbols-outlined">autorenew</span>다시 만들기</button>
           <span class="cad-card__sub" id="rebuildStatus" role="status" aria-live="polite"></span>
         </div>
@@ -174,6 +187,7 @@
               <div class="seg" id="modeSeg" role="tablist">
                 <button type="button" data-mode="one" class="is-active">한 사이즈</button>
                 <button type="button" data-mode="overlay">겹쳐 보기</button>
+                <button type="button" data-mode="grade" id="gradeTab" class="hidden">그레이딩</button>
               </div>
               <select class="input" id="pieceSel" style="width:auto;height:32px" aria-label="조각"></select>
               <button class="btn btn--sm btn--secondary" id="measureBtn" type="button"><span class="material-symbols-outlined">straighten</span>길이 재기</button>
@@ -202,7 +216,7 @@
                   <marker id="arrE" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink-500)"/></marker>
                   <marker id="arrS" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink-500)"/></marker>
                 </defs>
-                <g id="gDraw"></g><g id="gHi"></g>
+                <g id="gDraw"></g><g id="gHi"></g><g id="gGrade"></g>
               </svg>
               <div class="cad-zoom">
                 <button class="btn btn--sm btn--secondary" id="zIn" type="button" aria-label="확대"><span class="material-symbols-outlined">add</span></button>
@@ -218,6 +232,30 @@
               <h3><span class="material-symbols-outlined">straighten</span>길이 재기 <span class="cad-card__sub" id="measureSize"></span></h3>
               <div id="measureBox" class="cad-card__sub">«길이 재기» 를 켜고 재봉선 위 두 점을 누르세요. 같은 조각이면 재봉선 따라 길이도 잽니다(단위 mm, 그림 확대와 무관).</div>
             </div>
+            <div class="card hidden" id="gradeCard">
+              <h3><span class="material-symbols-outlined">tune</span>그레이딩 규칙 <span class="cad-card__sub" id="gradeSub"></span></h3>
+              <div class="cad-card__sub" id="gradeMsg"></div>
+              <div class="grade-row hidden" id="spreadRow">
+                <span class="cad-card__sub">끌면</span>
+                <div class="seg" id="spreadSeg">
+                  <button type="button" data-spread="step" class="is-active" title="옮긴 양을 «사이즈 한 칸 이동량» 으로 보고 모든 사이즈에 칸 수만큼 나눠 줍니다">한 칸 비례</button>
+                  <button type="button" data-spread="one" title="지금 사이즈의 규칙만 바꿉니다">이 사이즈만</button>
+                </div>
+              </div>
+              <div class="grade-row"><select class="input" id="gPointSel" style="width:100%;height:30px" aria-label="기준점"></select></div>
+              <div id="gradePoint"></div>
+              <div class="grade-row hidden" id="gradeActions">
+                <button class="btn btn--sm btn--primary" type="button" id="gPreview"><span class="material-symbols-outlined">preview</span>미리보기</button>
+                <button class="btn btn--sm btn--ghost" type="button" id="gReset">되돌리기</button>
+                <button class="btn btn--sm btn--ghost hidden" type="button" id="gToggle">원래 그림</button>
+              </div>
+              <div class="cad-card__sub" id="gStatus" role="status" aria-live="polite" style="margin-top:6px"></div>
+              <div id="meshBox"></div>
+              <div class="grade-row hidden" id="gSaveBox">
+                <input class="input" id="gNote" maxlength="500" placeholder="메모(예: 겨드랑이 1mm/칸)" style="flex:1 1 160px;height:30px" />
+                <button class="btn btn--sm btn--primary" type="button" id="gSave" disabled><span class="material-symbols-outlined">save</span>저장(새 버전)</button>
+              </div>
+            </div>
             <div class="card">
               <h3><span class="material-symbols-outlined">fact_check</span>검산표 <span class="cad-card__sub" id="checkSize"></span></h3>
               <div id="checkBox"></div>
@@ -226,6 +264,14 @@
               <h3><span class="material-symbols-outlined">download</span>내려받기</h3>
               <div id="dlBox" class="dl-grid"></div>
               <div class="muted-note">올린 파일 그대로(지문 같음) 내려받습니다.</div>
+              <details id="pickBox" style="margin-top:8px">
+                <summary class="cad-card__sub" style="cursor:pointer">골라서 묶어 받기</summary>
+                <div class="cad-chips" id="pickKinds" style="margin-top:6px"></div>
+                <div class="grade-row">
+                  <label class="chip"><input type="checkbox" id="pickThisSize" />지금 사이즈만</label>
+                  <button class="btn btn--sm btn--secondary" type="button" id="pickDl"><span class="material-symbols-outlined">folder_zip</span>묶어 받기</button>
+                </div>
+              </details>
             </div>
             <div class="card" id="infoCard">
               <h3><span class="material-symbols-outlined">info</span>이 판</h3>
@@ -301,7 +347,7 @@ function pts(flat) { const q = S.view.q, out = []; for (let k = 0; k < flat.leng
 // 조각 하나의 mm 자료를 한 번만 풀어 둔다(재봉선 누적 길이까지 — 길이 재기용)
 const CACHE = new Map();
 function P(sid, name) {
-  const key = S.style + "|" + S.ver + "|" + sid + "|" + name;
+  const key = S.style + "|" + S.ver + "|" + (S.viewTag || "base") + "|" + sid + "|" + name;   // viewTag: 원래 그림 / 미리보기 그림
   if (CACHE.has(key)) return CACHE.get(key);
   const raw = S.view.sizes[sid].pieces.find((p) => p.name === name);
   const seam = pts(raw.seam), cum = [0];
@@ -376,7 +422,9 @@ async function openStyle(id, ver) {
     view = await r.json();
     ver = r.headers.get("X-Cad-Version") || ver;          // «latest» 로 열었으면 실제 번호로
   } catch (e) { if (!/로그인/.test(String(e.message))) toast("fail", "error", "열지 못했어요", e.message); return; }
-  S.style = id; S.ver = ver; S.view = view; S.picks = []; S.pickCheck = null;
+  S.style = id; S.ver = ver; S.view = view; S.picks = []; S.pickCheck = null; S.viewTag = "base";
+  gradeReset();                                            // 다른 판을 열면 그레이딩 편집·미리보기는 처음부터
+  if (S.mode === "grade") S.mode = "one";
   const sizes = view.style.sizes;
   S.size = sizes.includes(view.style.base_size) ? view.style.base_size : sizes[0];
   S.overlay = new Set(sizes.filter((x) => x !== view.style.graded_from));
@@ -389,13 +437,19 @@ async function openStyle(id, ver) {
   $("#pieceSel").innerHTML = `<option value="">조각 전체</option>` + view.style.pieces.map((n) => `<option>${esc(n)}</option>`).join("");
   S.piece = "";
   // 이 버전의 기록(누가·어떻게 만들었나 · PDF 글꼴) — 정보 칸용. 못 읽어도 그림은 그대로 보인다
-  S.meta = null;
+  S.meta = null; S.history = [];
   try { const r2 = await apiFetch(`/api/cad/styles/${encodeURIComponent(id)}`);
-    if (r2.ok) { const d = await r2.json(); S.meta = (d.history || []).find((h) => String(h.version) === String(ver)) || null; } } catch (e) {}
+    if (r2.ok) { const d = await r2.json(); S.history = d.history || []; S.meta = S.history.find((h) => String(h.version) === String(ver)) || null; } } catch (e) {}
+  if (S.style !== id || String(S.ver) !== String(ver)) return;   // 기다리는 사이 다른 판을 열었다
+  // 버전 고르기에 «공장 보냄» 표시
+  $("#verSel").querySelectorAll("option").forEach((o) => { const h = S.history.find((x) => String(x.version) === o.value);
+    o.textContent = "v" + o.value + (h && h.locked ? " · 공장 보냄" : "") + (h && h.regraded_from ? " · 다시 그레이딩" : ""); });
   $("#rebuildBtn").classList.toggle("hidden", !(S.canUpload && S.rebuildable.includes(id)));
   if (!S.rebuildJob) $("#rebuildStatus").textContent = "";
+  syncModeTabs(); renderLock();
   buildAlign(); renderChips(); renderInfo(); renderDownloads(); fitView(); draw(); renderChecks(); renderMeasure();
   try { history.replaceState(null, "", `#${id}/v${ver}`); } catch (e) {}
+  loadRules(id, ver);                                       // 그레이딩 규칙표(있으면 «그레이딩» 탭이 보인다) — 그림은 먼저 보인다
 }
 
 function renderChips() {
@@ -413,7 +467,7 @@ function renderChips() {
   }));
   $("#measureSize").textContent = "· " + sizeLabel(S.size);
 }
-function setSize(sid) { S.size = sid; S.picks = []; S.pickCheck = null; renderChips(); draw(); renderChecks(); renderMeasure(); renderDownloads(); }
+function setSize(sid) { S.size = sid; S.picks = []; S.pickCheck = null; renderChips(); draw(); renderChecks(); renderMeasure(); renderDownloads(); renderGrade(); }
 
 // 겹쳐 보기 맞춤: 원래 자리(그레이딩 기준점 고정) · 조각 가운데 · 기준점 하나
 function buildAlign() {
@@ -468,7 +522,7 @@ function draw() {
     }
     drawLabels(g, names, S.size, true);
   }
-  applyLayers(); drawHi(); applyVB();
+  applyLayers(); drawHi(); drawGrade(); applyVB();
 }
 function drawLabels(g, names, sid, nodes) {
   const gl = el("g", { id: "gLbl" }, g);
@@ -676,11 +730,18 @@ function renderDownloads() {
     btns.push(`<button class="btn btn--sm btn--secondary" type="button" data-dl="${k}">${KIND_LABEL[k]}</button>`);
   $("#dlBox").innerHTML = btns.join("");
   $("#dlBox").querySelectorAll("[data-dl]").forEach((b) => b.addEventListener("click", () => download(b, b.dataset.dl, b.dataset.size)));
+  renderPick();
 }
 function fileNameFrom(disp) {
   if (!disp) return ""; const m = /filename\*=UTF-8''([^;]+)/i.exec(disp);
   if (m) { try { return decodeURIComponent(m[1].trim()); } catch (e) {} }
   const m2 = /filename="?([^";]+)"?/i.exec(disp); return m2 ? m2[1].trim() : "";
+}
+async function saveBlob(res, fallback) {                    // 받은 파일을 브라우저 «내려받기» 로 넘긴다
+  const blob = await res.blob(); const url = URL.createObjectURL(blob); const a = document.createElement("a");
+  a.href = url; a.download = fileNameFrom(res.headers.get("Content-Disposition")) || fallback;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 4000);
+  toast("pass", "download", "내려받기 시작", a.download);
 }
 function fileUrl(kind, size) { return `/api/cad/styles/${encodeURIComponent(S.style)}/v/${encodeURIComponent(S.ver)}/files/${kind}` + (size ? `?size=${encodeURIComponent(size)}` : ""); }
 async function download(btn, kind, size) {
@@ -688,10 +749,7 @@ async function download(btn, kind, size) {
   try {
     const res = await apiFetch(fileUrl(kind, size));
     if (!res.ok) { toast("fail", "error", "내려받지 못했어요", await apiError(res) || ("서버 응답 " + res.status)); return; }
-    const blob = await res.blob(); const url = URL.createObjectURL(blob); const a = document.createElement("a");
-    a.href = url; a.download = fileNameFrom(res.headers.get("Content-Disposition")) || (kind + (size ? "_" + size : ""));
-    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 4000);
-    toast("pass", "download", "내려받기 시작", a.download);
+    await saveBlob(res, kind + (size ? "_" + size : ""));
   } catch (e) { if (!/로그인/.test(String(e.message))) toast("fail", "error", "내려받지 못했어요", "서버에 연결하지 못했습니다."); }
   finally { btn.disabled = false; }
 }
@@ -705,6 +763,8 @@ function renderInfo() {
     <dt>엔진</dt><dd>${esc(src.commit || "—")}</dd><dt>만든 때</dt><dd>${esc((src.made_at || "").replace("T", " "))}</dd>
     ${L.uploaded_at ? `<dt>올린 때</dt><dd>${esc(L.uploaded_at.replace("T", " "))}</dd>` : ""}
     ${M.rebuilt_from ? `<dt>만든 곳</dt><dd>서버에서 다시 만듦(v${esc(M.rebuilt_from)} 기준)</dd>` : ""}
+    ${M.regraded_from ? `<dt>만든 곳</dt><dd>규칙 ${Number(M.rule_changes_count) || 0}칸 바꿔 다시 그레이딩(v${esc(M.regraded_from)} 기준)</dd>` : ""}
+    ${M.locked ? `<dt>공장 보냄</dt><dd>${esc((M.locked.locked_at || "").replace("T", " "))}${M.locked.locked_by ? " · " + esc(M.locked.locked_by) : ""}</dd>` : ""}
     ${run.font_name ? `<dt>PDF 글꼴</dt><dd>${esc(run.font_name)}</dd>` : ""}</dl>
     ${isBuiltin ? `<div class="muted-note">${esc("서버에는 맑은 고딕이 없어 PDF 글자를 Droid Sans Fallback 으로 넣었습니다. 선·치수는 같고 글자 모양만 다릅니다.")}</div>` : ""}
     <div class="muted-note">${esc(src.note || "")}</div>`;
@@ -712,8 +772,12 @@ function renderInfo() {
 
 // ====== 단추들 ======
 function syncMode() {
+  syncModeTabs();
+  $("#layerTools").classList.toggle("hidden", S.mode === "overlay"); renderChips(); fitView(); draw(); renderGrade();
+}
+function syncModeTabs() {
   $("#modeSeg").querySelectorAll("button").forEach((x) => x.classList.toggle("is-active", x.dataset.mode === S.mode));
-  $("#layerTools").classList.toggle("hidden", S.mode === "overlay"); renderChips(); fitView(); draw();
+  $("#gradeCard").classList.toggle("hidden", S.mode !== "grade");
 }
 $("#modeSeg").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { S.mode = b.dataset.mode; S.pickCheck = null; syncMode(); }));
 $("#pieceSel").addEventListener("change", (e) => { S.piece = e.target.value; S.picks = []; buildAlign(); fitView(); draw(); renderMeasure(); });
@@ -734,8 +798,31 @@ window.addEventListener("resize", () => applyVB());
 $("#backBtn").addEventListener("click", () => { $("#styleView").classList.add("hidden"); $("#listView").classList.remove("hidden"); S.view = null; try { history.replaceState(null, "", location.pathname); } catch (e) {} loadList(); });
 $("#verSel").addEventListener("change", (e) => { CACHE.clear(); openStyle(S.style, e.target.value); });
 
-// ── 다시 만들기(관리자) — 서버 엔진으로 원본부터 다시 만들어 새 버전으로 ──
+// ── 작업 진행률 묻기(다시 만들기·미리보기·저장 공통) ──
+//   한 번 못 읽었다고 멈추지 않는다 — 연속 3번 실패해야 멈춘다(잠깐 끊긴 와이파이에 작업을 잃은 줄 알지 않게).
+//   404(서버가 다시 켜져 작업이 사라짐)는 다시 물어도 안 돌아오니 바로 멈춘다. 실패 사유는 글로 돌려준다.
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function pollJob(jobId, onTick, limitMs) {
+  const t0 = Date.now(); let fails = 0;
+  while (Date.now() - t0 < (limitMs || 30 * 60 * 1000)) {
+    await sleep(1200);
+    let pr = null, why = "서버에 연결하지 못했습니다";
+    try { pr = await apiFetch(`/api/cad/jobs/${encodeURIComponent(jobId)}`); }
+    catch (e) { if (/로그인/.test(String(e.message))) throw e; }
+    if (pr && pr.ok) {
+      fails = 0; const j = await pr.json(); if (onTick) onTick(j);
+      if (j.status === "done" || j.status === "error") return j;
+      continue;
+    }
+    if (pr) { why = (await apiError(pr)) || ("서버 응답 " + pr.status); if (pr.status === 404) throw new Error(why); }
+    if (++fails >= 3) throw new Error(why + " (3번 연속 못 읽음)");
+  }
+  throw new Error("오래 걸려요 — 잠시 뒤 목록에서 새 버전을 확인해 주세요.");
+}
+const pctOf = (j) => j.total ? Math.round(100 * (j.done || 0) / j.total) : 0;
+const onStyle = (id, ver) => S.view && S.style === id && (ver == null || String(S.ver) === String(ver)) && !$("#styleView").classList.contains("hidden");
+
+// ── 다시 만들기(관리자) — 서버 엔진으로 원본부터 다시 만들어 새 버전으로 ──
 $("#rebuildBtn").addEventListener("click", async () => {
   if (S.rebuildJob) return;
   const id = S.style, ver = S.ver;
@@ -746,28 +833,274 @@ $("#rebuildBtn").addEventListener("click", async () => {
   try {
     const r = await apiFetch(`/api/cad/styles/${encodeURIComponent(id)}/v/${encodeURIComponent(ver)}/rebuild`,
                              { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
-    if (r.status !== 202) { st.textContent = ""; toast("fail", "error", "시작하지 못했어요", await apiError(r) || ("서버 응답 " + r.status)); return; }
+    if (r.status !== 202) { const why = await apiError(r) || ("서버 응답 " + r.status); st.textContent = "시작 못 함: " + why; toast("fail", "error", "시작하지 못했어요", why); return; }
     const job = await r.json(); S.rebuildJob = job.job_id;
-    const t0 = Date.now();
-    while (Date.now() - t0 < 30 * 60 * 1000) {                 // 진행률 묻기(1.5초마다) — 끝나거나 실패하면 멈춘다
-      await sleep(1500);
-      const pr = await apiFetch(`/api/cad/jobs/${encodeURIComponent(job.job_id)}`);
-      if (!pr.ok) { st.textContent = ""; toast("fail", "error", "진행 상황을 못 읽었어요", await apiError(pr)); return; }
-      const j = await pr.json();
-      const pct = j.total ? Math.round(100 * (j.done || 0) / j.total) : 0;
-      st.textContent = (j.stage_ko || "진행 중") + " · " + pct + "%";
-      if (j.status === "error") { st.textContent = ""; toast("fail", "error", "다시 만들기 실패", j.error || ""); return; }
-      if (j.status === "done") {
-        const nv = j.result && j.result.version; st.textContent = "";
-        const b = (j.result && j.result.backup) || {};
-        toast(b.ok || b.skipped ? "pass" : "warn", "check_circle", "v" + nv + " 를 만들었어요", b.ok ? "창고에 보관하고 되읽어 확인했습니다." : (b.skipped ? "로컬에만 저장(창고 미설정)" : "창고 보관을 확인해 주세요"));
-        CACHE.clear(); await loadList(); await openStyle(id, nv);  // 새 버전으로 바로 이동
-        return;
-      }
+    const j = await pollJob(job.job_id, (p) => { st.textContent = (p.stage_ko || "진행 중") + " · " + pctOf(p) + "%"; });
+    if (j.status === "error") { st.textContent = "실패: " + (j.error || ""); toast("fail", "error", "다시 만들기 실패", j.error || ""); return; }
+    const nv = j.result && j.result.version; const b = (j.result && j.result.backup) || {};
+    st.textContent = "v" + nv + " 만듦";
+    toast(b.ok || b.skipped ? "pass" : "warn", "check_circle", "v" + nv + " 를 만들었어요", b.ok ? "창고에 보관하고 되읽어 확인했습니다." : (b.skipped ? "로컬에만 저장(창고 미설정)" : "창고 보관을 확인해 주세요"));
+    await loadList();
+    if (onStyle(id)) { CACHE.clear(); await openStyle(id, nv); }   // 기다리는 사이 다른 스타일로 옮겼으면 억지로 데려가지 않는다
+  } catch (e) {
+    if (!/로그인/.test(String(e.message))) { st.textContent = "진행 확인 실패: " + e.message; toast("fail", "error", "진행 상황을 못 읽었어요", e.message); }
+  } finally { S.rebuildJob = null; btn.disabled = false; }
+});
+
+// ====== 그레이딩(F10 3단계) — 기준점 끌기 · 숫자 고치기 → 미리보기(맞물림 초록/빨강) → 저장(새 버전) ======
+//   규칙 = «사이즈마다 기준점이 2XL 에서 얼마나 움직이는가»(Δx, Δy mm · 조각 기준 좌표 · y 위로 +).
+//   화면 점이 움직인 양 = (sx × Δx, −Δy) — sx 는 서버가 주는 틀(frame)에 있다(뒤판은 좌우 두 점이 한 규칙).
+const G = { info: null, rules0: null, edit: null, shown: null, sel: null, spread: "step", preview: null, viewBase: null,
+            busy: false, showingBase: false };
+const clone = (o) => JSON.parse(JSON.stringify(o));
+const r2 = (v) => Math.round(v * 100) / 100;
+function gradeReset() {
+  G.info = G.rules0 = G.edit = G.shown = G.sel = G.preview = G.viewBase = null; G.showingBase = false;
+  $("#gradeTab").classList.add("hidden"); $("#gStatus").textContent = "";
+}
+async function loadRules(id, ver) {
+  let j = null;
+  try { const r = await apiFetch(`/api/cad/styles/${encodeURIComponent(id)}/v/${encodeURIComponent(ver)}/rules`); if (r.ok) j = await r.json(); } catch (e) {}
+  if (!onStyle(id, ver)) return;                                      // 그 사이 다른 판을 열었다
+  G.info = j;
+  if (j && j.rules) { G.rules0 = j.rules; G.edit = clone(j.rules); G.shown = j.rules; }
+  $("#gradeTab").classList.toggle("hidden", !(G.rules0 && S.canUpload));   // 관리자에게만 — 직원에게는 탭 자체를 숨긴다
+  buildPointSel(); renderGrade(); drawGrade();
+}
+const isLockX = (pc, pt) => !!(G.info && (G.info.lock_x || []).some(([a, b]) => a === pc && b === pt));
+const ruleAt = (tbl, pc, pt, s) => (((tbl || {})[pc] || {})[pt] || {})[s] || [0, 0];
+function pointList() {
+  const f = (G.info && G.info.frame) || {}, out = [];
+  for (const pc of Object.keys(f)) for (const pt of Object.keys(f[pc])) out.push({ piece: pc, point: pt, nodes: f[pc][pt] });
+  return out;
+}
+// 바꾼 칸만(최종 규칙 값) — 서버에 보내는 «규칙 변경 목록»
+function changes() {
+  const out = {}; let n = 0;
+  for (const pc of Object.keys(G.edit || {})) for (const pt of Object.keys(G.edit[pc])) for (const s of Object.keys(G.edit[pc][pt])) {
+    const e = G.edit[pc][pt][s], b = ruleAt(G.rules0, pc, pt, s);
+    if (Math.abs(e[0] - b[0]) > 0.004 || Math.abs(e[1] - b[1]) > 0.004) { ((out[pc] = out[pc] || {})[pt] = out[pc][pt] || {})[s] = [r2(e[0]), r2(e[1])]; n++; }
+  }
+  return [out, n];
+}
+// 끈 양(화면 mm) → 규칙표. spread=step: «한 칸 이동량» 으로 보고 2XL 에서 떨어진 칸 수만큼 모든 사이즈에 / one: 이 사이즈만
+function applyDrag(orig, pc, pt, sx, d, size, spread) {
+  const out = clone(orig); const sizes = G.info.sizes, base = G.info.base_size;
+  const bi = sizes.indexOf(base), n = sizes.indexOf(size) - bi;
+  const dr = [isLockX(pc, pt) ? 0 : sx * d[0], -d[1]];
+  if (!n) return out;
+  for (const t of sizes) {
+    if (t === base) continue;
+    const f = spread === "one" ? (t === size ? 1 : 0) : (sizes.indexOf(t) - bi) / n;
+    if (!f) continue;
+    const v = ruleAt(out, pc, pt, t); out[pc][pt][t] = [r2(v[0] + dr[0] * f), r2(v[1] + dr[1] * f)];
+  }
+  return out;
+}
+// 손잡이 자리 = 지금 그림의 기준점 + (편집 규칙 − 그림의 규칙)을 화면 방향으로
+function handlePos(pt, nm, sx) {
+  const raw = S.view.sizes[S.size].pieces.find((p) => p.name === pt.piece); if (!raw || raw.nodes[nm] == null) return null;
+  const o = P(S.size, pt.piece), p0 = o.seam[raw.nodes[nm]];
+  const e = ruleAt(G.edit, pt.piece, pt.point, S.size), sh = ruleAt(G.shown, pt.piece, pt.point, S.size);
+  return { x: p0[0] + sx * (e[0] - sh[0]), y: p0[1] - (e[1] - sh[1]), p0 };
+}
+function drawGrade() {
+  const g = $("#gGrade"); if (!g) return; g.innerHTML = "";
+  if (S.mode !== "grade" || !G.edit || !S.view) return;
+  const names = new Set(shownPieces()), ro = !(G.info && G.info.editable);
+  for (const pt of pointList()) {
+    if (!names.has(pt.piece)) continue;
+    for (const [nm, sx] of pt.nodes) {
+      const h = handlePos(pt, nm, sx); if (!h) continue;
+      const moved = Math.hypot(h.x - h.p0[0], h.y - h.p0[1]) > 0.05;
+      if (moved) el("line", { class: "gl", x1: h.p0[0], y1: h.p0[1], x2: h.x, y2: h.y }, g);
+      const sel = G.sel && G.sel.piece === pt.piece && G.sel.point === pt.point;
+      const c = el("circle", { class: "gh" + (moved ? " is-moved" : "") + (sel ? " is-sel" : "") + (ro ? " is-ro" : ""), cx: h.x, cy: h.y, r: 3, "data-r": "6",
+                               "data-pc": pt.piece, "data-pt": pt.point, "data-sx": sx }, g);
+      el("title", {}, c).textContent = pt.piece + " · " + pt.point + (ro ? "" : " — 끌어서 옮기기");
     }
-    st.textContent = ""; toast("warn", "schedule", "오래 걸려요", "잠시 뒤 목록에서 새 버전을 확인해 주세요.");
-  } catch (e) { st.textContent = ""; if (!/로그인/.test(String(e.message))) toast("fail", "error", "서버에 연결하지 못했습니다", ""); }
-  finally { S.rebuildJob = null; btn.disabled = false; }
+  }
+  const k = 1 / pxPerMm(); g.querySelectorAll("[data-r]").forEach((c) => c.setAttribute("r", (c.dataset.r * k).toFixed(3)));
+}
+// 끌기 — 손잡이에서 누르면 그림 이동(끌기)보다 먼저 받는다(capture)
+let gDrag = null;
+$("#svg").addEventListener("pointerdown", (e) => {
+  const t = e.target; if (!(t.classList && t.classList.contains("gh"))) return;
+  e.stopImmediatePropagation(); e.preventDefault();
+  selectPoint(t.dataset.pc, t.dataset.pt);
+  if (!(G.info && G.info.editable) || G.busy) return;
+  if (S.size === G.info.base_size) { toast("info", "info", "기준 사이즈는 움직이지 않습니다", G.info.base_size + " 는 규칙의 0 점입니다. 다른 사이즈를 고르세요."); return; }
+  gDrag = { id: e.pointerId, pc: t.dataset.pc, pt: t.dataset.pt, sx: Number(t.dataset.sx), start: clientToMm(e.clientX, e.clientY), orig: clone(G.edit) };
+  try { $("#svg").setPointerCapture(e.pointerId); } catch (er) {}
+}, true);
+$("#svg").addEventListener("pointermove", (e) => {
+  if (!gDrag || e.pointerId !== gDrag.id) return;
+  e.stopImmediatePropagation();
+  const [mx, my] = clientToMm(e.clientX, e.clientY);
+  G.edit = applyDrag(gDrag.orig, gDrag.pc, gDrag.pt, gDrag.sx, [mx - gDrag.start[0], my - gDrag.start[1]], S.size, G.spread);
+  drawGrade();
+}, true);
+const gUp = (e) => { if (!gDrag || e.pointerId !== gDrag.id) return; e.stopImmediatePropagation(); gDrag = null; drawGrade(); renderGrade(); };
+$("#svg").addEventListener("pointerup", gUp, true); $("#svg").addEventListener("pointercancel", gUp, true);
+
+function buildPointSel() {
+  const pts = G.info && G.info.frame ? pointList() : [];
+  $("#gPointSel").innerHTML = `<option value="">기준점 고르기(그림의 동그라미를 눌러도 됩니다)</option>` +
+    pts.map((p) => `<option value="${esc(p.piece + "|" + p.point)}">${esc(p.piece)} · ${esc(p.point)}</option>`).join("");
+}
+function selectPoint(pc, pt) {
+  G.sel = pc ? { piece: pc, point: pt } : null; $("#gPointSel").value = pc ? pc + "|" + pt : "";
+  renderGrade(); drawGrade();
+}
+$("#gPointSel").addEventListener("change", (e) => { const [pc, pt] = (e.target.value || "").split("|"); selectPoint(pc || null, pt); });
+$("#spreadSeg").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
+  G.spread = b.dataset.spread; $("#spreadSeg").querySelectorAll("button").forEach((x) => x.classList.toggle("is-active", x === b));
+}));
+const previewFresh = () => !!(G.preview && G.preview.key === JSON.stringify(G.edit));
+function renderGrade() {
+  const card = $("#gradeCard"); if (card.classList.contains("hidden") || !S.view) return;
+  const info = G.info || {}, ed = !!info.editable, lock = info.locked;
+  $("#gradeSub").textContent = "· " + sizeLabel(S.size) + (G.preview && !G.showingBase ? " · 미리보기 그림" : "");
+  $("#gradeMsg").innerHTML = !G.rules0 ? esc(info.reason || "이 판은 그레이딩 규칙을 읽을 수 없습니다.")
+    : lock ? `<span class="badge badge--neutral badge--sm">공장 보냄</span> ${esc((lock.locked_at || "").replace("T", " "))}${lock.locked_by ? " · " + esc(lock.locked_by) : ""} — 이 판은 고칠 수 없습니다(보기만).`
+    : `기준점(동그라미)을 끌거나 아래 숫자를 바꾼 뒤 «미리보기». 기준 사이즈 ${esc(info.base_size)} 는 움직이지 않습니다.` +
+      (info.source === "view" ? `<div class="muted-note">이 판의 규칙은 그림에서 읽었습니다(0.01mm 단위).</div>` : "");
+  $("#spreadRow").classList.toggle("hidden", !ed);
+  $("#gradeActions").classList.toggle("hidden", !ed);
+  // 고른 기준점의 사이즈별 규칙 표
+  let html = "";
+  if (G.sel && G.rules0) {
+    const { piece: pc, point: pt } = G.sel, lx = isLockX(pc, pt);
+    html = `<table class="ctable gtable" style="margin-top:6px"><thead><tr><th>사이즈</th><th class="num">Δx (mm)</th><th class="num">Δy (mm)</th></tr></thead><tbody>` +
+      info.sizes.map((s) => {
+        const e = ruleAt(G.edit, pc, pt, s), b = ruleAt(G.rules0, pc, pt, s), base = s === info.base_size;
+        const cell = (ax) => { const ch = Math.abs(e[ax] - b[ax]) > 0.004, dis = !ed || base || (ax === 0 && lx);
+          return `<td class="num${esc(ch ? " is-changed" : "")}"><input type="number" step="0.1" data-s="${esc(s)}" data-ax="${Number(ax)}" value="${Number(e[ax]).toFixed(2)}" ${esc(dis ? "disabled" : "")}
+                  title="${esc(ch ? "원래 " + Number(b[ax]).toFixed(2) : "")}" /></td>`; };
+        return `<tr class="${esc(s === S.size ? "is-pick" : "")}"><td>${esc(sizeLabel(s))}</td>` + cell(0) + cell(1) + "</tr>";
+      }).join("") + `</tbody></table>` + (lx ? `<div class="muted-note">가운데선 점이라 가로(Δx)는 0 으로 둡니다.</div>` : "");
+  }
+  $("#gradePoint").innerHTML = html;
+  $("#gradePoint").querySelectorAll("input[data-s]").forEach((inp) => inp.addEventListener("change", () => {
+    const v = Number(inp.value); if (!isFinite(v) || Math.abs(v) > 400) { toast("fail", "error", "숫자를 확인해 주세요", "±400mm 안의 숫자만 됩니다."); renderGrade(); return; }
+    const { piece: pc, point: pt } = G.sel; const cur = ruleAt(G.edit, pc, pt, inp.dataset.s).slice(); cur[+inp.dataset.ax] = r2(v);
+    G.edit[pc][pt][inp.dataset.s] = cur; drawGrade(); renderGrade();
+  }));
+  const [, n] = G.edit ? changes() : [{}, 0];
+  $("#gPreview").disabled = G.busy || !n; $("#gReset").disabled = G.busy || (!n && !G.preview);
+  $("#gToggle").classList.toggle("hidden", !G.preview); $("#gToggle").textContent = G.showingBase ? "미리보기 그림" : "원래 그림";
+  // 맞물림 검산(미리보기 결과)
+  const def = info.mesh_def || [];
+  if (G.preview) {
+    const m = G.preview.mesh || {}, sizes = Object.keys(m.sizes || {});
+    const fresh = previewFresh(), bad = sizes.reduce((t, s) => t + m.sizes[s].filter((r) => r.ok === false).length, 0);
+    const badge = m.ok ? `<span class="badge badge--pass badge--sm">전부 초록</span>` : `<span class="badge badge--fail badge--sm">빨강 ${Number(bad)}칸</span>`;
+    const rows = def.map((d) => `<th class="num" title="허용 ±${Number(d.tol)}mm">${esc(d.label)}</th>`).join("");
+    $("#meshBox").innerHTML = `<h3 style="margin-top:12px">맞물림 검산 ${badge}</h3>
+      <table class="ctable mesh"><thead><tr><th>사이즈</th>${rows}</tr></thead><tbody>` +
+      sizes.map((s) => `<tr class="${esc(s === S.size ? "is-pick" : "")}"><td>${esc(sizeLabel(s))}</td>` + m.sizes[s].map((r) =>
+        `<td class="num ${esc(r.ok == null ? "na" : r.ok ? "ok" : "bad")}" title="목표 ${fmt(r.target, 2)} ± ${Number(r.tol)}">${fmt(r.value, 2)}</td>`).join("") + `</tr>`).join("") +
+      `</tbody></table><div class="muted-note">값 = 맞물리는 두 재봉선의 길이 차(mm). 허용 안이면 초록.${esc(fresh ? "" : " ⚠ 미리보기 뒤에 규칙을 또 바꿨습니다 — 미리보기를 다시 누르세요.")}</div>`;
+    $("#gSaveBox").classList.toggle("hidden", !ed);
+    $("#gSave").disabled = G.busy || !fresh || !m.ok || !n;
+    $("#gSave").title = !m.ok ? "빨강 칸이 있으면 저장할 수 없습니다" : !fresh ? "미리보기를 다시 누르세요" : "새 버전으로 저장(옛 버전은 그대로)";
+  } else { $("#meshBox").innerHTML = n ? `<div class="muted-note">바뀐 칸 ${Number(n)}개 — «미리보기» 로 전 사이즈를 다시 계산하고 맞물림을 확인하세요.</div>` : ""; $("#gSaveBox").classList.add("hidden"); }
+}
+function setPreviewShown(on) {
+  if (!G.preview) return;
+  G.showingBase = !on; S.view = on ? G.preview.view : G.viewBase; S.viewTag = on ? "p:" + G.preview.job : "base";
+  G.shown = on ? G.preview.rules : G.rules0; S.picks = []; S.pickCheck = null;
+  draw(); renderChecks(); renderMeasure(); renderGrade();
+}
+$("#gToggle").addEventListener("click", () => setPreviewShown(G.showingBase));
+$("#gReset").addEventListener("click", () => {
+  if (G.preview && G.viewBase) { S.view = G.viewBase; S.viewTag = "base"; }
+  G.edit = clone(G.rules0); G.shown = G.rules0; G.preview = null; G.viewBase = null; G.showingBase = false;
+  $("#gStatus").textContent = ""; draw(); renderChecks(); renderGrade();
+});
+$("#gPreview").addEventListener("click", async () => {
+  const [ch, n] = changes(); if (!n || G.busy) return;
+  const id = S.style, ver = S.ver, key = JSON.stringify(G.edit), st = $("#gStatus");
+  G.busy = true; renderGrade(); st.textContent = "요청 중…";
+  try {
+    const r = await apiFetch(`/api/cad/styles/${encodeURIComponent(id)}/regrade`, { method: "POST", headers: { "Content-Type": "application/json" },
+                                                                                 body: JSON.stringify({ base_version: Number(ver), rules: ch }) });
+    if (r.status !== 202) { st.textContent = "시작 못 함: " + (await apiError(r) || ("서버 응답 " + r.status)); return; }
+    const job = await r.json();
+    const j = await pollJob(job.job_id, (p) => { if (onStyle(id, ver)) st.textContent = "미리보기 · " + (p.stage_ko || "진행 중") + " · " + pctOf(p) + "%"; }, 10 * 60 * 1000);
+    if (!onStyle(id, ver)) return;                                   // 다른 판으로 옮겼으면 결과를 덮어씌우지 않는다
+    if (j.status === "error") { st.textContent = "실패: " + (j.error || ""); return; }
+    const vr = await apiFetch(j.result.view_url);
+    if (!vr.ok) { st.textContent = "미리보기 그림을 못 받았어요: " + (await apiError(vr) || vr.status); return; }
+    const pv = await vr.json();
+    if (!onStyle(id, ver)) return;
+    if (!G.viewBase) G.viewBase = S.view;               // 처음 미리보기 — 원래 그림을 챙겨 둔다
+    G.preview = { view: pv, mesh: j.result.mesh, rules: j.result.rules, key, job: job.job_id };
+    setPreviewShown(true);
+    st.textContent = (j.result.mesh && j.result.mesh.ok ? "미리보기 — 맞물림 전부 초록. 저장할 수 있습니다." : "미리보기 — 빨강 칸이 있습니다. 맞물리는 쪽 기준점도 옮겨 보세요.")
+      + (j.result.wall_s ? " (" + j.result.wall_s + "초)" : "");
+  } catch (e) { if (!/로그인/.test(String(e.message))) st.textContent = "진행 확인 실패: " + e.message; }
+  finally { G.busy = false; renderGrade(); }
+});
+$("#gSave").addEventListener("click", async () => {
+  if (!previewFresh() || !G.preview.mesh.ok || G.busy) return;
+  const [ch, n] = changes(); const id = S.style, ver = S.ver, st = $("#gStatus");
+  if (!confirm(`규칙 ${Number(n)}칸을 바꿔 새 버전으로 저장할까요?\n전 사이즈 DXF·PDF·AAMA 를 다시 만들어 1분 남짓 걸립니다. v${ver} 은 그대로 남습니다.`)) return;
+  G.busy = true; renderGrade(); st.textContent = "저장 요청 중…";
+  try {
+    const r = await apiFetch(`/api/cad/styles/${encodeURIComponent(id)}/versions`, { method: "POST", headers: { "Content-Type": "application/json" },
+                                                                                  body: JSON.stringify({ base_version: Number(ver), rules: ch, note: $("#gNote").value || "", preview_job: G.preview.job }) });   // 서버가 «같은 규칙으로 한 초록 미리보기» 인지 본다
+    if (r.status !== 202) { st.textContent = "시작 못 함: " + (await apiError(r) || ("서버 응답 " + r.status)); return; }
+    const job = await r.json();
+    const j = await pollJob(job.job_id, (p) => { if (onStyle(id, ver)) st.textContent = "저장 · " + (p.stage_ko || "진행 중") + " · " + pctOf(p) + "%"; });
+    if (j.status === "error") { if (onStyle(id, ver)) st.textContent = "실패: " + (j.error || ""); toast("fail", "error", "저장 실패", j.error || ""); return; }
+    const nv = j.result.version, b = j.result.backup || {};
+    toast(b.ok || b.skipped ? "pass" : "warn", "check_circle", "v" + nv + " 로 저장했어요", b.ok ? "창고에 보관하고 되읽어 확인했습니다." : (b.skipped ? "로컬에만 저장(창고 미설정)" : "창고 보관을 확인해 주세요"));
+    await loadList();
+    if (onStyle(id, ver)) { CACHE.clear(); await openStyle(id, nv); }
+  } catch (e) { if (!/로그인/.test(String(e.message)) && onStyle(id, ver)) st.textContent = "진행 확인 실패: " + e.message; }
+  finally { G.busy = false; renderGrade(); }
+});
+
+// ====== 공장 보냄 잠금(F10 5단계) ======
+function renderLock() {
+  const L = S.meta && S.meta.locked;
+  $("#lockBadge").innerHTML = L ? `<span class="badge badge--neutral badge--sm" title="${esc((L.locked_at || "").replace("T", " ") + " · " + (L.locked_by || "") + (L.note ? " · " + L.note : ""))}"><span class="material-symbols-outlined" style="font-size:14px">lock</span> 공장 보냄</span>` : "";
+  $("#lockBtn").classList.toggle("hidden", !S.canUpload || !!L || !S.meta);
+}
+$("#lockBtn").addEventListener("click", async () => {
+  const id = S.style, ver = S.ver;
+  const note = prompt(`v${ver} 을 «공장 보낸 판» 으로 잠글까요?\n잠그면 이 버전은 다시 그레이딩·저장할 수 없습니다(되돌릴 수 없음).\n메모(선택 — 예: 공장 1차 발주):`, "");
+  if (note === null) return;
+  $("#lockBtn").disabled = true;
+  try {
+    const r = await apiFetch(`/api/cad/styles/${encodeURIComponent(id)}/v/${encodeURIComponent(ver)}/lock`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note }) });
+    if (!r.ok) { toast("fail", "error", "잠그지 못했어요", await apiError(r) || ("서버 응답 " + r.status)); return; }
+    const j = await r.json(); toast("pass", "lock", `v${ver} 공장 보냄으로 잠금`, (j.backup && j.backup.ok) ? "창고에 잠금 기록을 남기고 되읽어 확인했습니다." : "로컬에만 기록(창고 미설정)");
+    await loadList(); if (onStyle(id, ver)) { CACHE.clear(); await openStyle(id, ver); }
+  } catch (e) { if (!/로그인/.test(String(e.message))) toast("fail", "error", "서버에 연결하지 못했습니다", ""); }
+  finally { $("#lockBtn").disabled = false; }
+});
+
+// ====== 골라서 묶어 받기(F10 5단계) — 형식·사이즈를 고르면 그것만 ZIP 으로 ======
+function renderPick() {
+  const kinds = [...new Set((S.view.files || []).map((f) => f.kind))].filter((k) => KIND_LABEL[k]);
+  $("#pickKinds").innerHTML = kinds.map((k) => `<label class="chip"><input type="checkbox" data-pk="${esc(k)}" ${esc(k === "dxf" ? "checked" : "")}/>${esc(KIND_LABEL[k])}</label>`).join("")
+    || `<span class="cad-card__sub">이 판에는 내려받을 파일이 없습니다.</span>`;
+  $("#pickBox").classList.toggle("hidden", !kinds.length);
+}
+$("#pickDl").addEventListener("click", async () => {
+  const kinds = [...document.querySelectorAll("#pickKinds [data-pk]:checked")].map((c) => c.dataset.pk);
+  if (!kinds.length) { toast("info", "info", "형식을 하나 이상 고르세요", ""); return; }
+  const body = { kinds }; if ($("#pickThisSize").checked) body.sizes = [S.size];
+  const btn = $("#pickDl"); btn.disabled = true;
+  try {
+    const res = await apiFetch(`/api/cad/styles/${encodeURIComponent(S.style)}/v/${encodeURIComponent(S.ver)}/export`,
+                               { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!res.ok) { toast("fail", "error", "묶지 못했어요", await apiError(res) || ("서버 응답 " + res.status)); return; }
+    await saveBlob(res, S.style + "_v" + S.ver + ".zip");
+  } catch (e) { if (!/로그인/.test(String(e.message))) toast("fail", "error", "내려받지 못했어요", "서버에 연결하지 못했습니다."); }
+  finally { btn.disabled = false; }
 });
 
 // ── 올리기(관리자) ──
@@ -808,7 +1141,7 @@ $("#acctBtn").addEventListener("click", async () => {
 });
 
 // ── 시험·자동 확인용 창구(화면 동작에는 쓰지 않는다) ──
-window.CAD = { state: S, renderInfo, measureNodes, checkValue, open: openStyle, setSize,
+window.CAD = { state: S, grade: G, applyDrag, changes, handlePos, renderGrade, drawGrade, renderInfo, measureNodes, checkValue, open: openStyle, setSize,
   setMode: (m) => { S.mode = m; syncMode(); }, pickAt: (sid, piece, node) => { const o = P(sid, piece); const i = o.raw.nodes[node];
     return { piece, idx: i, x: o.seam[i][0], y: o.seam[i][1], s: o.cum[i], name: node }; },
   measurePicks: (a, b) => { S.picks = [a, b]; drawHi(); renderMeasure(); return measurement(); } };

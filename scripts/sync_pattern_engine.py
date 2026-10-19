@@ -82,7 +82,7 @@ def engine_files(src: str) -> list:
 def git(src: str, *args: str) -> str:
     try:
         r = subprocess.run(["git", *args], cwd=src, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
-        return r.stdout.strip() if r.returncode == 0 else ""
+        return r.stdout.rstrip() if r.returncode == 0 else ""     # 앞 공백은 남긴다 — status 첫 줄 « M 파일» 의 자리가 밀리지 않게
     except Exception:
         return ""
 

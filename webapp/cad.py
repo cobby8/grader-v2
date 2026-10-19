@@ -31,6 +31,8 @@ import json
 import os
 import re
 import shutil
+import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -40,6 +42,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
+from starlette.background import BackgroundTask
 
 from . import state
 from .auth import admin_required, auth_required
@@ -60,6 +63,9 @@ MAX_UNZIPPED_FILE = 60 * 1024 * 1024                                 # ZIP 안 �
 MAX_ZIP_MEMBERS = 2000
 OBJECTS = (("view.json", "view", "application/json"), ("exports.zip", "exports", "application/zip"),
            ("meta.json", "meta", "application/json"))               # (디스크 이름, 창고 이름, 종류)
+# 있을 때만 올리고·복원하는 것(F10 3·5단계) — 규칙표(다시 그레이딩한 버전) · 잠금 기록(공장 보낸 판)
+#   창고는 «덮어쓰기 금지» 라 meta 를 고쳐 다시 올릴 수 없다 → 잠금은 따로 «lock» 물건으로 남긴다
+OPTIONAL_OBJECTS = (("rules.json", "rules", "application/json"), ("lock.json", "lock", "application/json"))
 FILE_KINDS = {                                                       # 내려받기 kind → (보통 종류, 설명)
     "zip": ("application/zip", "산출물 전체 ZIP"),
     "dxf": ("application/dxf", "사이즈별 DXF"),
@@ -70,12 +76,26 @@ FILE_KINDS = {                                                       # 내려받
     "allsizes": ("application/dxf", "전 사이즈 겹친 DXF"),
     "a4": ("application/pdf", "A4 분할 PDF"),
 }
-META_EXTRA_KEYS = ("rebuilt_from", "engine_run")                     # store_version(extra=…) 로 meta 에 더할 수 있는 칸
+META_EXTRA_KEYS = ("rebuilt_from", "engine_run", "regraded_from", "rule_changes", "mesh")   # store_version(extra=…) 로 더할 수 있는 칸
 _HTTP_TIMEOUT = 30.0
 _RESTORE_EVERY = 600.0                                               # 복원 확인 간격(초)
 
 _LOCK = threading.Lock()                                             # 올리기·복원이 같은 폴더를 동시에 만지지 않게
 _last_restore = {"at": 0.0, "result": None, "busy": False}           # 복원 시각·결과 — 읽고 쓰기는 _LOCK 안에서만
+
+
+def _log(msg: str) -> None:
+    """서버 콘솔에 한 줄 — 콘솔이 cp949(윈도우)여도 «−»·«→» 같은 글자 때문에 작업 스레드가 죽지 않게(못 쓰는 글자는 ? 로)."""
+    try:
+        print(msg, flush=True)
+    except UnicodeEncodeError:
+        enc = getattr(sys.stdout, "encoding", None) or "ascii"
+        try:
+            print(msg.encode(enc, errors="replace").decode(enc, errors="replace"), flush=True)
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -247,6 +267,13 @@ def backup_version(style_id: str, ver: int, jwt: Optional[str]) -> Dict[str, Any
             res["objects"][store_name] = {"key": key, "uploaded": ok, "verified": verified, "reason": why, "bytes": len(data)}
             if not verified:
                 res["ok"] = False
+        for disk_name, store_name, ctype in OPTIONAL_OBJECTS:               # 규칙표(다시 그레이딩한 버전)처럼 «있을 때만»
+            if os.path.isfile(os.path.join(_vdir(style_id, ver), disk_name)):
+                o = _backup_object(style_id, ver, disk_name, store_name, ctype, jwt)
+                o.pop("existing", None)
+                res["objects"][store_name] = o
+                if not o.get("ok"):
+                    res["ok"] = False
         if not res["ok"]:
             res["reason"] = "일부 파일이 창고에 올라가지 않았거나 되읽은 지문이 다릅니다"
     res["at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -256,7 +283,7 @@ def backup_version(style_id: str, ver: int, jwt: Optional[str]) -> Dict[str, Any
     except Exception:
         pass
     tag = "성공" if res.get("ok") else ("건너뜀" if res.get("skipped") else "실패")
-    print(f"[cad] 창고 백업 {tag}: {style_id} v{ver}")                       # 토큰·키는 남기지 않는다
+    _log(f"[cad] 창고 백업 {tag}: {style_id} v{ver}")                       # 토큰·키는 남기지 않는다
     return res
 
 
@@ -306,19 +333,44 @@ def restore_missing_with_token(jwt: Optional[str], force: bool = False) -> Dict[
                             meta.get("zip_sha256") != _sha256(blobs["exports.zip"]) or meta.get("style_id") != sid
                             or meta.get("version") != ver):
                         raise ValueError("지문 불일치")
+                    # 있을 때만인 것(규칙표·잠금) — 창고 목록에 «있다» 고 나오는데 못 받으면 이 버전은 다음에 다시(잠금이 조용히 풀리지 않게)
+                    #   «목록을 못 읽음» 을 «없음» 으로 보면 잠금이 조용히 풀린다(검증 지적) → 그 버전은 복원하지 않고 다음에 다시
+                    listed = _sb_list(f"{sid}/v{ver}/", jwt)
+                    if listed is None:
+                        raise ValueError("버전 폴더 목록을 읽지 못함(다음에 다시)")
+                    listed_names = {(x.get("name") if isinstance(x, dict) else None) for x in listed}
+                    if meta.get("rules_sha256") and "rules" not in listed_names:
+                        raise ValueError("meta 에 규칙표 지문이 있는데 창고에 규칙표가 없음")
+                    if meta.get("locked") and "lock" not in listed_names:
+                        raise ValueError("meta 에 잠금 표시가 있는데 창고에 잠금 기록이 없음")
+                    for disk_name, store_name, _c in OPTIONAL_OBJECTS:
+                        if store_name not in listed_names:
+                            continue
+                        if store_name == "rules" and not meta.get("rules_sha256"):
+                            continue                                        # meta 가 보증하지 않는 규칙표는 받지 않는다
+                        b = _sb_download(object_key(sid, ver, store_name), jwt)
+                        if b is None:
+                            raise ValueError(f"{store_name} 내려받기 실패")
+                        if store_name == "rules" and meta["rules_sha256"] != _sha256(b):
+                            raise ValueError("규칙표 지문 불일치")
+                        if store_name == "lock":
+                            rec = json.loads(b.decode("utf-8"))
+                            if not isinstance(rec, dict) or rec.get("style_id") != sid or rec.get("version") != ver:
+                                raise ValueError("잠금 기록 불일치")
+                        blobs[disk_name] = b
                     with _LOCK:
                         if not os.path.isdir(_vdir(sid, ver)):
                             _write_version(sid, ver, blobs)
                             with open(os.path.join(_vdir(sid, ver), "backup.json"), "w", encoding="utf-8") as f:
                                 json.dump({"ok": True, "restored": True, "at": time.strftime("%Y-%m-%dT%H:%M:%S")}, f)
                             restored += 1
-                            print(f"[cad] 창고에서 복원: {sid} v{ver}")
+                            _log(f"[cad] 창고에서 복원: {sid} v{ver}")
                 except Exception as e:
                     errors += 1
-                    print(f"[cad] 복원 건너뜀: {sid} v{ver} - {type(e).__name__}")
+                    _log(f"[cad] 복원 건너뜀: {sid} v{ver} - {type(e).__name__}")
     except Exception as e:
         listed = False
-        print(f"[cad] 복원 중 오류(무시): {type(e).__name__}")
+        _log(f"[cad] 복원 중 오류(무시): {type(e).__name__}")
     finally:
         with _LOCK:
             _last_restore["busy"] = False
@@ -440,12 +492,19 @@ def _style_summary(style_id: str) -> Optional[Dict[str, Any]]:
         return None
     last = metas[-1]
     return {"id": style_id, "name": last.get("name"), "garment": last.get("garment"), "sizes": last.get("sizes"),
-            "versions": vs, "latest": _public_meta(last, _read_backup(style_id, last.get("version")))}
+            "versions": vs, "latest": _public_meta(last, _read_backup(style_id, last.get("version"))),
+            "locked_versions": [v for v in vs if _lock_info(style_id, v)]}          # 목록 카드의 «공장 보냄» 표시
 
 
 def _public_meta(m: Dict[str, Any], backup: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     out = {k: m.get(k) for k in ("version", "uploaded_at", "uploaded_by", "note", "sizes", "size_labels", "files",
-                                 "view_sha256", "zip_sha256", "view_bytes", "zip_bytes", "source", "rebuilt_from", "engine_run")}
+                                 "view_sha256", "zip_sha256", "view_bytes", "zip_bytes", "source", "rebuilt_from", "engine_run",
+                                 "regraded_from", "mesh")}
+    sid, ver = m.get("style_id"), m.get("version")
+    out["locked"] = _lock_info(sid, ver) if (isinstance(sid, str) and isinstance(ver, int)) else None   # 공장 보낸 판(누가·언제)
+    out["rule_changes"] = (m.get("rule_changes") or [])[:50]                 # 화면 표시용 앞부분만(전체는 rules.json)
+    out["rule_changes_count"] = len(m.get("rule_changes") or [])
+    out["has_rules"] = bool(m.get("rules_sha256"))
     out["backup"] = None if backup is None else {"ok": bool(backup.get("ok")), "skipped": bool(backup.get("skipped")),
                                                  "restored": bool(backup.get("restored")), "reason": backup.get("reason"),
                                                  "at": backup.get("at")}
@@ -559,9 +618,12 @@ async def upload_style(request: Request, view: UploadFile = File(...), exports: 
 
 def store_version(v: Dict[str, Any], view_bytes: bytes, zip_bytes: bytes, jwt: Optional[str], uploaded_by: Optional[str],
                   note: str = "", view_name: Optional[str] = None, zip_name: Optional[str] = None,
-                  extra: Optional[Dict[str, Any]] = None) -> Tuple[int, Dict[str, Any]]:
+                  extra: Optional[Dict[str, Any]] = None,
+                  extra_files: Optional[Dict[str, bytes]] = None) -> Tuple[int, Dict[str, Any]]:
     """검사를 통과한(validate_upload) view.json + exports.zip 을 새 버전으로 쌓는다 — 올리기·서버 다시 만들기가 같이 쓴다.
+    extra_files: 같이 넣을 파일 — 지금은 «rules.json»(다시 그레이딩한 규칙표)만 받는다(meta 에 지문을 적는다).
     디스크 → 창고 백업 → 되읽기 확인. 반환 (상태 코드, 본문): 201 성공 · 502 창고 실패(디스크에서도 지움)."""
+    extra_files = {k: b for k, b in (extra_files or {}).items() if k == "rules.json" and isinstance(b, (bytes, bytearray))}
     style = v["style"]; sid = style["id"]
     restore_missing_with_token(jwt, force=True)                            # 창고에만 있는 옛 버전과 번호가 겹치지 않게
     with _LOCK:
@@ -580,7 +642,9 @@ def store_version(v: Dict[str, Any], view_bytes: bytes, zip_bytes: bytes, jwt: O
                 "view_sha256": _sha256(view_bytes), "zip_sha256": _sha256(zip_bytes),
                 "view_bytes": len(view_bytes), "zip_bytes": len(zip_bytes), "source": v.get("source"),
                 "files": v.get("files") or [], "view_name": view_name, "zip_name": zip_name}
-        _write_version(sid, ver, {"view.json": view_bytes, "exports.zip": zip_bytes,
+        if "rules.json" in extra_files:
+            meta["rules_sha256"] = _sha256(bytes(extra_files["rules.json"]))  # 복원 때 규칙표가 짝인지 본다
+        _write_version(sid, ver, {"view.json": view_bytes, "exports.zip": zip_bytes, **{k: bytes(b) for k, b in extra_files.items()},
                                   "meta.json": json.dumps(meta, ensure_ascii=False, indent=1).encode("utf-8")})
     backup = backup_version(sid, ver, jwt)
     if not backup.get("ok") and not backup.get("skipped"):
@@ -589,11 +653,11 @@ def store_version(v: Dict[str, Any], view_bytes: bytes, zip_bytes: bytes, jwt: O
         # 복원은 meta 가 없거나 지문이 다르면 건너뛰므로 반쪽 조각이 되살아나지 않는다.
         with _LOCK:
             shutil.rmtree(_vdir(sid, ver), ignore_errors=True)
-        print(f"[cad] 창고 백업 실패로 v{ver} 를 디스크에서 지움: {sid}")
+        _log(f"[cad] 창고 백업 실패로 v{ver} 를 디스크에서 지움: {sid}")
         return 502, {
             "detail": f"창고(pattern-cad)에 보관하지 못해 v{ver} 올리기를 취소했습니다. 잠시 후 다시 올려 주세요. "
                       f"(사유: {backup.get('reason') or '알 수 없음'})", "style_id": sid, "version": ver, "backup": backup}
-    print(f"[cad] 새 버전: {sid} v{ver} (view {len(view_bytes):,} B · zip {len(zip_bytes):,} B)")
+    _log(f"[cad] 새 버전: {sid} v{ver} (view {len(view_bytes):,} B · zip {len(zip_bytes):,} B)")
     return 201, {"style_id": sid, "version": ver, "backup": backup,
                  "view_sha256": meta["view_sha256"], "zip_sha256": meta["zip_sha256"]}
 
@@ -624,12 +688,20 @@ CHILD_GUARD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "engi
 #   서버를 지키는 진짜 장치는 oom_score_adj=1000(메모리가 모자라면 커널이 일꾼부터 죽인다).
 ENGINE_AS_LIMIT_MB_DEFAULT = 1024
 # 일꾼에게 넘기는 환경변수 «허용 목록» — 이것 말고는 하나도 안 넘긴다(API 키·창고 열쇠·GRADER_* 설정이 일꾼에 보이지 않게)
+#   2026-10-19 리뷰: «PYTHON*·LC_* 로 시작하면 다 넘김» 은 PYTHONSTARTUP·PYTHONINSPECT·PYTHONPATH(남의 코드 끼워 넣기) 같은 것까지
+#   통과시켰다 → 정확한 이름 목록으로. PYTHONPATH 는 넘기지 않고 안전띠 폴더 하나로 새로 만든다(_engine_env).
 ENGINE_ENV_ALLOW = {"PATH", "HOME", "LANG", "LANGUAGE", "TZ", "TMP", "TMPDIR", "TEMP", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR",
                     "COMSPEC", "PATHEXT", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "PROGRAMDATA", "NUMBER_OF_PROCESSORS",
-                    "PROCESSOR_ARCHITECTURE"}
-ENGINE_ENV_PREFIX = ("LC_", "PYTHON", "PATTERN_ENGINE_")
+                    "PROCESSOR_ARCHITECTURE",
+                    "PYTHONIOENCODING", "PYTHONUTF8", "PYTHONHASHSEED", "PYTHONDONTWRITEBYTECODE", "PYTHONUNBUFFERED",
+                    "LC_ALL", "LC_CTYPE", "LC_NUMERIC", "LC_TIME", "LC_COLLATE", "LC_MONETARY", "LC_MESSAGES",
+                    "PATTERN_ENGINE_FONT", "PATTERN_ENGINE_CACHE", "PATTERN_ENGINE_NO_SYSTEM_FONTS"}
 TOKEN_MIN_LEFT_S = 600                                               # 줄에 넣을 때 로그인이 이만큼은 남아 있어야(엔진 1분 + 줄 3건)
 RELOGIN_MSG = "로그인이 끝났거나 곧 끝납니다. 다시 로그인한 뒤 눌러 주세요."
+HEAVY_WAIT_S_DEFAULT = 600                                           # 엔진이 «돌던 합성이 끝나기» 를 기다리는 상한(초) — 넘으면 엔진 작업 실패
+JOB_KINDS = ("cad-rebuild", "cad-regrade", "cad-version")            # GET /jobs 로 볼 수 있는 재단 패턴 작업
+PREVIEW_KEEP = 20                                                    # 미리보기 결과 폴더를 최근 몇 개까지 남길지(디스크 절약)
+MAX_RULE_CHANGES_META = 300                                          # meta 에 적는 «바뀐 칸» 목록 상한
 
 
 def load_service():
@@ -649,9 +721,8 @@ def load_service():
 
 def _engine_env() -> Dict[str, str]:
     """일꾼에게 넘길 환경변수 — 허용 목록만(+ 안전띠·메모리 절약 설정). 엔진은 디스크만 쓰니 열쇠가 필요 없다."""
-    env = {k: v for k, v in os.environ.items() if k.upper() in ENGINE_ENV_ALLOW or k.upper().startswith(ENGINE_ENV_PREFIX)}
-    pp = env.get("PYTHONPATH")
-    env["PYTHONPATH"] = CHILD_GUARD_DIR + (os.pathsep + pp if pp else "")   # 일꾼이 켜질 때 sitecustomize(안전띠)를 먼저 읽게
+    env = {k: v for k, v in os.environ.items() if k.upper() in ENGINE_ENV_ALLOW}
+    env["PYTHONPATH"] = CHILD_GUARD_DIR                                 # 일꾼이 켜질 때 sitecustomize(안전띠)를 먼저 읽게 — 이것 하나만
     env["GRADER_ENGINE_LIMIT_AS_MB"] = str(os.environ.get("GRADER_ENGINE_LIMIT_AS_MB") or ENGINE_AS_LIMIT_MB_DEFAULT)
     env["GRADER_ENGINE_OOM_ADJ"] = os.environ.get("GRADER_ENGINE_OOM_ADJ", "1000")
     for k in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):  # 계산 스레드 1개 — 스레드마다 잡는 예약 메모리를 줄인다
@@ -672,10 +743,21 @@ def _jwt_exp(jwt: Optional[str]) -> Optional[int]:
         return None
 
 
+def _heavy_wait_s() -> float:
+    """엔진이 «돌던 합성이 끝나기» 를 기다리는 상한(초) — GRADER_CAD_HEAVY_WAIT_S 로 바꿀 수 있다(시험용)"""
+    try:
+        return max(0.05, float(os.environ.get("GRADER_CAD_HEAVY_WAIT_S") or HEAVY_WAIT_S_DEFAULT))
+    except ValueError:
+        return float(HEAVY_WAIT_S_DEFAULT)
+
+
 def _short_engine_error(e: Exception) -> str:
     """직원 화면에 보일 짧은 사유 — 엔진 출력 꼬리는 서버 로그에만 남긴다"""
     if isinstance(e, HTTPException):
         return str(e.detail)
+    if isinstance(e, TimeoutError):
+        return (f"합성 작업이 {max(1, round(_heavy_wait_s() / 60))}분 넘게 끝나지 않아 재단 패턴 작업을 멈췄습니다. "
+                "잠시 후 다시 눌러 주세요.")
     t = str(e)
     if "MemoryError" in t:
         return "메모리가 모자라 엔진이 멈췄습니다."
@@ -694,67 +776,134 @@ def _font_name(font: Optional[Dict[str, Any]]) -> Optional[str]:
     return os.path.splitext(os.path.basename(font.get("path") or ""))[0] or None
 
 
+# ── 엔진 작업 공통(다시 만들기·미리보기·새 버전 저장) ─────────────────────────
+def _run_engine(job_id: str, svc: Any, call) -> Dict[str, Any]:
+    """① 엔진끼리 한 줄(_ENGINE_LOCK) ② 돌던 합성이 끝나기를 기다림(상한 _heavy_wait_s — 넘으면 TimeoutError)
+    ③ call(on_step, timeout) — 일꾼 프로세스를 띄우는 service 함수. 반환: 엔진 결과(dict)"""
+    with _ENGINE_LOCK:
+        state.update_job(job_id, stage="wait_heavy", stage_ko="합성 작업이 끝나기를 기다림")
+        with state.HEAVY.exclusive_use(timeout=_heavy_wait_s()):        # 새 합성은 엔진 뒤로 — 기다리다 포기하면 대기 표시가 풀린다
+            state.update_job(job_id, stage="start", stage_ko="엔진 시작")
+            timeout = float(os.environ.get("GRADER_CAD_ENGINE_TIMEOUT") or 1200)
+
+            def on_step(i: int, n: int, name: str) -> None:
+                state.update_job(job_id, done=i - 1, total=n, stage=name, stage_ko=svc.STEP_KO.get(name, name))
+            return call(on_step, timeout)
+
+
+def _engine_run_info(res: Dict[str, Any]) -> Dict[str, Any]:
+    """meta·작업 결과에 남길 엔진 실행 기록 — 판·글꼴·메모리(일꾼 최고 RAM · 리눅스 VmPeak/VmHWM)·안전띠·시간"""
+    font = res.get("font") or {}
+    return {"engine": res.get("engine"), "font": font.get("source"), "font_name": _font_name(font),
+            "peak_rss_mb": res.get("peak_rss_mb"), "vm_peak_mb": res.get("vm_peak_mb"), "vm_hwm_mb": res.get("vm_hwm_mb"),
+            "guard": res.get("guard"), "timings_s": res.get("timings_s"), "wall_s": res.get("wall_s")}
+
+
+def _result_style(res: Dict[str, Any], style_id: str) -> Dict[str, Any]:
+    """엔진 결과에서 이 스타일 칸 — 없거나 view·zip 파일이 빠졌으면 한국어 오류(KeyError 가 화면에 나가지 않게)"""
+    s = (res.get("styles") or {}).get(style_id)
+    if not s:
+        raise ValueError("엔진 결과에 이 스타일이 없습니다(엔진이 이 스타일을 만들지 못함).")
+    for k, ko in (("view", "화면 자료(view.json)"), ("zip", "산출물 묶음(exports.zip)")):
+        p = s.get(k)
+        if not isinstance(p, str) or not os.path.isfile(p):
+            raise ValueError(f"엔진 결과에 {ko}이 없습니다(엔진이 끝까지 만들지 못함).")
+    return s
+
+
+def _store_from_engine(job_id: str, s: Dict[str, Any], style_id: str, jwt: Optional[str], email: Optional[str], note: str,
+                       extra: Dict[str, Any], extra_files: Optional[Dict[str, bytes]] = None) -> Dict[str, Any]:
+    """엔진이 만든 view.json + exports.zip → «올리기» 와 같은 검사·저장(새 버전·창고 백업·되읽기). 실패는 한국어 ValueError."""
+    if s.get("checks_bad"):                                                 # 화면에서 다시 잰 길이가 검산.json 과 어긋난 판은 저장하지 않는다
+        bad = s["checks_bad"]
+        _log(f"[cad] 검산 실패로 저장 안 함 {style_id}: {bad}")
+        raise ValueError(f"검산이 맞지 않아 저장하지 않았습니다({len(bad)}칸 · 예: {bad[0][0]} {bad[0][1]}).")
+    with open(s["view"], "rb") as f:
+        view_bytes = f.read()
+    with open(s["zip"], "rb") as f:
+        zip_bytes = f.read()
+    state.update_job(job_id, stage="store", stage_ko="검사·저장")
+    v = validate_upload(view_bytes, zip_bytes)                             # 올리기와 같은 검사 — 서버가 만든 것도 봐주지 않는다
+    if v["style"]["id"] != style_id:
+        raise ValueError(f"엔진이 다른 스타일을 만들었습니다: {v['style']['id']}")
+    code, content = store_version(v, view_bytes, zip_bytes, jwt=jwt, uploaded_by=email, note=note, view_name="view.json",
+                                  zip_name="exports.zip", extra=extra, extra_files=extra_files)
+    if code != 201:
+        objs = ((content.get("backup") or {}).get("objects") or {}).values()
+        expired = (_jwt_exp(jwt) or 1e18) <= time.time()
+        if expired or any(str(o.get("reason")) in ("status 401", "status 403") for o in objs):
+            raise ValueError("창고에 넣지 못했습니다 — " + RELOGIN_MSG)
+        raise ValueError("창고에 넣지 못해 저장을 취소했습니다. 잠시 후 다시 눌러 주세요.")
+    return content
+
+
+def _fail_job(job_id: str, work: str, what: str, e: Exception) -> None:
+    """작업 실패 — 화면에는 짧은 한국어 사유, 서버 로그에는 전체 흔적. 작업 폴더는 엔진 출력(engine.log)만 남긴다."""
+    _log(f"[cad] {what} 실패:\n{traceback.format_exc()}")                 # 엔진 출력 꼬리는 서버 로그에만
+    state.update_job(job_id, status="error", error=f"{what}에 실패했습니다: {_short_engine_error(e)}"[:400])
+    try:
+        if os.path.isdir(work):
+            for nm in os.listdir(work):
+                full = os.path.join(work, nm)
+                if nm != "engine.log":
+                    shutil.rmtree(full, ignore_errors=True) if os.path.isdir(full) else os.remove(full)
+    except Exception:
+        pass
+
+
+def _start_engine_job(request: Request, kind: str, total: int, fields: Dict[str, Any], target, args: tuple,
+                      need_token: bool = True) -> Tuple[str, int]:
+    """엔진 작업을 줄에 세우고 스레드를 띄운다 → (작업 번호, 앞에 선 작업 수). 줄이 가득 차면 429.
+    need_token: 창고에 넣을 작업(다시 만들기·새 버전)은 줄 서는 동안 로그인이 끝나면 안 된다 — 남은 시간을 먼저 본다."""
+    jwt = _bearer(request)
+    with _QUEUE_LOCK:
+        ahead_now = _queue["waiting"]
+    if need_token and auth_required() and jwt:
+        exp = _jwt_exp(jwt)
+        if exp is not None and exp - time.time() < TOKEN_MIN_LEFT_S + 90 * ahead_now:
+            raise HTTPException(status_code=401, detail=RELOGIN_MSG)
+    with _QUEUE_LOCK:
+        if _queue["waiting"] >= REBUILD_QUEUE_MAX:
+            raise HTTPException(status_code=429, detail=f"재단 패턴 작업이 {_queue['waiting']}건 밀려 있습니다. 끝난 뒤 다시 눌러 주세요.")
+        _queue["waiting"] += 1
+        ahead = _queue["waiting"] - 1
+    try:
+        job_id = state.create_job(total=total)
+        state.update_job(job_id, kind=kind, stage="queued", stage_ko="차례 기다림" if ahead else "곧 시작", ahead=ahead, **fields)
+        threading.Thread(target=target, daemon=True, args=(job_id, *args)).start()
+    except Exception:
+        with _QUEUE_LOCK:
+            _queue["waiting"] = max(0, _queue["waiting"] - 1)
+        raise
+    return job_id, ahead
+
+
+def _queue_done() -> None:
+    with _QUEUE_LOCK:
+        _queue["waiting"] = max(0, _queue["waiting"] - 1)
+
+
 def _rebuild_thread(job_id: str, style_id: str, from_ver: int, group: str, jwt: Optional[str], email: Optional[str], note: str) -> None:
-    svc = None
     # 작업 폴더 이름을 web_ 로 시작하게 — 실패해 남은 engine.log 도 기존 30일 자동 정리(state.cleanup)가 치운다
     work = os.path.join(state.get_jobs_dir(), f"web_cad_{time.strftime('%y%m%d_%H%M%S')}_{job_id[:6]}")
     try:
         svc = load_service()
-        with _ENGINE_LOCK:                                                  # ① 엔진끼리 한 줄로
-            state.update_job(job_id, stage="wait_heavy", stage_ko="합성 작업이 끝나기를 기다림", out_dir=work)
-            with state.HEAVY.exclusive_use():                               # ② 돌고 있는 합성이 끝날 때까지 — 새 합성은 엔진 뒤로
-                state.update_job(job_id, stage="start", stage_ko="엔진 시작")
-                timeout = float(os.environ.get("GRADER_CAD_ENGINE_TIMEOUT") or 1200)
-
-                def on_step(i: int, n: int, name: str) -> None:
-                    state.update_job(job_id, done=i - 1, total=n, stage=name, stage_ko=svc.STEP_KO.get(name, name))
-                res = svc.rebuild(work, groups=[group], on_step=on_step, timeout=timeout, env=_engine_env())
-        s = (res.get("styles") or {}).get(style_id)
-        if not s:
-            raise ValueError("엔진 결과에 이 스타일이 없습니다(엔진이 이 스타일을 만들지 못함).")
-        if s.get("checks_bad"):                                             # 맞물림 검산이 어긋난 판은 저장하지 않는다
-            bad = s["checks_bad"]
-            print(f"[cad] 검산 실패로 저장 안 함 {style_id}: {bad}")
-            raise ValueError(f"검산이 맞지 않아 저장하지 않았습니다({len(bad)}칸 · 예: {bad[0][0]} {bad[0][1]}).")
-        with open(s["view"], "rb") as f:
-            view_bytes = f.read()
-        with open(s["zip"], "rb") as f:
-            zip_bytes = f.read()
-        state.update_job(job_id, stage="store", stage_ko="검사·저장")
-        v = validate_upload(view_bytes, zip_bytes)                         # 올리기와 같은 검사 — 서버가 만든 것도 봐주지 않는다
-        if v["style"]["id"] != style_id:
-            raise ValueError(f"엔진이 다른 스타일을 만들었습니다: {v['style']['id']}")
-        font = res.get("font") or {}
-        run = {"engine": res.get("engine"), "font": font.get("source"), "font_name": _font_name(font),
-               "peak_rss_mb": res.get("peak_rss_mb"), "timings_s": res.get("timings_s"), "wall_s": res.get("wall_s")}
-        code, content = store_version(v, view_bytes, zip_bytes, jwt=jwt, uploaded_by=email,
-                                      note=note or f"서버에서 다시 만듦(v{from_ver} 기준)", view_name="view.json", zip_name="exports.zip",
-                                      extra={"rebuilt_from": from_ver, "engine_run": run})
-        if code != 201:
-            objs = ((content.get("backup") or {}).get("objects") or {}).values()
-            expired = (_jwt_exp(jwt) or 1e18) <= time.time()
-            if expired or any(str(o.get("reason")) in ("status 401", "status 403") for o in objs):
-                raise ValueError("창고에 넣지 못했습니다 — " + RELOGIN_MSG)
-            raise ValueError("창고에 넣지 못해 저장을 취소했습니다. 잠시 후 다시 눌러 주세요.")
+        state.update_job(job_id, out_dir=work)
+        res = _run_engine(job_id, svc, lambda on_step, timeout: svc.rebuild(work, groups=[group], on_step=on_step, timeout=timeout,
+                                                                          env=_engine_env()))
+        s = _result_style(res, style_id)
+        run = _engine_run_info(res)
+        content = _store_from_engine(job_id, s, style_id, jwt, email, note or f"서버에서 다시 만듦(v{from_ver} 기준)",
+                                     extra={"rebuilt_from": from_ver, "engine_run": run, "mesh": s.get("mesh")})
         state.update_job(job_id, status="done", done=len(svc.STEPS), stage="done", stage_ko="끝",
                          result={"style_id": style_id, "version": content["version"], "backup": content.get("backup"), **run})
-        print(f"[cad] 다시 만들기 끝: {style_id} v{from_ver} → v{content['version']} · 일꾼 최고 {res.get('peak_rss_mb')} MB")
+        _log(f"[cad] 다시 만들기 끝: {style_id} v{from_ver} → v{content['version']} · 일꾼 최고 {res.get('peak_rss_mb')} MB"
+             f" · VmPeak {res.get('vm_peak_mb')} MB · 안전띠 {res.get('guard')}")
         shutil.rmtree(work, ignore_errors=True)                             # 결과는 버전 폴더에 들어갔다 — 작업 폴더는 지운다
     except Exception as e:
-        print(f"[cad] 다시 만들기 실패 {style_id} v{from_ver}:\n{traceback.format_exc()}")   # 엔진 출력 꼬리는 서버 로그에만
-        state.update_job(job_id, status="error", error=f"다시 만들기에 실패했습니다: {_short_engine_error(e)}"[:400])
-        # 실패한 작업 폴더는 엔진 출력(engine.log)만 남기고 지운다 — 원인 확인용·디스크 절약
-        try:
-            if os.path.isdir(work):
-                for nm in os.listdir(work):
-                    full = os.path.join(work, nm)
-                    if nm != "engine.log":
-                        shutil.rmtree(full, ignore_errors=True) if os.path.isdir(full) else os.remove(full)
-        except Exception:
-            pass
+        _fail_job(job_id, work, "다시 만들기", e)
     finally:
-        with _QUEUE_LOCK:
-            _queue["waiting"] = max(0, _queue["waiting"] - 1)
+        _queue_done()
 
 
 @router.post("/styles/{style_id}/v/{ver}/rebuild", dependencies=[Depends(admin_required)])
@@ -767,39 +916,372 @@ def rebuild_style(style_id: str, ver: str, request: Request, payload: Optional[D
     group = getattr(svc, "REBUILDABLE", {}).get(style_id)
     if not group:
         raise HTTPException(status_code=400, detail="이 스타일은 아직 서버에서 다시 만들 수 없습니다(서버에 원본이 없음). stizshop 에서 만들어 올려 주세요.")
-    jwt = _bearer(request)
-    with _QUEUE_LOCK:
-        ahead_now = _queue["waiting"]
-    if auth_required() and jwt:                                             # 창고에 넣을 때 이 토큰을 쓴다 — 줄 서는 동안 끝나면 안 된다
-        exp = _jwt_exp(jwt)
-        if exp is not None and exp - time.time() < TOKEN_MIN_LEFT_S + 90 * ahead_now:
-            raise HTTPException(status_code=401, detail=RELOGIN_MSG)
     note = (payload or {}).get("note") if isinstance(payload, dict) else None
     note = note[:500] if isinstance(note, str) else ""
-    with _QUEUE_LOCK:
-        if _queue["waiting"] >= REBUILD_QUEUE_MAX:
-            raise HTTPException(status_code=429, detail=f"재단 패턴 작업이 {_queue['waiting']}건 밀려 있습니다. 끝난 뒤 다시 눌러 주세요.")
-        _queue["waiting"] += 1
-        ahead = _queue["waiting"] - 1
-    try:
-        job_id = state.create_job(total=len(svc.STEPS))
-        state.update_job(job_id, kind="cad-rebuild", style_id=style_id, from_version=v, stage="queued",
-                         stage_ko="차례 기다림" if ahead else "곧 시작", ahead=ahead)
-        t = threading.Thread(target=_rebuild_thread, daemon=True,
-                             args=(job_id, style_id, v, group, jwt, getattr(request.state, "email", None), note))
-        t.start()
-    except Exception:
-        with _QUEUE_LOCK:
-            _queue["waiting"] = max(0, _queue["waiting"] - 1)
-        raise
+    job_id, ahead = _start_engine_job(request, "cad-rebuild", len(svc.STEPS), {"style_id": style_id, "from_version": v}, _rebuild_thread,
+                                      (style_id, v, group, _bearer(request), getattr(request.state, "email", None), note))
     return JSONResponse(status_code=202, content={"job_id": job_id, "total": len(svc.STEPS), "ahead": ahead,
                                                   "style_id": style_id, "from_version": v})
 
 
+# ══════════════════════════════════════════════════════════════════════
+#  F10 3단계 — 기준점 끌어서 다시 그레이딩 (규칙표 → 미리보기 → 새 버전)
+# ══════════════════════════════════════════════════════════════════════
+# 왜(비유): 그레이딩 규칙표는 «사이즈마다 기준점이 얼마나 움직이는가» 를 적은 표다. 화면에서 점을 끌면 표의 칸이 바뀌고,
+#   서버의 엔진이 그 표로 전 사이즈를 다시 그린 뒤 맞물림(래글런 몸판=소매·옆선 앞=뒤·소매 밑선·안솔기)을 초록/빨강으로 알려 준다.
+#   «저장» 은 늘 새 버전(v n+1) — 옛 버전은 그대로. 공장에 보낸 판(잠금)은 고칠 수 없다.
+# 규칙표의 정본: 다시 그레이딩한 버전은 rules.json(넘긴 표 그대로). 그 밖의 버전은 view.json 에서 읽은 표(0.01mm).
+def _lock_info(style_id: str, ver: int) -> Optional[Dict[str, Any]]:
+    """«공장 보낸 판» 잠금 기록(누가·언제) — 버전 폴더 lock.json(창고 «lock» 의 사본)만 정본.
+    meta.json 은 고치지 않는다(창고 meta 는 덮어쓰기 금지라 디스크 meta 를 고치면 둘이 어긋난다 — 검증 지적)."""
+    try:
+        with open(os.path.join(_vdir(style_id, ver), "lock.json"), encoding="utf-8") as f:
+            rec = json.load(f)
+        return rec if isinstance(rec, dict) else None
+    except Exception:
+        return None
+
+
+def _version_rules(style_id: str, ver: int, group: str, svc: Any) -> Tuple[Dict[str, Any], str]:
+    """그 버전의 규칙표(전체) → (표, 출처 "stored"|"view"). 못 읽으면 400(한국어)."""
+    try:
+        p = os.path.join(_vdir(style_id, ver), "rules.json")
+        if os.path.isfile(p):
+            with open(p, encoding="utf-8") as f:
+                doc = json.load(f)
+            return svc.check_rules(group, doc.get("rules") if isinstance(doc, dict) else None, full=True), "stored"
+        with open(os.path.join(_vdir(style_id, ver), "view.json"), encoding="utf-8") as f:
+            view = json.load(f)
+        return svc.check_rules(group, svc.rules_from_view(view), full=True), "view"
+    except svc.ServiceError as e:
+        raise HTTPException(status_code=400, detail=f"v{ver} 의 그레이딩 규칙을 읽지 못했습니다: {e}")
+    except (OSError, ValueError, TypeError, AttributeError, KeyError) as e:
+        raise HTTPException(status_code=400, detail=f"v{ver} 의 그레이딩 규칙을 읽지 못했습니다({type(e).__name__}).")
+
+
+def _group_of(style_id: str, svc: Any) -> Optional[str]:
+    return getattr(svc, "REBUILDABLE", {}).get(style_id)
+
+
+@router.get("/styles/{style_id}/v/{ver}/rules")
+def get_rules(style_id: str, ver: str, request: Request) -> Dict[str, Any]:
+    """🔒 그 버전의 그레이딩 규칙표 + 화면이 점을 끌 때 쓰는 틀(기준점 → 화면 점 이름·부호) + 잠금·편집 가능 여부"""
+    _check_style_id(style_id)
+    v = _resolve_ver(style_id, ver)
+    svc = load_service()
+    group = _group_of(style_id, svc)
+    lock = _lock_info(style_id, v)
+    out = {"style_id": style_id, "version": v, "group": group, "rules": None, "source": None, "reason": None,
+           "sizes": list(getattr(svc, "GRADE_SIZES", [])), "base_size": getattr(svc, "BASE_SIZE", "2XL"), "locked": lock,
+           "frame": None, "lock_x": [], "mesh_def": [], "editable": False}
+    if not group:
+        out["reason"] = "이 스타일은 아직 서버에서 다시 그레이딩할 수 없습니다(서버에 원본이 없음)."
+        return out
+    try:
+        out["rules"], out["source"] = _version_rules(style_id, v, group, svc)
+    except HTTPException as e:
+        out["reason"] = str(e.detail)
+    out["frame"] = svc.RULE_FRAME[group]
+    out["lock_x"] = [[p, k] for g, p, k in svc.LOCK_X if g == group]
+    out["mesh_def"] = [{"key": k, "label": lb, "tol": tol} for k, lb, _s, _n, _t, tol in svc.MESH[group]]
+    out["editable"] = bool(out["rules"]) and not lock and _can_upload(request)
+    return out
+
+
+def _parse_rule_request(style_id: str, payload: Any, svc: Any) -> Tuple[int, str, Dict[str, Any], List[Dict[str, Any]]]:
+    """요청 {base_version, rules: 바꾼 칸만(최종 규칙 값)} → (기준 버전, 옷, 합친 전체 표, 바뀐 칸 목록). 잘못이면 400·409."""
+    if payload is not None and not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="요청 모양이 다릅니다({base_version, rules}).")
+    payload = payload or {}
+    bv = payload.get("base_version")
+    v = _resolve_ver(style_id, "latest" if bv in (None, "") else str(bv))
+    group = _group_of(style_id, svc)
+    if not group:
+        raise HTTPException(status_code=400, detail="이 스타일은 아직 서버에서 다시 그레이딩할 수 없습니다(서버에 원본이 없음).")
+    if _lock_info(style_id, v):
+        raise HTTPException(status_code=409, detail=f"v{v} 은 공장에 보낸 판이라(잠금) 고칠 수 없습니다.")
+    base, _src = _version_rules(style_id, v, group, svc)
+    try:
+        changes = svc.check_rules(group, payload.get("rules") or {})
+        full = svc.merge_rules(base, changes)
+        svc.check_rules(group, full, full=True)
+    except svc.ServiceError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return v, group, full, svc.diff_rules(base, full)
+
+
+def _prune_previews(keep: int = PREVIEW_KEEP) -> None:
+    """미리보기 결과 폴더(web_cadprev_*)는 최근 keep 개만 남긴다 — 끌 때마다 생겨서"""
+    try:
+        d = state.get_jobs_dir()
+        olds = sorted(n for n in os.listdir(d) if n.startswith("web_cadprev_"))
+        for n in olds[:-keep] if len(olds) > keep else []:
+            shutil.rmtree(os.path.join(d, n), ignore_errors=True)
+    except Exception:
+        pass
+
+
+def _mesh_all_green(mesh: Dict[str, Any]) -> bool:
+    """저장 조건 — 사이즈가 하나 이상 있고 모든 칸이 ok is True(빨강·판정 못 함 둘 다 안 됨)"""
+    sizes = (mesh or {}).get("sizes") or {}
+    return bool(sizes) and all(isinstance(rows, list) and rows and all(r.get("ok") is True for r in rows) for rows in sizes.values())
+
+
+def _rules_hash(table: Dict[str, Any]) -> str:
+    """규칙표 지문 — «이 규칙으로 미리보기를 했나» 를 저장 때 맞춰 본다(키 순서와 무관)"""
+    return _sha256(json.dumps(table, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
+def _first_red(mesh: Dict[str, Any]) -> Optional[str]:
+    for s, rows in ((mesh or {}).get("sizes") or {}).items():
+        for r in rows:
+            if r.get("ok") is False:
+                return f"{s} {r.get('label')} {r.get('value')}mm"
+    return None
+
+
+def _regrade_thread(job_id: str, style_id: str, from_ver: int, group: str, table: Dict[str, Any], diff: List[Dict[str, Any]],
+                    jwt: Optional[str], email: Optional[str], note: str, preview: bool) -> None:
+    prefix = "web_cadprev_" if preview else "web_cad_"
+    work = os.path.join(state.get_jobs_dir(), f"{prefix}{time.strftime('%y%m%d_%H%M%S')}_{job_id[:6]}")
+    what = "미리보기" if preview else "새 버전 저장"
+    try:
+        svc = load_service()
+        if preview:
+            _prune_previews(PREVIEW_KEEP - 1)
+        state.update_job(job_id, out_dir=work)
+        res = _run_engine(job_id, svc, lambda on_step, timeout: svc.regrade(work, group, table, full=not preview, on_step=on_step,
+                                                                          timeout=min(timeout, 900) if preview else timeout,
+                                                                          env=_engine_env()))
+        s = _result_style(res, style_id)
+        mesh = s.get("mesh") or {"ok": None, "sizes": {}}
+        run = _engine_run_info(res)
+        run["rules_echo_max_mm"] = s.get("rules_echo_max_mm")
+        if preview:
+            keep = os.path.join(work, "preview_view.json")                 # 화면이 가져갈 그림만 남기고 나머지(중간 결과)는 지운다
+            shutil.copyfile(s["view"], keep)
+            for nm in os.listdir(work):
+                if nm not in ("preview_view.json", "engine.log"):
+                    full_p = os.path.join(work, nm)
+                    shutil.rmtree(full_p, ignore_errors=True) if os.path.isdir(full_p) else os.remove(full_p)
+            state.update_job(job_id, status="done", done=len(svc.STEPS), stage="done", stage_ko="끝", preview_path=keep,
+                             result={"preview": True, "style_id": style_id, "base_version": from_ver, "mesh": mesh, "rules": table,
+                                     "changes": diff, "checks_bad": s.get("checks_bad") or [],
+                                     "view_url": f"/api/cad/jobs/{job_id}/view", **run})
+            _log(f"[cad] 미리보기 끝: {style_id} v{from_ver} · 바뀐 칸 {len(diff)} · 맞물림 {'초록' if mesh.get('ok') else '빨강 있음'}"
+                 f" · {res.get('wall_s')}초 · 일꾼 최고 {res.get('peak_rss_mb')} MB")
+            return
+        if not _mesh_all_green(mesh):                                       # 빨강뿐 아니라 «판정 못 함(None)» 칸도 저장하지 않는다
+            red = _first_red(mesh)
+            raise ValueError(f"맞물림 검산이 전부 초록이 아니라 저장하지 않았습니다(예: {red or '판정 못 한 칸'}). 미리보기로 맞춘 뒤 저장하세요.")
+        if _lock_info(style_id, from_ver):                                  # 엔진이 도는 1분 사이 누가 기준 판을 잠갔다 — 잠근 판 위에 쌓지 않는다
+            raise ValueError(f"저장하는 사이 v{from_ver} 이 «공장 보냄» 으로 잠겨 저장하지 않았습니다.")
+        rules_doc = {"format": "stiz-grade-rules", "version": 1, "style_id": style_id, "group": group,
+                     "base_size": svc.BASE_SIZE, "sizes": svc.GRADE_SIZES, "base_version": from_ver,
+                     "changes": diff[:MAX_RULE_CHANGES_META], "rules": table}
+        content = _store_from_engine(job_id, s, style_id, jwt, email,
+                                     note or f"규칙 {len(diff)}칸 바꿔 다시 그레이딩(v{from_ver} 기준)",
+                                     extra={"regraded_from": from_ver, "rule_changes": diff[:MAX_RULE_CHANGES_META], "mesh": mesh,
+                                            "engine_run": run},
+                                     extra_files={"rules.json": json.dumps(rules_doc, ensure_ascii=False, indent=1).encode("utf-8")})
+        state.update_job(job_id, status="done", done=len(svc.STEPS), stage="done", stage_ko="끝",
+                         result={"style_id": style_id, "version": content["version"], "backup": content.get("backup"),
+                                 "base_version": from_ver, "changes": len(diff), "mesh_ok": True, **run})
+        _log(f"[cad] 다시 그레이딩 저장: {style_id} v{from_ver} → v{content['version']} · 바뀐 칸 {len(diff)}"
+             f" · 일꾼 최고 {res.get('peak_rss_mb')} MB · VmPeak {res.get('vm_peak_mb')} MB")
+        shutil.rmtree(work, ignore_errors=True)
+    except Exception as e:
+        _fail_job(job_id, work, what, e)
+    finally:
+        _queue_done()
+
+
+@router.post("/styles/{style_id}/regrade", dependencies=[Depends(admin_required)])
+def regrade_preview(style_id: str, request: Request, payload: Optional[Dict[str, Any]] = Body(None)) -> JSONResponse:
+    """🛡 관리자 — 규칙 변경(바꾼 칸만) → 전 사이즈 다시 계산 + 맞물림 검산. 저장하지 않는다(약 10초 — 작업 번호로 진행률)."""
+    _check_style_id(style_id)
+    svc = load_service()
+    v, group, full, diff = _parse_rule_request(style_id, payload, svc)
+    job_id, ahead = _start_engine_job(request, "cad-regrade", len(svc.STEPS),
+                                      {"style_id": style_id, "from_version": v, "rules_hash": _rules_hash(full)}, _regrade_thread,
+                                      (style_id, v, group, full, diff, None, None, "", True), need_token=False)
+    return JSONResponse(status_code=202, content={"job_id": job_id, "total": len(svc.STEPS), "ahead": ahead, "style_id": style_id,
+                                                  "base_version": v, "changes": len(diff)})
+
+
+@router.post("/styles/{style_id}/versions", dependencies=[Depends(admin_required)])
+def save_regraded(style_id: str, request: Request, payload: Optional[Dict[str, Any]] = Body(None)) -> JSONResponse:
+    """🛡 관리자 — 규칙 변경 + 메모 → 새 버전(v n+1, 옛 버전은 그대로). 맞물림이 빨강이면 저장하지 않는다(1분 남짓)."""
+    _check_style_id(style_id)
+    svc = load_service()
+    v, group, full, diff = _parse_rule_request(style_id, payload, svc)
+    if not diff:
+        raise HTTPException(status_code=400, detail="바뀐 규칙이 없습니다 — 기준점을 옮기거나 숫자를 바꾼 뒤 저장하세요.")
+    # 저장은 «같은 규칙으로 미리보기를 해서 전부 초록» 이었을 때만 — 빨강을 1분 동안 다 만든 뒤에야 거절하지 않게(검증 지적)
+    pj = (payload or {}).get("preview_job")
+    j = state.get_job(pj) if isinstance(pj, str) and re.fullmatch(r"[0-9a-f]{12}", pj) else None
+    if (not j or j.get("kind") != "cad-regrade" or j.get("status") != "done" or j.get("style_id") != style_id
+            or j.get("from_version") != v or j.get("rules_hash") != _rules_hash(full)):
+        raise HTTPException(status_code=400, detail="이 규칙으로 한 미리보기가 없습니다 — «미리보기» 로 맞물림을 확인한 뒤 저장하세요.")
+    if not _mesh_all_green((j.get("result") or {}).get("mesh") or {}):
+        raise HTTPException(status_code=400, detail="미리보기에서 맞물림이 전부 초록이 아니어서 저장할 수 없습니다. 빨강 칸을 맞춘 뒤 다시 미리보기 하세요.")
+    note = (payload or {}).get("note")
+    note = note[:500] if isinstance(note, str) else ""
+    job_id, ahead = _start_engine_job(request, "cad-version", len(svc.STEPS), {"style_id": style_id, "from_version": v}, _regrade_thread,
+                                      (style_id, v, group, full, diff, _bearer(request), getattr(request.state, "email", None), note, False))
+    return JSONResponse(status_code=202, content={"job_id": job_id, "total": len(svc.STEPS), "ahead": ahead, "style_id": style_id,
+                                                  "base_version": v, "changes": len(diff)})
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  F10 5단계 — 고른 것만 묶어 내려받기 + «공장 보낸 판» 잠금
+# ══════════════════════════════════════════════════════════════════════
+EXPORT_KINDS = tuple(k for k in FILE_KINDS if k != "zip")
+SIZED_KINDS = ("dxf", "pdf", "ai")                                   # 사이즈마다 있는 것 — sizes 로 고를 수 있다
+# 고른 것 합계 상한 — 실측(2026-10-20): 한 버전 전부(32개)를 풀면 상의 5.5MB · 하의 17.4MB → 넉넉히 64MB
+EXPORT_MAX_TOTAL = 64 * 1024 * 1024
+
+
+@router.post("/styles/{style_id}/v/{ver}/export")
+def export_files(style_id: str, ver: str, payload: Optional[Dict[str, Any]] = Body(None)) -> Response:
+    """🔒 형식(kinds)·사이즈(sizes, 선택)를 골라 그것만 ZIP 으로. 파일은 저장된 묶음에서 꺼내 지문을 한 번 더 맞춘 뒤 넣는다."""
+    _check_style_id(style_id)
+    v = _resolve_ver(style_id, ver)
+    p = payload if isinstance(payload, dict) else {}
+    kinds, sizes = p.get("kinds"), p.get("sizes")
+    if not isinstance(kinds, list) or not kinds or not all(isinstance(k, str) and k in EXPORT_KINDS for k in kinds):
+        raise HTTPException(status_code=400, detail="형식(kinds)을 하나 이상 고르세요: " + " · ".join(EXPORT_KINDS))
+    if sizes is not None and (not isinstance(sizes, list) or not all(isinstance(s, str) for s in sizes)):
+        raise HTTPException(status_code=400, detail="사이즈(sizes)는 이름 목록이어야 합니다.")
+    meta = _read_meta(style_id, v) or {}
+    picked = [f for f in (meta.get("files") or []) if f.get("kind") in kinds
+              and (sizes is None or f.get("kind") not in SIZED_KINDS or f.get("size") in sizes)]
+    if not picked:
+        raise HTTPException(status_code=404, detail="고른 형식·사이즈의 파일이 이 버전에 없습니다.")
+    lock = _lock_info(style_id, v)
+    zt = (2026, 1, 1, 0, 0, 0)                                           # ZIP 안 날짜 고정 — 같은 선택이면 같은 묶음(지문 같음)
+    # 메모리에 다 올리지 않고 임시 파일에 써서 흘려보낸다(검증 지적) — 보낸 뒤 지운다
+    tmp = tempfile.NamedTemporaryFile(prefix="cad_export_", suffix=".zip", delete=False)
+    try:
+        with tmp, zipfile.ZipFile(os.path.join(_vdir(style_id, v), "exports.zip")) as src,                 zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as out:
+            total = 0
+            for f in picked:
+                try:
+                    info = src.getinfo(f["path"])
+                except KeyError:
+                    raise HTTPException(status_code=404, detail=f"저장된 묶음에 그 파일이 없습니다: {str(f.get('path'))[:80]}")
+                total += info.file_size
+                if info.file_size > MAX_UNZIPPED_FILE or total > EXPORT_MAX_TOTAL:
+                    raise HTTPException(status_code=413, detail=f"고른 파일이 너무 큽니다(합계 {EXPORT_MAX_TOTAL // 2**20}MB 이하). 형식·사이즈를 줄여 주세요.")
+                with src.open(info) as fh:                                  # 파일 하나씩 흘려 넣으며 지문을 잰다(통째로 읽지 않음)
+                    h = hashlib.sha256(); zi = zipfile.ZipInfo(f["path"], zt); zi.compress_type = zipfile.ZIP_DEFLATED
+                    with out.open(zi, "w") as dst:
+                        for chunk in iter(lambda: fh.read(1 << 20), b""):
+                            h.update(chunk); dst.write(chunk)
+                if h.hexdigest() != f.get("sha256"):
+                    raise HTTPException(status_code=500, detail="저장된 파일 지문이 맞지 않습니다(손상). 관리자에게 알려 주세요.")
+            man = {"style_id": style_id, "version": v, "kinds": kinds, "sizes": sizes, "from_zip_sha256": meta.get("zip_sha256"),
+                   "factory_locked": lock, "files": [{k: f.get(k) for k in ("kind", "size", "path", "orig", "bytes", "sha256")} for f in picked]}
+            zi = zipfile.ZipInfo("manifest.json", zt); zi.compress_type = zipfile.ZIP_DEFLATED
+            out.writestr(zi, json.dumps(man, ensure_ascii=False, indent=1))
+    except BaseException:
+        try:
+            os.remove(tmp.name)
+        except OSError:
+            pass
+        raise
+    name = f"{style_id}_v{v}_{'-'.join(sorted(set(kinds)))}.zip"
+    return FileResponse(tmp.name, media_type="application/zip", background=BackgroundTask(_remove_quiet, tmp.name),
+                        headers={"Content-Disposition": _disposition(name, None), "X-Cad-Files": str(len(picked))})
+
+
+def _remove_quiet(path: str) -> None:
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _backup_object(style_id: str, ver: int, disk_name: str, store_name: str, ctype: str, jwt: Optional[str]) -> Dict[str, Any]:
+    """버전 폴더의 파일 하나를 창고에 올리고 되읽어 지문을 맞춘다(덮어쓰기 금지 창고 — 이미 있으면 같은 내용인지 본다)"""
+    base, _pub = _sb_config()
+    if not base:
+        return {"ok": False, "skipped": True, "reason": "창고 미설정(로컬)"}
+    if not jwt:
+        return {"ok": False, "skipped": True, "reason": "로그인 토큰 없음(로컬 무인증)"}
+    with open(os.path.join(_vdir(style_id, ver), disk_name), "rb") as f:
+        data = f.read()
+    key = object_key(style_id, ver, store_name)
+    ok, why = _sb_upload(key, data, ctype, jwt)
+    back = _sb_download(key, jwt) if ok or why == "status 409" else None
+    verified = back is not None and _sha256(back) == _sha256(data)
+    return {"ok": verified, "key": key, "uploaded": ok, "verified": verified, "reason": why, "existing": back if (not ok and back) else None}
+
+
+@router.post("/styles/{style_id}/v/{ver}/lock", dependencies=[Depends(admin_required)])
+def lock_version(style_id: str, ver: str, request: Request, payload: Optional[Dict[str, Any]] = Body(None)) -> Dict[str, Any]:
+    """🛡 관리자 — «공장 보낸 판» 잠금. 잠근 버전은 다시 그레이딩 저장·미리보기가 안 되고 화면에 «공장 보냄» 이 붙는다.
+    기록(누가·언제)은 버전 폴더 lock.json + 창고 «lock» (되읽어 확인) — API 의 meta.locked 로 보인다. 창고에 못 남기면 잠그지 않는다(502)."""
+    _check_style_id(style_id)
+    v = _resolve_ver(style_id, ver)
+    note = (payload or {}).get("note") if isinstance(payload, dict) else None
+    note = note[:200] if isinstance(note, str) else ""
+    jwt = _bearer(request)
+    lp = os.path.join(_vdir(style_id, v), "lock.json")
+    with _LOCK:
+        if _lock_info(style_id, v):
+            raise HTTPException(status_code=409, detail=f"v{v} 은 이미 «공장 보냄» 으로 잠겨 있습니다.")
+        meta = _read_meta(style_id, v) or {}
+        rec = {"style_id": style_id, "version": v, "locked_by": getattr(request.state, "email", None),
+               "locked_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "note": note,
+               "zip_sha256": meta.get("zip_sha256"), "view_sha256": meta.get("view_sha256")}
+        tmp = lp + f".tmp-{os.getpid()}"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(rec, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, lp)
+    res = _backup_object(style_id, v, "lock.json", "lock", "application/json", jwt)
+    if not res.get("ok") and not res.get("skipped") and res.get("existing"):
+        # 창고에 이미 잠금 기록이 있다(지난번 올린 뒤 되읽기만 실패 등) — 그 기록이 이 버전 것이면 그것을 정본으로 받는다
+        try:
+            old = json.loads(res["existing"].decode("utf-8"))
+            if isinstance(old, dict) and old.get("style_id") == style_id and old.get("version") == v:
+                rec = old
+                with open(lp, "w", encoding="utf-8") as f:
+                    json.dump(rec, f, ensure_ascii=False, indent=1)
+                res = {"ok": True, "key": res["key"], "adopted": True}
+        except Exception:
+            pass
+    res.pop("existing", None)
+    if not res.get("ok") and not res.get("skipped"):
+        try:
+            os.remove(lp)
+        except OSError:
+            pass
+        raise HTTPException(status_code=502, detail="창고에 잠금 기록을 남기지 못해 잠그지 않았습니다. 잠시 후 다시 눌러 주세요."
+                                                    + (" " + RELOGIN_MSG if str(res.get("reason")) in ("status 401", "status 403") else ""))
+    # meta.json 은 고치지 않는다 — 화면·API 의 «locked» 는 _public_meta 가 lock.json 에서 읽어 붙인다
+    _log(f"[cad] 공장 보냄 잠금: {style_id} v{v} · {rec.get('locked_by')} · 창고 {'확인' if res.get('ok') else '건너뜀'}")
+    return {"style_id": style_id, "version": v, "locked": rec, "backup": res}
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  작업 진행률
+# ══════════════════════════════════════════════════════════════════════
 @router.get("/jobs/{job_id}")
 def cad_job(job_id: str) -> Dict[str, Any]:
-    """🔒 재단 패턴 작업 진행률 — running/done/error · 단계(한국어) · 끝나면 새 버전 번호."""
+    """🔒 재단 패턴 작업 진행률 — running/done/error · 단계(한국어) · 끝나면 새 버전 번호(또는 미리보기 결과)."""
     j = state.get_job(job_id) if re.fullmatch(r"[0-9a-f]{12}", job_id or "") else None
-    if not j or j.get("kind") != "cad-rebuild":
+    if not j or j.get("kind") not in JOB_KINDS:
         raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다(서버 재시작 등). 다시 눌러 주세요.")
-    return {k: j.get(k) for k in ("status", "done", "total", "stage", "stage_ko", "error", "result", "style_id", "from_version", "ahead")}
+    return {k: j.get(k) for k in ("kind", "status", "done", "total", "stage", "stage_ko", "error", "result", "style_id",
+                                  "from_version", "ahead")}
+
+
+@router.get("/jobs/{job_id}/view")
+def cad_job_view(job_id: str):
+    """🔒 미리보기로 다시 그린 view.json — 저장하지 않은 그림(작업이 끝났을 때만)"""
+    j = state.get_job(job_id) if re.fullmatch(r"[0-9a-f]{12}", job_id or "") else None
+    p = (j or {}).get("preview_path")
+    if not j or j.get("kind") != "cad-regrade" or j.get("status") != "done" or not p or not os.path.isfile(p):
+        raise HTTPException(status_code=404, detail="미리보기 그림이 없습니다(오래됐거나 서버가 다시 켜짐). 미리보기를 다시 눌러 주세요.")
+    return FileResponse(p, media_type="application/json", headers={"Cache-Control": "no-store"})

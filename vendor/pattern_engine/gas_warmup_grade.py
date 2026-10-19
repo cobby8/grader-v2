@@ -24,6 +24,12 @@ _ap.add_argument("--no-export", action="store_true")
 # 식서(결 방향선)를 알아보려고 OptiCad 원본도 읽는다 — pieces_after.json 에는 «대문자 L» 표시가 남지 않는다
 _ap.add_argument("--src-top", default=os.path.join(HERE, "fixtures", "gas-warmup-2026", "gas_top_2xl.ai"))
 _ap.add_argument("--src-bottom", default=os.path.join(HERE, "fixtures", "gas-warmup-2026", "gas_bottom_2xl.ai"))
+# 규칙 덮어쓰기(F10 3단계 «기준점 끌어서 다시 그레이딩», 2026-10-19) — JSON 파일:
+#   {"top": {"소매": {"겨드랑이앞": {"S": [dx, dy], …}, …}, …}, "bottom": {"앞판": {…}}}
+#   값은 «최종 규칙»(조각 기준 좌표, 2XL 대비 mm — 검산.json 의 «상의 규칙»·«하의 규칙» 과 같은 틀).
+#   그 옷(top/bottom)이 들어 있으면 그 옷은 트루잉을 하지 않는다 — 사람이 정한 값 그대로 써야 «어긋나면 빨강» 이 보인다.
+#   그래서 전체 표를 주는 것이 원칙(빠진 점은 표준 CAD 규칙 그대로·트루잉 없음). 엔진 창구 service.py 가 전체 표를 만들어 준다.
+_ap.add_argument("--rules")
 ARGS = _ap.parse_args()
 sys.path.insert(0, HERE)
 from patlib import bb, circle, outline, expand, export, SA
@@ -50,6 +56,22 @@ R_PB = deltas(lambda s: pants_pts(STD_P[s]["뒤판"]["sew"], True)[0])
 for s in SIZES:                       # 표준 앞판사이바 밑단이 4XL·5XL 에서 3~8mm 휘는 것은 립을 다는 가스 밑단에 맞지 않아 0 으로 둔다
     R_FRONT[s]["옆밑단"] = (R_FRONT[s]["옆밑단"][0], 0.0)
 STD_PF2 = pants_pts(STD_P["2XL"]["앞판"]["sew"], False)[0]; STD_PB2 = pants_pts(STD_P["2XL"]["뒤판"]["sew"], True)[0]
+
+# ── 규칙 덮어쓰기(--rules) — 상의는 표(R_BACK·R_FRONT·R_SLEEVE)를 그 자리에서 바꾸고, 하의는 pants_cards 가 꺼내 쓴다 ──
+OVR = json.load(open(ARGS.rules, encoding="utf-8")) if ARGS.rules else {}
+_TOP_TBL = {"뒤판": R_BACK, "앞판": R_FRONT, "소매": R_SLEEVE}
+_BOT_KEYS = {"앞판": set(R_PF["2XL"]), "뒤판": set(R_PB["2XL"])}
+for _g, _tbl in OVR.items():                  # 모르는 옷·조각·기준점·사이즈는 조용히 넘기지 않고 멈춘다(오타가 «안 바뀜» 으로 숨지 않게)
+    _known = _TOP_TBL if _g == "top" else _BOT_KEYS if _g == "bottom" else None
+    if _known is None: raise SystemExit(f"--rules: 모르는 옷 {_g}")
+    for _pc, _pts in _tbl.items():
+        if _pc not in _known: raise SystemExit(f"--rules: 모르는 조각 {_g}/{_pc}")
+        for _k, _bys in _pts.items():
+            if _k not in (_known[_pc]["2XL"] if _g == "top" else _known[_pc]): raise SystemExit(f"--rules: 모르는 기준점 {_g}/{_pc}/{_k}")
+            for _s, _v in _bys.items():
+                if _s not in SIZES or len(_v) != 2: raise SystemExit(f"--rules: 잘못된 값 {_g}/{_pc}/{_k}/{_s}")
+                if _g == "top": _TOP_TBL[_pc][_s][_k] = (float(_v[0]), float(_v[1]))
+TRUE_TOP, TRUE_BOTTOM = "top" not in OVR, "bottom" not in OVR      # 규칙표를 받은 옷은 트루잉을 끈다
 
 
 # ════════ 점별 그레이딩 엔진 ════════
@@ -290,7 +312,8 @@ def grade_top(s):
     uB = (absS("목뒤")[0] - absS("겨드랑이뒤")[0], absS("목뒤")[1] - absS("겨드랑이뒤")[1]); m = math.hypot(*uB); uB = (uB[0] / m, uB[1] / m)
     for _ in range(12):
         sl, _ = grade_piece(SL, top_cards(s, adj)[2])
-        eF, eB = tF - L(sl["sew"], "소매 앞 래글런"), tB - L(sl["sew"], "소매 뒤 래글런")
+        if not TRUE_TOP: break                                # --rules 로 받은 표는 고치지 않는다(트루잉 끔)
+        eF, eB =tF - L(sl["sew"], "소매 앞 래글런"), tB - L(sl["sew"], "소매 뒤 래글런")
         if abs(eF) < 0.02 and abs(eB) < 0.02: break
         adj["목앞"] = (adj["목앞"][0] + uF[0] * eF, adj["목앞"][1] + uF[1] * eF)
         adj["목뒤"] = (adj["목뒤"][0] + uB[0] * eB, adj["목뒤"][1] + uB[1] * eB)
@@ -370,7 +393,8 @@ def pants_rule(R, G, STD, s, k):
 
 def pants_cards(p, G, R, STD, X0, Y0, sg, s):
     absP = lambda q: (X0 + sg * q[0], Y0 + q[1])
-    rr = {k: pants_rule(R, G, STD, s, k) for k in G}
+    ov = OVR.get("bottom", {}).get("앞판" if p is PF else "뒤판", {})   # --rules 로 받은 최종 규칙(있으면 그것)
+    rr = {k: (tuple(map(float, ov[k][s])) if s in ov.get(k, {}) else pants_rule(R, G, STD, s, k)) for k in G}
     D = lambda d: (sg * d[0], d[1])
     S = p["sew"]; Ymax = max(v[1] for v in S)
     cards = [(absP(G[k]), D(rr[k])) for k in G]
@@ -426,7 +450,8 @@ def grade_bottom(s):
         cb_, rb = pants_cards(PB, GPB, R_PB, STD_PB2, PBX, PBY, PBS, s)
         cb_ = [(q, (d[0] + adj[0], d[1] + adj[1])) if math.dist(q, cr) < 0.5 else (q, d) for q, d in cb_]
         pb, Db = grade_piece(PB, cb_)
-        e = (pants_len(pf["sew"], "앞안솔기") - pants_len(pb["sew"], "뒤안솔기")) - d0
+        if not TRUE_BOTTOM: break                             # --rules 로 받은 표는 고치지 않는다(트루잉 끔)
+        e =(pants_len(pf["sew"], "앞안솔기") - pants_len(pb["sew"], "뒤안솔기")) - d0
         if abs(e) < 0.02: break
         adj = (adj[0] + u[0] * e, adj[1] + u[1] * e)
     rb = dict(rb); rb["가랑이"] = (rb["가랑이"][0] + PBS * adj[0], rb["가랑이"][1] + adj[1])

@@ -122,3 +122,9 @@
 - **발견자**: planner-architect
 - **내용**: PDF 합성은 pikepdf(Form XObject 재사용 + W n 클리핑 + cm 스케일)로 무손실 벡터·CMYK 보존. PyMuPDF는 PNG 렌더 시 RGB 변환되므로 검수 미리보기에만 쓰고 출력 경로엔 절대 사용 금지.
 - **참조횟수**: 0
+
+### [2026-10-20] 재단 패턴 «공장 보냄» 잠금 — 실수로 잠갔을 때 푸는 운영 절차
+- **분류**: decision
+- **발견자**: developer
+- **내용**: 잠금 정본은 버전 폴더 `data/cad/{style}/v{n}/lock.json` + 창고(pattern-cad) 물건 `{style}/v{n}/lock` 둘뿐이다(meta.json 은 안 고친다). 화면·API 에는 «풀기» 가 없다(공장 보낸 판을 함부로 못 풀게). 실수로 잠갔으면 사장님 확인 후: ① Supabase 대시보드 → Storage → `pattern-cad` → `{style}/v{n}/lock` 지우기(창고는 덮어쓰기·삭제 규칙이 없어 앱이 못 지운다 — 대시보드에서 사람이) ② Render 셸에서 `rm data/cad/{style}/v{n}/lock.json` ③ 화면 새로고침으로 «공장 보냄» 사라짐 확인. ①을 빼고 ②만 하면 재배포 복원 때 다시 잠긴다. 잠금 기록(누가·언제)은 지우기 전에 lock 내용을 복사해 남겨 둔다.
+- **참조횟수**: 0
