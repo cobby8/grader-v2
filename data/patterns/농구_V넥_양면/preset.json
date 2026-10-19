@@ -67,6 +67,11 @@
       "scale": 1.0
     },
     {
+      "name": "3XL",
+      "pattern_file": "3XL.svg",
+      "scale": 1.0
+    },
+    {
       "name": "4XL",
       "pattern_file": "4XL.svg",
       "scale": 1.0
@@ -75,12 +80,6 @@
       "name": "5XL",
       "pattern_file": "5XL.svg",
       "scale": 1.0
-    }
-  ],
-  "disabled_sizes": [
-    {
-      "name": "3XL",
-      "reason": "원본 암홀X_3XL.ai가 5XL과 동일한 자산 결함, 올바른 3XL.ai 재확보 필요"
     }
   ],
   "pieces": [
