@@ -6,6 +6,10 @@
 - **실사용 e2e(로컬, 실주문서 연세대 38행 + 실디자인 .ai)**: 파싱 38/38 정확 · V넥 12행 생성 14초 · 검사 전부 PASS · EPS 11/11 · 미리보기 육안 정상. **3XL 5명(13%)은 자산 결함으로 생성 불가**(skip 배너로 표시됨).
 - **제안 3~7 전부 구현 완료**(③ 37498cc ④ a273ff2 ⑤ 8c29327 ⑥ 96df4d3 ⑦ 커밋 대기). 남은 것: ① Render 복구 ② 3XL.ai 재확보.
 
+## 완료 기록 요약 (2026-10-20 정리)
+- F10 재단 패턴 1~6단계(보기·서버 다시 만들기·다시 그레이딩·잠금·마커·들여오기) — 단계마다 독립 시험+보안 리뷰 통과 후 커밋 c5d82e7·4f84d70·a72d8c8·fc18f26·0cefb64(미푸시). 상세는 각 커밋 본문. 남은 것: Render 배포 후 리눅스 메모리(marker_vm_peak_mb)·느린 서버 배수(GRADER_MARKER_SLOW) 실측
+- 2026-09-22 제안④~⑦·ZIP 주문요약 — 전부 커밋·배포(상세 git)
+
 ## TOP7 진행표 (2026-07-16 진단 · 2026-09-22 현재)
 | # | 문제 | 축 | 위치 | 심각도 | 빈도 | 난이도 | 쉬운말 한줄 |
 |---|------|----|------|--------|------|--------|-----------|
@@ -37,45 +41,6 @@
 | **TOP7 #1** | 데모 가짜주문 48명 제거·미업로드 게이트 | ✅ 0ae5f26 (tester 5/5) |
 | **TOP7 #2·#5·#6** | 콜드스타트 거짓표시 3종(목록 실패 구분·서버 핀 4상태·등록 실패 한글) | ✅ a2f2d08 (tester 59항목) |
 | **TOP7 #3·#4·#7 + XSS + ZIP탐색** | 패턴 삭제(_trash)·정직 안내·백업 상태 UI·toast 이스케이프·_find_job_dir 정확일치 | ✅ 2f316c8 (tester 52/52) |
-
-## 구현 기록 (developer · 2026-09-22 제안⑦ 자동 정리 + 이력 주문서명 + 편집기 시드 안내 — 커밋 대기)
-- **A state.py**: `get_uploads_dir()` · `cleanup_old_files(uploads_ttl_days=7, jobs_ttl_days=30, dry_run)`(mtime · uploads 는 바로 아래 일반 파일만 · jobs 는 `web_` 접두 폴더만 · `_is_inside` realpath 경로 이탈 방어 · 링크·running job 제외 · 항목별 errors 계속) · `prune_finished_jobs(86400)`(done/error + finished_at) · `record/get_maintenance_status`. `update_job` 이 status done/error 때 `finished_at` 자동 기록. **main.py**: `_cleanup_loop` daemon 스레드(부팅 직후 1회 + 24h) · `GRADER_CLEANUP_DISABLED=1` 이면 스레드 안 띄우고 enabled:false. **api.py**: `GET /maintenance/status`(admin). settings.html 서버 섹션 «자동 정리» 한 줄(403/404 면 숨김). `.env.example` 3변수.
-- **B**: work.html `startGenerate` body 에 `order_name: orderServer.fileName` · api `create_job_endpoint` 가 basename·200자 잘라 `job_meta.order_name` 저장 · `_job_summary` 가 meta.order_name 우선(구 job 은 폴더명 그대로). 폴더명 규칙 무변경.
-- **C patterns.html**: subB 배너 «미리 그려진 앞판·뒤판(점선)은 자동 추정이에요…» · CSS `.region[data-touched="0"]{border-style:dashed}`(색 변수 무변경) · 조각 목록 «자동 추정» 상태 · 매핑 완료 배너에 «그중 N개는 점선» · 하단 `#layoutCount` «자동 추정 N개 · 저장 N개»(`countLayoutState`, B+C 합산) · 성공 토스트에 «· 자동 추정 N개». `buildLayoutPayload`·전송 규칙 무수정.
-- 검증: py_compile 3 · vm.Script 4 · selftest PASS. A 단위(임시 폴더 monkeypatch): dry_run 집계=실삭제 2/2 · 최근·`_qa_`·접두 없는 폴더·patterns·링크 너머·running·잠긴 파일(errors 1 계속) 전부 무손상 · 2회차 0 · env TTL(abc/0→기본) · prune. TestClient: 부팅 11ms · on: runs 1·jobs_removed 1·next_run · off: enabled false·스레드 없음·삭제 0 · 인증 ON 무토큰 401 · POST /jobs order_name(`C:\문서\…xlsx`→basename)·없음→폴더명·숫자→"". 브라우저 :8000(내 PID 종료): 배너·점선·«자동 추정 2개 · 저장 0개»→드래그 후 «1·1»→소매 그림 «1·2»+«그중 1개는 점선»→subC «3·2»→배번 드래그 «2·3», payload 손댄 것만 · work.html startGenerate 캡처 body 에 order_name(없으면 null) · settings 행 «꺼짐». 실제 uploads 51·jobs 49·patterns 2 무변동.
-- tester 참고: 정리 스레드는 서버 부팅 직후 1회 돈다 — 로컬에서 실서버 띄울 때 `GRADER_CLEANUP_DISABLED=1` 없이 켜면 **실제 data/uploads 의 7일 지난 파일·data/jobs 의 30일 지난 web_ 폴더가 지워진다**(의도된 동작). 보관하려면 env 로 끄기. 브라우저 드래그는 pointer 합성 이벤트(실 OS 드래그는 5번에서 검증됨).
-
-## 구현 기록 (developer · 2026-09-22 제안⑤ B/C 편집기 좌표 실제 저장 — 커밋 8c29327)
-- api.py `layout` Form 필드 → `_apply_layout`(정규화→pt, y 뒤집기, 보낸 항목만 덮어쓰기, 틀리면 경고+자동 유지) · patterns.html `dataset.touched`·`buildLayoutPayload()`(손댄 것만) · 응답 `layout_applied`. 상세는 커밋 + decisions.
-
-## 구현 기록 (developer · 2026-09-22 제안⑥ 삭제 시 Storage zip 삭제 + 묘비 — 커밋 96df4d3)
-- storage_backup `delete_backup`(JWT 릴레이)·`_trash/.tombstones.json`·restore 가드 1줄 · api `DELETE /patterns/backup/{name}`·삭제 응답 storage/tombstoned · patterns.html 토스트·«창고에서 삭제» 버튼. 상세는 커밋 + decisions.
-
-## 구현 기록 (developer · 2026-09-22 ZIP 주문요약 동봉 — 완료·커밋 37498cc)
-- api.py `order_rows.json` 저장 · `_build_manifest_rows` · 주문요약.csv/xlsx ZIP 동봉 · `GET /jobs/{id}/manifest` · work.html 안내 1줄. 상세는 커밋 37498cc + 아래 tester 결과. 구 job 제외 행은 배번 빈칸.
-
-## 구현 기록 (developer · 2026-09-22 제안④ 이력 화면 재다운로드 + 패턴 표시)
-- **api.py**: `create_job_endpoint`(~896) 가 `job_meta.json`{pattern_id,design_name(토큰 `__` 뒤 원본명),out_format,created,total} 저장(임시파일→os.replace·실패 무시) · `_design_display_name()` 신설 · `_job_summary`/`GET /jobs` 에 `format`(meta→summary.format 폴백, 구 job 도 채워짐)·`design`·`skipped`(summary.skipped 길이)·`has_files`(output/ 존재) 추가. 구 job 은 pattern "-" 유지·정렬 그대로.
-- **history.html**: esc 헬퍼+toast 이스케이프 · 헤더 형식 칸 · 행마다 `PDF ZIP`·`EPS ZIP`(형식상 없는 쪽 disabled+title, has_files=false 면 둘 다 잠금+"파일 없음(재배포로 삭제됨)")·`요약표`(GET /manifest → 행 아래 접이식 표, 캐시) · 다운로드=apiFetch→blob→a[download](Content-Disposition filename* 존중)·연타 방지·404 토스트. 가짜 재생성/더보기 버튼 제거.
-- 검증: py_compile·vm.Script OK · TestClient 새 job(연세대 3행·V넥·both) pattern/format/design/has_files ✓, 구 ffc664 "-"/both/skipped 5 ✓, output 이름변경→has_files false→원복 ✓, zip pdf/eps 200+CD ✓ · 브라우저 :8000 버튼·요약표 38행 펼침·잠금 행 ✓, 콘솔 404 1건은 외부(fonts) 기존 · selftest PASS · 만든 job·업로드 삭제(PM 0125* 2개 보존).
-- tester 참고: 주문명 칸은 여전히 폴더명(job.json 에 주문서명이 없고 POST /jobs 도 안 받음) — 이번 범위 밖.
-
-## 테스트 결과 (tester · 2026-09-22 제안⑦ 자동 정리·이력 주문서명·시드 안내 — 미커밋 diff)
-- **통과 · 실패 0**. 정적 6종 OK(compile/vm.Script/selftest/색 0/보호파일 diff 0/workers 1/env 3). **삭제 안전 51/51**(임시 폴더): dry_run=실삭제 2+2 · 최근·하위폴더·`_qa_`·`260619_`·`_trash`·running·**정션+심볼릭 링크 너머 원본 무손상** · TTL0 도 예외 건너뜀 · patterns 오지정 시 `web_` 규칙으로 무손상 · 잠긴 파일 errors 후 계속.
-- startup: 11ms · DISABLED=1 → 스레드 0·enabled false · 무토큰 401 · cleanup 예외 주입 후 루프 생존·last_error 기록. ENABLED(임시): daemon 1·runs 1·1+1 삭제. order_name 7케이스(basename·200자·없음/숫자/공백→폴더명·구 job) OK.
-- 브라우저 **실마우스**: history `<img onerror>` 글자 그대로 · settings «꺼짐» · patterns 앞판 드래그 «1·2»→소매 «2·1»+«그중 2개는 점선»→subC «3·2»→배번 «2·3», payload 손댄 것만 · work body `order_name` 캡처 · 콘솔 favicon 404 뿐. 참고: `order_name` 의 `/`(`</b>`)는 basename 이 자름(표시 전용·무해). data 51/49/2 불변.
-
-## 테스트 결과 (tester · 2026-09-22 제안⑥ 삭제→창고 zip 삭제+묘비)
-- **통과 68/68 · 실패 0** (커밋 96df4d3). restore_missing 외 함수 단위 바이트 동일 · delete_backup 8갈래 · 헤더 비밀키 0 · 브라우저 실클릭 · 인증 ON 401×3. 참고: 로컬 미설정이라 창고 실경로는 monkeypatch — 실서버 1회 확인 권장.
-
-## 테스트 결과 (tester · 2026-09-22 제안⑤ B/C 편집기 좌표 실제 저장)
-- **통과 · 실패 0** (커밋 8c29327). a273ff2 워크트리 회귀 diff 0 · layout 환산 소수 1자리 일치 · 오류 6종+1MB 폭탄 200 경고(1MB 초과는 starlette 400) · run_job 픽셀 Δ 일치 · 실마우스 드래그 2회 · 안전. 참고: (b) 시드 front/back 안 옮기면 «모든 조각 매핑» 인데 저장은 자동 추정 → **제안⑦ C 로 안내 추가**.
-
-## 테스트 결과 (tester · 2026-09-22 ZIP 주문요약 — 커밋 37498cc)
-- 통과 70/70·회귀 0. 수정 권장 1(csv/xlsx `=1+1` 인젝션 → 수정 요청표·errors.md).
-
-## 테스트 결과 (tester · 2026-09-22 제안④ 이력 재다운로드 + 패턴 표시)
-- **통과(커밋 a273ff2)** — TestClient 46·인증 ON 401·브라우저 DOM·안전 4, 실패 0. `/jobs` 34개 45ms · 깨진 meta 5종 폴백 · `<img onerror>` 글자화 · 하드코딩 색 0. 참고(차단 아님): ① 형식 모르는 구 행의 ZIP 404 토스트 문구 순서 ② 정렬=폴더 mtime(기존) ③ 26MB ZIP ~10초 버튼 잠금. (상세는 2026-09-22 tester 로그·git)
 
 ## 백로그 (차단 아님, 후속)
 - **[Phase B: 등록패턴 파일 영속화]** Render 임시디스크→재배포 시 등록 preset 소실(현 repo커밋 2개만 잔존). 복구=재스캔등록(같은이름이면 메타 자동재적용). preset 20~88KB 소형→Supabase Storage 백업/복원 별도 승인단위로.
@@ -121,19 +86,28 @@ engine 공개 API(compose/Piece/SizeLayout/parse_svg/scale_translate/verify_outp
 | reviewer/tester | 3XL.ai | 원본이 5XL과 동일(자산결함) | 비활성·재확보 대기 |
 | tester | webapp/static/screens/patterns.html regFailMsg(≈1180) | [TOP7 #6 회귀] 502/503/504 에서 body.error(서버 JSON, 예: from-drive "Drive 접근 실패: …")가 있어도 "서버가 깨어나는 중"으로 덮음 → 드라이브 권한 문제를 콜드스타트로 오안내. 수정안: body.error 있으면 그걸 우선, 없을 때(HTML 게이트웨이 응답)만 깨우는중 문구 | ✅ 완료 a2f2d08 (2026-10-15 재확인: 502+error→이유 그대로·HTML만→깨우는중) |
 | tester | webapp/api.py `_manifest_table`(≈1290)·`_manifest_xlsx_bytes` | [수정 권장·회귀 아님] 주문요약 인젝션 — `=1+1` 이 CSV 그대로, xlsx 는 openpyxl 수식 셀('f'). 수정안: `=+-@\t\r` 접두 문자열에 `'` 접두 + xlsx `data_type='s'` | ✅ 완료 37498cc `_safe_cell` (2026-10-15 재확인: CSV·xlsx 모두 `'=1+1` 글자 셀) |
+| reviewer | webapp/cad.py:628-630 `_engine_env` | [F10-2 중간] 빼기 목록(SUPABASE_/GDRIVE_/GOOGLE_)이라 ANTHROPIC_API_KEY 등 나머지 비밀이 일꾼에 넘어감 → 허용 목록(PATH·HOME·LANG·LC_*·TMP*·SYSTEMROOT·PYTHON*·PATTERN_ENGINE_*)으로 | ✅ 2026-10-19 재리뷰 확인(메모리는 아래 «실측» 줄로 이어짐) |
+| reviewer | webapp/cad.py:646-657 | [F10-2 중간] 엔진 결과 `checks_bad`(검산 실패)를 안 보고 새 최신 버전으로 저장 → 비어 있지 않으면 저장 거절(또는 meta 에 경고 표시) | ✅ 2026-10-19 재리뷰 확인(메모리는 아래 «실측» 줄로 이어짐) |
+| reviewer | cad.py:637-645 + Dockerfile | [F10-2 중간] 메모리: 일꾼 175~207MB(윈도우 실측)만 512MB 와 비교, 서버 본체+동시 합성 작업 합은 미측정 → Render 실측 + 엔진 중 합성 작업 막기(또는 일꾼 RLIMIT_AS) | ✅ 2026-10-19 재리뷰 확인(메모리는 아래 «실측» 줄로 이어짐) |
+| reviewer | Dockerfile:19 · vendor ENGINE_VERSION.json | [F10-2 중간] 지문 시험이 빌드에서 안 돎(Dockerfile 에 시험 없음·런타임 검사 없음) + 사본 판이 `f4fb9def+dirty`(service.py 가 stizshop 에 미커밋) → stizshop 커밋 후 재동기화 + Dockerfile 에 `RUN python -m unittest tests.test_engine_vendor` | ✅ 2026-10-19 재리뷰 확인(메모리는 아래 «실측» 줄로 이어짐) |
+| reviewer | engine_child/sitecustomize.py:28-45 · cad.py:625 | [F10-2 재리뷰 중간] RLIMIT_AS 1024MB·oom_score_adj 의 리눅스 실측 기록 없음 + 걸렸는지 결과(GRADER_ENGINE_GUARD)를 아무도 안 읽음(실패해도 조용함) → 안전띠가 stderr 로 한 줄 남기고 engine_run 에 guard·VmPeak 기록, 배포 직후 1회 다시 만들기로 확인 | 대기 |
+| reviewer | 커밋 묶음 | [F10-2 재리뷰 중간] vendor/·webapp/engine_child/·tests/test_engine_vendor.py·tests/test_cad_rebuild.py·scripts/sync_pattern_engine.py 가 미추적(??) — vendor 빠지면 빌드 RUN 실패(배포 막힘), engine_child 빠지면 안전띠 없이 조용히 돎 → 함께 커밋(다른 ?? 문서·data/patterns 새 폴더는 섞지 말 것) | 대기 |
+| tester | cad.py `_rebuild_thread` · state.HeavyGate.exclusive_use | [권장·회귀 아님] 엔진의 «합성 끝나기 기다림» 에 상한 없음 — 합성 하나가 멈추면 엔진+뒤 합성 전부 대기. 수정안: 기다림 상한(예 10분) 넘으면 엔진 작업 error·waiting_excl 해제 | ✅ 2026-10-20 리뷰 확인(600초·notify_all) |
+| reviewer | cad.py restore_missing_with_token (`_sb_list(f"{sid}/v{ver}/") or []`) | [F10-3·5 중간] 버전 폴더 목록 읽기 실패(None)면 빈 목록으로 보고 lock·rules 를 건너뛴 채 복원 → 재배포 뒤 «공장 보냄» 잠금이 조용히 풀림. 수정: None 이면 ValueError 로 그 버전 복원 보류 + meta.rules_sha256 있는데 rules 없으면 보류 | 대기 |
+| reviewer | cad.py `_regrade_thread`(저장) · `_store_from_engine` 직전 | [F10-3·5 중간] 잠금 확인이 요청 때만 — 저장 1분 사이 그 판을 잠그면 잠긴 판에서 v n+1 이 생김. 수정: 저장 직전 `_lock_info(style_id, from_ver)` 다시 보고 있으면 실패 | 대기 |
+| reviewer | cad.py export_files | [F10-5 중간] 고른 파일을 메모리(BytesIO)에 다 담음 — 상한 200MB·직원 누구나·HEAVY 게이트 밖 → 엔진과 겹치면 512MB 위험. 수정: 임시파일(SpooledTemporaryFile/NamedTemporaryFile)+FileResponse 또는 합계 상한을 실측 크기(현 최대 zip 6MB) 맞춰 낮춤 | 대기 |
+| reviewer | 배포 순서 | [F10-3·5 배포 차단] ENGINE_VERSION.json dirty_files 2개 → Dockerfile RUN test_engine_vendor 실패. stizshop 엔진 2파일+test_regrade 먼저 커밋 → sync 재실행 → grader 커밋(tests/test_cad_regrade.py ?? 포함) | 대기 |
+| tester | webapp/static/screens/cad.html loadRules(≈867) | [F10-3 화면] 그레이딩 탭이 규칙만 읽히면 직원에게도 보임(보기 전용). 요구는 «관리자에게만» — `!G.rules0 \|\| !S.canUpload` 로 숨길지, 직원 보기 허용이 의도인지 PM 결정 | 대기 |
+| reviewer | stizshop service.py:99 · marker.py:767-788 | [F10-4 높음] 벌수 상한 200 근거 없음 — 14벌 quick 379MB(+서버 151 = 512 초과)·28벌 617MB/73초, budget 은 ①②⑥ 못 막아 실상한 1200초 동안 합성 정지. 수정: Render 실측 기반 서버 상한(예 10~12벌·초과 quick 강제/거절) | 대기 |
+| reviewer | cad.py:1346 · engine/order.py:483 | [F10-4 높음] xlsx 빈 행 폭탄 4.8KB→248MB(서버 프로세스·async 안이라 루프 정지). 수정: iter_rows(max_row·max_col 상한)+zip 풀린 크기 검사+스레드풀 | 대기 |
+| reviewer | 배포 순서 | [F10-4 배포 차단] ENGINE_VERSION dirty service.py → stizshop 커밋→sync→grader 커밋(test_cad_marker.py·vendor marker.py ?? 포함) | 대기 |
+| reviewer | cad.py:1287-1301 · 큐 858-880 | [F10-4 중간] AS 1536 은 512MB 방어 아님(oom_adj 리눅스 실측 필요)·운영자 값 max()로 덮음 / 대기열 3칸 관리자와 공유·사람별 제한·취소 없음 | 대기 |
+| tester | webapp/cad.py order_counts · engine/order.py | [F10-4] 하의만 산 줄 누락: 양식③ 이름·배번·상의 빈 «하의만» 줄은 parse_order 가 버림 · 양식① 배번 없는 하의만 줄에서 parse_order 가 멈춰 뒤 사람 전부 누락(경고 없음) → 하의 벌수가 조용히 적게 나옴 | 대기 |
+| tester | tests/test_cad_marker.py | [F10-4 낮음] 주문서 업로드가 실제 data/uploads 에 남음(매 회 8개) — state.UPLOADS_DIR 임시 폴더로 패치 | 대기 |
+| tester | 기본 탐색(서버 설정 jobs1·120초) | [F10-4 결정] 가스 상의 8벌에서 time_budget_hit — «빠르게»와 같은 길이를 4배 시간에, 결과가 기계 속도에 좌우. 예산·기본값 PM 판단 | 대기 |
+| tester | webapp/cad.py `_order_qty` | [F10-4 중간] 수량 칸 후보에 «비고» 가 들어가 자유 글자의 숫자를 벌수로 읽음 — 3명 주문서에 비고 «11번으로 변경» → 상의 M 11벌·하의 M 11벌(경고 없음). «2024 우승기념»→2024 · «010-1234-5678»→10 · «5XL 요청»→5. 수정안: «N장/N벌/N개» 또는 숫자만인 칸만 수량으로, 그 밖 숫자는 무시+경고 | 대기 |
+| tester | webapp/cad.py `_order_qty` | [F10-4 낮음] «상의2장» 만 적힌 줄은 하의 0벌 — 하의 사이즈가 차 있어도 빠짐(«하의 1장»도 상의 0). 하의 칸이 차 있으면 1로 보는지 PM 판단 | 대기 |
+| tester | stizshop service.py admit_marker | [F10-4 정보] 기본값(느림 2·180초)에선 시간이 먼저 막혀 forced_quick 이 1~200벌 어디서도 안 생김 — «빠르게 강제» 단계는 사실상 죽은 길(직원은 원래 빠르게). 문구·시험 기대만 맞출 것 | 대기 |
 
 ## 작업 로그 (최근 10건)
-| 날짜 | 에이전트 | 작업 | 결과 |
-|------|---------|------|------|
-| 2026-10-19 | developer | [F10 1단계 검증 수정 10건] XSS(숫자 자리 Number+서버 숫자 검사)·압축 폭탄 상한·백업 실패 시 버전 지우고 502·fullmatch·이상한 모양 400·깨진 meta 404·복원 시각 잠금 안+성공 때만·+dirty·메뉴 배경·작은 조각 이름 | tests.test_cad 16/16 · 커밋 대기(PM) |
-| 2026-10-19 | reviewer | [F10 1단계 보안 리뷰] cad.py·cad.html·main.py·메뉴·창고 정책(pg_policies 읽기)·advisors | 높음 0 · 중간 3(view.tol_check 미이스케이프 XSS · ZIP 압축폭탄 · 창고 백업 실패 버전 재시도 불가) · 낮음 5(정규식 $ 줄바꿈 등) · 정책 정상 |
-| 2026-10-19 | developer | [F10 1단계 재단 패턴 보기 전용] webapp/cad.py(/api/cad/* · 새 버전만 · 창고 pattern-cad 백업+되읽기 · 로그인 요청 때 복원) + screens/cad.html(사이즈 전환·9색 겹쳐 보기·두 점 길이·검산표·내려받기) + 메뉴 4화면 + tests/test_cad.py 6개 | 시험 6/6 · 브라우저 검산 80칸 최대 0.053mm · 파일 62/62 지문 동일 · 커밋 대기(PM) |
-| 2026-09-22 | tester | [제안⑦ 검증] 정적 6종 · 삭제 안전 51(정션/심볼릭/running/_trash/TTL0/patterns 오지정) · TestClient disabled/enabled+401+루프 예외 생존 · order_name 7케이스 · 브라우저 실마우스 4단계+work body 캡처 | **통과** 실패 0 · data 51/49/2 불변 · 정리 완료 |
-| 2026-09-22 | developer | [제안⑦ 자동 정리·이력 주문서명·시드 안내] cleanup_old_files(7일/30일·web_ 만·realpath)+24h daemon+maintenance/status · order_name→job_meta · 점선/카운트 배너 | 단위+TestClient+브라우저 통과 · 실데이터 무변동 · 커밋 대기(PM) |
-| 2026-09-22 | developer | [제안⑥ 삭제→Storage zip 삭제+묘비] delete_backup(JWT 릴레이)·.tombstones.json·restore 가드 1줄·DELETE /patterns/backup/{name}·UI 토스트/버튼 | 단위 40/40 · 인증 ON 401 · 브라우저 실클릭 · selftest PASS · storage_backup 삭제줄 0 · 커밋 대기(PM) |
-| 2026-09-22 | tester | [제안⑥ 검증] storage_backup 함수 단위 회귀 0 · restore 묘비 가드 5시나리오 · delete_backup 8갈래+헤더 비밀키 0 · api 순서/재등록/backup 삭제/401 · 브라우저 실클릭 | **통과** 68/68 · 실패 0 · 정리 완료 |
-| 2026-09-22 | tester | [제안⑤ 검증] a273ff2 워크트리 회귀 diff 0 · layout 환산 손계산 · 오류 6종+폭탄 · run_job 픽셀 측정 · 브라우저 실마우스 2회 · 안전 | **통과** 실패 0 · 참고 4(UI 는 소매 필수라 layout 없는 등록 불가 등) · 정리 완료 |
-| 2026-09-22 | developer | [제안⑤ B/C 좌표 저장] layout 폼 필드(정규화→pt 서버 환산) · touched 만 전송 · 배너/토스트 갱신 | (a)회귀 diff 0 (b)(c)(e) 통과 · 브라우저 확인 · decisions 1건 · 커밋 대기(PM) |
-| 2026-09-22 | tester | [제안④ 검증] 정적 3종·TestClient 46·인증 ON 401·브라우저 DOM(연타 1회·HTML 이스케이프·잠금)·안전 4 | **통과** 실패 0 · 참고 3(토스트 문구·mtime 정렬·대용량 대기) · 정리 완료 |
-| 2026-09-22 | developer | [제안④ 이력 재다운로드] job_meta.json · /jobs format/design/skipped/has_files · history 버튼 3개+접이식 요약표 | TestClient 15/15 · 브라우저 확인 · selftest PASS · 커밋 대기(PM) |
-| 2026-09-22 | tester | [ZIP 주문요약 검증] 정적 3종·e2e 38행 both·csv/xlsx/manifest 대조·회귀·주입·인젝션 | 기능 70/70 통과 · 수정 권장 1(csv/xlsx 인젝션) · errors.md 1건 |
+
