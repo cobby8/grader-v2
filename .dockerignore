@@ -28,6 +28,8 @@ design_source/
 .env
 .env.local
 .env.*.local
+# 서비스 계정 열쇠 파일(로봇 계정 JSON) — 운영은 GDRIVE_SA_JSON 환경변수로만 받는다
+stiz-*.json
 
 # 버전관리/캐시/에디터 부산물
 .git/

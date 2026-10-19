@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -32,11 +33,12 @@ import re
 import shutil
 import threading
 import time
+import traceback
 import zipfile
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from . import state
@@ -68,6 +70,7 @@ FILE_KINDS = {                                                       # 내려받
     "allsizes": ("application/dxf", "전 사이즈 겹친 DXF"),
     "a4": ("application/pdf", "A4 분할 PDF"),
 }
+META_EXTRA_KEYS = ("rebuilt_from", "engine_run")                     # store_version(extra=…) 로 meta 에 더할 수 있는 칸
 _HTTP_TIMEOUT = 30.0
 _RESTORE_EVERY = 600.0                                               # 복원 확인 간격(초)
 
@@ -442,7 +445,7 @@ def _style_summary(style_id: str) -> Optional[Dict[str, Any]]:
 
 def _public_meta(m: Dict[str, Any], backup: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     out = {k: m.get(k) for k in ("version", "uploaded_at", "uploaded_by", "note", "sizes", "size_labels", "files",
-                                 "view_sha256", "zip_sha256", "view_bytes", "zip_bytes", "source")}
+                                 "view_sha256", "zip_sha256", "view_bytes", "zip_bytes", "source", "rebuilt_from", "engine_run")}
     out["backup"] = None if backup is None else {"ok": bool(backup.get("ok")), "skipped": bool(backup.get("skipped")),
                                                  "restored": bool(backup.get("restored")), "reason": backup.get("reason"),
                                                  "at": backup.get("at")}
@@ -457,7 +460,12 @@ def _can_upload(request: Request) -> bool:
 def cad_me(request: Request) -> Dict[str, Any]:
     """화면이 «올리기» 단추를 보여 줄지 묻는다(관리자이거나 로컬 무인증)."""
     base, _ = _sb_config()
-    return {"can_upload": _can_upload(request), "auth_required": auth_required(), "storage": bool(base)}
+    try:
+        rebuildable = sorted(getattr(load_service(), "REBUILDABLE", {}))     # 서버에서 «다시 만들기» 가 되는 스타일
+    except Exception:
+        rebuildable = []
+    return {"can_upload": _can_upload(request), "auth_required": auth_required(), "storage": bool(base),
+            "rebuildable": rebuildable}
 
 
 @router.get("/styles")
@@ -544,8 +552,17 @@ async def upload_style(request: Request, view: UploadFile = File(...), exports: 
     view_bytes = await view.read(MAX_VIEW_BYTES + 1)
     zip_bytes = await exports.read(MAX_ZIP_BYTES + 1)
     v = validate_upload(view_bytes, zip_bytes)
+    code, content = store_version(v, view_bytes, zip_bytes, jwt=_bearer(request), uploaded_by=getattr(request.state, "email", None),
+                                  note=note, view_name=view.filename, zip_name=exports.filename)
+    return JSONResponse(status_code=code, content=content)
+
+
+def store_version(v: Dict[str, Any], view_bytes: bytes, zip_bytes: bytes, jwt: Optional[str], uploaded_by: Optional[str],
+                  note: str = "", view_name: Optional[str] = None, zip_name: Optional[str] = None,
+                  extra: Optional[Dict[str, Any]] = None) -> Tuple[int, Dict[str, Any]]:
+    """검사를 통과한(validate_upload) view.json + exports.zip 을 새 버전으로 쌓는다 — 올리기·서버 다시 만들기가 같이 쓴다.
+    디스크 → 창고 백업 → 되읽기 확인. 반환 (상태 코드, 본문): 201 성공 · 502 창고 실패(디스크에서도 지움)."""
     style = v["style"]; sid = style["id"]
-    jwt = _bearer(request)
     restore_missing_with_token(jwt, force=True)                            # 창고에만 있는 옛 버전과 번호가 겹치지 않게
     with _LOCK:
         nums = _versions_on_disk(sid)
@@ -555,13 +572,14 @@ async def upload_style(request: Request, view: UploadFile = File(...), exports: 
             if m:
                 nums.append(int(m.group(1)))
         ver = (max(nums) + 1) if nums else 1
-        meta = {"style_id": sid, "version": ver, "name": style.get("name"), "garment": style.get("garment"),
+        safe_extra = {k: v2 for k, v2 in (extra or {}).items() if k in META_EXTRA_KEYS}   # 허용 열쇠만 — 핵심 칸(지문·번호)은 못 덮는다
+        meta = {**safe_extra, "style_id": sid, "version": ver, "name": style.get("name"), "garment": style.get("garment"),
                 "group": style.get("group"), "sizes": style.get("sizes"), "size_labels": style.get("size_labels"),
                 "base_size": style.get("base_size"), "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                "uploaded_by": getattr(request.state, "email", None), "note": (note or "")[:500],
+                "uploaded_by": uploaded_by, "note": (note or "")[:500],
                 "view_sha256": _sha256(view_bytes), "zip_sha256": _sha256(zip_bytes),
                 "view_bytes": len(view_bytes), "zip_bytes": len(zip_bytes), "source": v.get("source"),
-                "files": v.get("files") or [], "view_name": view.filename, "zip_name": exports.filename}
+                "files": v.get("files") or [], "view_name": view_name, "zip_name": zip_name}
         _write_version(sid, ver, {"view.json": view_bytes, "exports.zip": zip_bytes,
                                   "meta.json": json.dumps(meta, ensure_ascii=False, indent=1).encode("utf-8")})
     backup = backup_version(sid, ver, jwt)
@@ -572,9 +590,216 @@ async def upload_style(request: Request, view: UploadFile = File(...), exports: 
         with _LOCK:
             shutil.rmtree(_vdir(sid, ver), ignore_errors=True)
         print(f"[cad] 창고 백업 실패로 v{ver} 를 디스크에서 지움: {sid}")
-        return JSONResponse(status_code=502, content={
+        return 502, {
             "detail": f"창고(pattern-cad)에 보관하지 못해 v{ver} 올리기를 취소했습니다. 잠시 후 다시 올려 주세요. "
-                      f"(사유: {backup.get('reason') or '알 수 없음'})", "style_id": sid, "version": ver, "backup": backup})
+                      f"(사유: {backup.get('reason') or '알 수 없음'})", "style_id": sid, "version": ver, "backup": backup}
     print(f"[cad] 새 버전: {sid} v{ver} (view {len(view_bytes):,} B · zip {len(zip_bytes):,} B)")
-    return JSONResponse(status_code=201, content={"style_id": sid, "version": ver, "backup": backup,
-                                                  "view_sha256": meta["view_sha256"], "zip_sha256": meta["zip_sha256"]})
+    return 201, {"style_id": sid, "version": ver, "backup": backup,
+                 "view_sha256": meta["view_sha256"], "zip_sha256": meta["zip_sha256"]}
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  F10 2단계 — 서버에서 엔진 돌려 «다시 만들기» (🛡 관리자)
+# ══════════════════════════════════════════════════════════════════════
+# 왜(비유): 1단계는 stizshop 에서 구워 온 «사진» 만 걸었다. 2단계는 그 «사진기(엔진)» 의 도장 찍힌 사본
+#   (vendor/pattern_engine — scripts/sync_pattern_engine.py 가 베낀다)을 서버에 두고 서버가 직접 다시 굽는다.
+#   엔진은 «따로 띄운 일꾼 프로세스» 에서 돈다(service.rebuild) — 서버 메모리가 부풀지 않고, 엔진이 죽어도 서버는 산다.
+#   재단 패턴 작업은 «한 줄로» 선다(_ENGINE_LOCK) — 일꾼 1명(--workers 1) 서버라 둘이 동시에 돌면 합성 작업까지 느려진다.
+# 만든 결과는 «올리기» 와 같은 검사(validate_upload)·같은 저장(store_version: 새 버전·창고 백업·되읽기)을 거친다.
+def engine_dir() -> str:
+    return os.environ.get("GRADER_PATTERN_ENGINE_DIR") or os.path.join(state.PROJECT_ROOT, "vendor", "pattern_engine")
+
+
+_ENGINE_LOCK = threading.Lock()                                      # 엔진 작업은 한 번에 하나(한 줄로 세우기)
+_QUEUE_LOCK = threading.Lock()
+_queue = {"waiting": 0}                                              # 줄 선(시작 전 + 돌고 있는) 작업 수
+REBUILD_QUEUE_MAX = 3                                                # 이보다 많이 밀리면 429 — 누가 단추를 연타해도 서버가 안 잠긴다
+_service_mod: Dict[str, Any] = {}
+CHILD_GUARD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "engine_child")   # 일꾼 안전띠(sitecustomize.py)
+# 일꾼 주소 공간 상한(MB, 리눅스만) — 근거(2026-10-19 실측·추정):
+#   실제 RAM 최고치는 170~210MB(윈도우 작업 집합), 확정 메모리(commit) 최고 165MB.
+#   리눅스 «주소 공간» 은 RAM 이 아니라 예약까지 센다 — 파이썬·numpy·GEOS·MuPDF 라이브러리 지도 + 스레드 스택 + malloc 예약으로
+#   검증에서 잰 예약이 약 775MB 였다. 450MB 로 걸면 일꾼이 시작하자마자 MemoryError 로 죽는다.
+#   그래서 1024MB(예약 775MB 의 약 1.3배) — «고장으로 끝없이 커질 때» 만 막는 백스톱이다.
+#   서버를 지키는 진짜 장치는 oom_score_adj=1000(메모리가 모자라면 커널이 일꾼부터 죽인다).
+ENGINE_AS_LIMIT_MB_DEFAULT = 1024
+# 일꾼에게 넘기는 환경변수 «허용 목록» — 이것 말고는 하나도 안 넘긴다(API 키·창고 열쇠·GRADER_* 설정이 일꾼에 보이지 않게)
+ENGINE_ENV_ALLOW = {"PATH", "HOME", "LANG", "LANGUAGE", "TZ", "TMP", "TMPDIR", "TEMP", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR",
+                    "COMSPEC", "PATHEXT", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "PROGRAMDATA", "NUMBER_OF_PROCESSORS",
+                    "PROCESSOR_ARCHITECTURE"}
+ENGINE_ENV_PREFIX = ("LC_", "PYTHON", "PATTERN_ENGINE_")
+TOKEN_MIN_LEFT_S = 600                                               # 줄에 넣을 때 로그인이 이만큼은 남아 있어야(엔진 1분 + 줄 3건)
+RELOGIN_MSG = "로그인이 끝났거나 곧 끝납니다. 다시 로그인한 뒤 눌러 주세요."
+
+
+def load_service():
+    """vendor/pattern_engine/service.py 를 불러온다(표준 라이브러리만 쓰는 창구라 불러와도 엔진이 돌지 않는다)."""
+    path = os.path.join(engine_dir(), "service.py")
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=503, detail="서버에 패턴 엔진 사본이 없습니다(vendor/pattern_engine). 관리자에게 알려 주세요.")
+    mt = os.path.getmtime(path)
+    m = _service_mod.get(path)
+    if m is None or m[0] != mt:
+        spec = importlib.util.spec_from_file_location("stiz_pattern_engine_service", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _service_mod[path] = (mt, mod)
+    return _service_mod[path][1]
+
+
+def _engine_env() -> Dict[str, str]:
+    """일꾼에게 넘길 환경변수 — 허용 목록만(+ 안전띠·메모리 절약 설정). 엔진은 디스크만 쓰니 열쇠가 필요 없다."""
+    env = {k: v for k, v in os.environ.items() if k.upper() in ENGINE_ENV_ALLOW or k.upper().startswith(ENGINE_ENV_PREFIX)}
+    pp = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = CHILD_GUARD_DIR + (os.pathsep + pp if pp else "")   # 일꾼이 켜질 때 sitecustomize(안전띠)를 먼저 읽게
+    env["GRADER_ENGINE_LIMIT_AS_MB"] = str(os.environ.get("GRADER_ENGINE_LIMIT_AS_MB") or ENGINE_AS_LIMIT_MB_DEFAULT)
+    env["GRADER_ENGINE_OOM_ADJ"] = os.environ.get("GRADER_ENGINE_OOM_ADJ", "1000")
+    for k in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):  # 계산 스레드 1개 — 스레드마다 잡는 예약 메모리를 줄인다
+        env[k] = "1"
+    env["MALLOC_ARENA_MAX"] = "2"                                       # glibc 가 스레드마다 64MB 씩 예약하지 않게
+    return env
+
+
+def _jwt_exp(jwt: Optional[str]) -> Optional[int]:
+    """토큰(JWT)에 적힌 만료 시각(초). 서명 검사는 require_auth 가 이미 했다 — 여기서는 «남은 시간» 만 읽는다."""
+    try:
+        import base64
+        part = jwt.split(".")[1]
+        data = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)).decode("utf-8"))
+        exp = data.get("exp")
+        return int(exp) if isinstance(exp, (int, float)) else None
+    except Exception:
+        return None
+
+
+def _short_engine_error(e: Exception) -> str:
+    """직원 화면에 보일 짧은 사유 — 엔진 출력 꼬리는 서버 로그에만 남긴다"""
+    if isinstance(e, HTTPException):
+        return str(e.detail)
+    t = str(e)
+    if "MemoryError" in t:
+        return "메모리가 모자라 엔진이 멈췄습니다."
+    import re as _re
+    m = _re.search(r"종료 코드 (-?\d+)", t)
+    if m and int(m.group(1)) < 0:
+        return f"엔진이 강제로 멈췄습니다(신호 {-int(m.group(1))} — 메모리 부족일 수 있음)."
+    return t.split("\n", 1)[0].replace(" 마지막 출력:", "").strip()[:300] or "알 수 없는 오류"
+
+
+def _font_name(font: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not font:
+        return None
+    if font.get("source") == "builtin":
+        return "Droid Sans Fallback (서버 내장)"
+    return os.path.splitext(os.path.basename(font.get("path") or ""))[0] or None
+
+
+def _rebuild_thread(job_id: str, style_id: str, from_ver: int, group: str, jwt: Optional[str], email: Optional[str], note: str) -> None:
+    svc = None
+    # 작업 폴더 이름을 web_ 로 시작하게 — 실패해 남은 engine.log 도 기존 30일 자동 정리(state.cleanup)가 치운다
+    work = os.path.join(state.get_jobs_dir(), f"web_cad_{time.strftime('%y%m%d_%H%M%S')}_{job_id[:6]}")
+    try:
+        svc = load_service()
+        with _ENGINE_LOCK:                                                  # ① 엔진끼리 한 줄로
+            state.update_job(job_id, stage="wait_heavy", stage_ko="합성 작업이 끝나기를 기다림", out_dir=work)
+            with state.HEAVY.exclusive_use():                               # ② 돌고 있는 합성이 끝날 때까지 — 새 합성은 엔진 뒤로
+                state.update_job(job_id, stage="start", stage_ko="엔진 시작")
+                timeout = float(os.environ.get("GRADER_CAD_ENGINE_TIMEOUT") or 1200)
+
+                def on_step(i: int, n: int, name: str) -> None:
+                    state.update_job(job_id, done=i - 1, total=n, stage=name, stage_ko=svc.STEP_KO.get(name, name))
+                res = svc.rebuild(work, groups=[group], on_step=on_step, timeout=timeout, env=_engine_env())
+        s = (res.get("styles") or {}).get(style_id)
+        if not s:
+            raise ValueError("엔진 결과에 이 스타일이 없습니다(엔진이 이 스타일을 만들지 못함).")
+        if s.get("checks_bad"):                                             # 맞물림 검산이 어긋난 판은 저장하지 않는다
+            bad = s["checks_bad"]
+            print(f"[cad] 검산 실패로 저장 안 함 {style_id}: {bad}")
+            raise ValueError(f"검산이 맞지 않아 저장하지 않았습니다({len(bad)}칸 · 예: {bad[0][0]} {bad[0][1]}).")
+        with open(s["view"], "rb") as f:
+            view_bytes = f.read()
+        with open(s["zip"], "rb") as f:
+            zip_bytes = f.read()
+        state.update_job(job_id, stage="store", stage_ko="검사·저장")
+        v = validate_upload(view_bytes, zip_bytes)                         # 올리기와 같은 검사 — 서버가 만든 것도 봐주지 않는다
+        if v["style"]["id"] != style_id:
+            raise ValueError(f"엔진이 다른 스타일을 만들었습니다: {v['style']['id']}")
+        font = res.get("font") or {}
+        run = {"engine": res.get("engine"), "font": font.get("source"), "font_name": _font_name(font),
+               "peak_rss_mb": res.get("peak_rss_mb"), "timings_s": res.get("timings_s"), "wall_s": res.get("wall_s")}
+        code, content = store_version(v, view_bytes, zip_bytes, jwt=jwt, uploaded_by=email,
+                                      note=note or f"서버에서 다시 만듦(v{from_ver} 기준)", view_name="view.json", zip_name="exports.zip",
+                                      extra={"rebuilt_from": from_ver, "engine_run": run})
+        if code != 201:
+            objs = ((content.get("backup") or {}).get("objects") or {}).values()
+            expired = (_jwt_exp(jwt) or 1e18) <= time.time()
+            if expired or any(str(o.get("reason")) in ("status 401", "status 403") for o in objs):
+                raise ValueError("창고에 넣지 못했습니다 — " + RELOGIN_MSG)
+            raise ValueError("창고에 넣지 못해 저장을 취소했습니다. 잠시 후 다시 눌러 주세요.")
+        state.update_job(job_id, status="done", done=len(svc.STEPS), stage="done", stage_ko="끝",
+                         result={"style_id": style_id, "version": content["version"], "backup": content.get("backup"), **run})
+        print(f"[cad] 다시 만들기 끝: {style_id} v{from_ver} → v{content['version']} · 일꾼 최고 {res.get('peak_rss_mb')} MB")
+        shutil.rmtree(work, ignore_errors=True)                             # 결과는 버전 폴더에 들어갔다 — 작업 폴더는 지운다
+    except Exception as e:
+        print(f"[cad] 다시 만들기 실패 {style_id} v{from_ver}:\n{traceback.format_exc()}")   # 엔진 출력 꼬리는 서버 로그에만
+        state.update_job(job_id, status="error", error=f"다시 만들기에 실패했습니다: {_short_engine_error(e)}"[:400])
+        # 실패한 작업 폴더는 엔진 출력(engine.log)만 남기고 지운다 — 원인 확인용·디스크 절약
+        try:
+            if os.path.isdir(work):
+                for nm in os.listdir(work):
+                    full = os.path.join(work, nm)
+                    if nm != "engine.log":
+                        shutil.rmtree(full, ignore_errors=True) if os.path.isdir(full) else os.remove(full)
+        except Exception:
+            pass
+    finally:
+        with _QUEUE_LOCK:
+            _queue["waiting"] = max(0, _queue["waiting"] - 1)
+
+
+@router.post("/styles/{style_id}/v/{ver}/rebuild", dependencies=[Depends(admin_required)])
+def rebuild_style(style_id: str, ver: str, request: Request, payload: Optional[Dict[str, Any]] = Body(None)) -> JSONResponse:
+    """🛡 관리자 — 서버의 엔진 사본으로 이 스타일을 처음부터 다시 만들어 «새 버전» 으로 쌓는다(옛 버전은 그대로).
+    오래 걸리므로(1분 남짓) 작업 번호만 바로 돌려주고, 화면은 GET /api/cad/jobs/{job} 으로 진행률을 묻는다."""
+    _check_style_id(style_id)
+    v = _resolve_ver(style_id, ver)
+    svc = load_service()
+    group = getattr(svc, "REBUILDABLE", {}).get(style_id)
+    if not group:
+        raise HTTPException(status_code=400, detail="이 스타일은 아직 서버에서 다시 만들 수 없습니다(서버에 원본이 없음). stizshop 에서 만들어 올려 주세요.")
+    jwt = _bearer(request)
+    with _QUEUE_LOCK:
+        ahead_now = _queue["waiting"]
+    if auth_required() and jwt:                                             # 창고에 넣을 때 이 토큰을 쓴다 — 줄 서는 동안 끝나면 안 된다
+        exp = _jwt_exp(jwt)
+        if exp is not None and exp - time.time() < TOKEN_MIN_LEFT_S + 90 * ahead_now:
+            raise HTTPException(status_code=401, detail=RELOGIN_MSG)
+    note = (payload or {}).get("note") if isinstance(payload, dict) else None
+    note = note[:500] if isinstance(note, str) else ""
+    with _QUEUE_LOCK:
+        if _queue["waiting"] >= REBUILD_QUEUE_MAX:
+            raise HTTPException(status_code=429, detail=f"재단 패턴 작업이 {_queue['waiting']}건 밀려 있습니다. 끝난 뒤 다시 눌러 주세요.")
+        _queue["waiting"] += 1
+        ahead = _queue["waiting"] - 1
+    try:
+        job_id = state.create_job(total=len(svc.STEPS))
+        state.update_job(job_id, kind="cad-rebuild", style_id=style_id, from_version=v, stage="queued",
+                         stage_ko="차례 기다림" if ahead else "곧 시작", ahead=ahead)
+        t = threading.Thread(target=_rebuild_thread, daemon=True,
+                             args=(job_id, style_id, v, group, jwt, getattr(request.state, "email", None), note))
+        t.start()
+    except Exception:
+        with _QUEUE_LOCK:
+            _queue["waiting"] = max(0, _queue["waiting"] - 1)
+        raise
+    return JSONResponse(status_code=202, content={"job_id": job_id, "total": len(svc.STEPS), "ahead": ahead,
+                                                  "style_id": style_id, "from_version": v})
+
+
+@router.get("/jobs/{job_id}")
+def cad_job(job_id: str) -> Dict[str, Any]:
+    """🔒 재단 패턴 작업 진행률 — running/done/error · 단계(한국어) · 끝나면 새 버전 번호."""
+    j = state.get_job(job_id) if re.fullmatch(r"[0-9a-f]{12}", job_id or "") else None
+    if not j or j.get("kind") != "cad-rebuild":
+        raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다(서버 재시작 등). 다시 눌러 주세요.")
+    return {k: j.get(k) for k in ("status", "done", "total", "stage", "stage_ko", "error", "result", "style_id", "from_version", "ahead")}

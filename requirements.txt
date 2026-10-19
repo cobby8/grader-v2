@@ -7,6 +7,12 @@ PyMuPDF==1.27.2.3
 fonttools==4.63.0
 # A-5 주문서 파싱: xlsx 읽기 (사이즈/수량/이름/배번 추출)
 openpyxl==3.1.5
+# 재단 패턴 엔진(F10 2단계, vendor/pattern_engine — stizshop 사본): 조각 도형 계산 + 공장용 DXF.
+#   판은 엔진 requirements 와 같아야 한다(tests/test_engine_vendor.py 가 본다). PyMuPDF 는 위의 1.27.2.3 을 같이 쓴다.
+shapely==2.0.6
+ezdxf==1.3.5
+# shapely 가 쓰는 배열 계산 — 판을 고정(로컬 시험과 같은 2.4.6. 풀어 두면 빌드 날마다 다른 판이 깔린다)
+numpy==2.4.6
 
 # webapp: FastAPI 백엔드(정적 화면 서빙 + /api). 엔진은 import만, 빌드 0.
 fastapi==0.138.0

@@ -10,6 +10,8 @@
 """
 from __future__ import annotations
 
+import contextlib
+
 import json
 import os
 import shutil
@@ -215,6 +217,58 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
     with _JOBS_LOCK:
         j = _JOBS.get(job_id)
         return dict(j) if j else None
+
+
+# ── 무거운 작업 순서 세우기(합성 ↔ 재단 패턴 엔진) ─────────────────────────────
+# 왜(비유): 서버 상자(Render starter)는 메모리가 512MB 하나다. 합성(배번·이름 PDF)과 재단 패턴 엔진(일꾼 프로세스
+#   약 180~210MB)이 동시에 돌면 상자가 넘쳐 서버가 통째로 재시작될 수 있다(진행 중인 모든 작업이 날아간다).
+#   그래서 «합성끼리는 지금처럼 같이 돌되(shared), 엔진은 혼자 돈다(exclusive)» 규칙을 둔다.
+#     · 엔진이 차례를 기다리기 시작하면 새 합성은 엔진이 끝날 때까지 기다린다(엔진이 영영 밀리지 않게 — 쓰기 우선)
+#     · 엔진은 이미 돌고 있는 합성이 끝나기를 기다린다(돌던 것을 끊지 않는다)
+#   엔진은 관리자가 가끔 누르는 1분짜리라, 합성이 그동안 잠깐 기다리는 비용이 «둘 다 죽는» 위험보다 훨씬 작다.
+class HeavyGate:
+    def __init__(self) -> None:
+        self._cv = threading.Condition()
+        self.shared = 0              # 지금 도는 합성 수
+        self.exclusive = False       # 엔진이 도는 중
+        self.waiting_excl = 0        # 차례를 기다리는 엔진 수
+
+    @contextlib.contextmanager
+    def shared_use(self):
+        with self._cv:
+            while self.exclusive or self.waiting_excl:
+                self._cv.wait()
+            self.shared += 1
+        try:
+            yield
+        finally:
+            with self._cv:
+                self.shared -= 1
+                self._cv.notify_all()
+
+    @contextlib.contextmanager
+    def exclusive_use(self):
+        with self._cv:
+            self.waiting_excl += 1
+            try:
+                while self.exclusive or self.shared:
+                    self._cv.wait()
+            finally:
+                self.waiting_excl -= 1
+            self.exclusive = True
+        try:
+            yield
+        finally:
+            with self._cv:
+                self.exclusive = False
+                self._cv.notify_all()
+
+    def snapshot(self) -> Dict[str, Any]:
+        with self._cv:
+            return {"shared": self.shared, "exclusive": self.exclusive, "waiting_excl": self.waiting_excl}
+
+
+HEAVY = HeavyGate()
 
 
 # ── 오래된 업로드·작업 폴더 자동 정리(디스크 청소) ─────────────────────────────

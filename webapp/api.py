@@ -947,15 +947,17 @@ def _run_job_thread(job_id: str, preset_path: str, design_path: str,
     실패하면 status=error + 한국어 사유를 남긴다(서버는 죽지 않는다).
     """
     try:
-        result = run_job(
-            preset=preset_path,
-            design_pdf=design_path,
-            order_rows=rows,
-            out_dir=out_dir,
-            split="per_player",
-            make_preview=True,        # 검수 그리드용 미리보기 PNG 생성
-            out_format=out_format,    # pdf | eps | both
-        )
+        # 재단 패턴 엔진이 도는 동안에는 기다렸다가 시작한다(메모리 512MB — state.HEAVY 설명). 합성끼리는 지금처럼 같이 돈다.
+        with state.HEAVY.shared_use():
+            result = run_job(
+                preset=preset_path,
+                design_pdf=design_path,
+                order_rows=rows,
+                out_dir=out_dir,
+                split="per_player",
+                make_preview=True,        # 검수 그리드용 미리보기 PNG 생성
+                out_format=out_format,    # pdf | eps | both
+            )
         produced = result.get("summary", {}).get("produced", 0)
         # 완료: 진행바를 가득 채우고(=total) done 상태로 전이.
         with state._JOBS_LOCK:

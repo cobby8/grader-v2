@@ -22,6 +22,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 #   .dockerignore 가 data/jobs·uploads·.venv·design_source·.git 등을 제외한다.
 COPY . .
 
+# ── 엔진 사본 지문 검사(F10 2단계) — 배포 «빌드» 단계에서 막는다 ──
+#   vendor/pattern_engine 이 ENGINE_VERSION.json 의 지문과 다르면(사본을 손으로 고쳤거나 반만 베꼈으면) 빌드가 실패해
+#   잘못된 엔진이 운영에 올라가지 않는다. 표준 라이브러리만 쓰는 시험이라 몇 초 걸린다.
+RUN python -m unittest tests.test_engine_vendor
+
 # ── 배포 환경변수(기본값) ──
 #   GRADER_NO_BROWSER=1 : 서버에서 브라우저 자동오픈 시도 안 함(헤드리스).
 #   GS_BIN=gs           : Ghostscript 경로를 PATH 의 'gs' 로 강제(eps.find_ghostscript 1순위).

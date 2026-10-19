@@ -164,6 +164,8 @@
           <h2 id="styleTitle"></h2>
           <select class="input" id="verSel" style="width:auto;height:32px" aria-label="버전"></select>
           <span id="backupBadge"></span>
+          <button class="btn btn--sm btn--secondary hidden" id="rebuildBtn" type="button" title="서버의 엔진으로 원본부터 다시 만들어 새 버전으로 쌓습니다(관리자)"><span class="material-symbols-outlined">autorenew</span>다시 만들기</button>
+          <span class="cad-card__sub" id="rebuildStatus" role="status" aria-live="polite"></span>
         </div>
 
         <div class="cad-layout">
@@ -284,7 +286,7 @@ async function apiError(res) { try { const j = await res.json(); return j.detail
 
 // ====== 상태 ======
 const S = {
-  styles: [], canUpload: false,
+  styles: [], canUpload: false, rebuildable: [], meta: null, rebuildJob: null,
   style: null, ver: null, view: null,       // 지금 연 스타일·버전·view.json
   mode: "one", size: null, overlay: new Set(), align: "none", ovCut: false,
   piece: "", measure: false, picks: [], pickCheck: null,
@@ -330,7 +332,7 @@ function checkValue(sid, c) {
 
 // ====== 목록 ======
 async function loadMe() {
-  try { const r = await apiFetch("/api/cad/me"); if (r.ok) { const j = await r.json(); S.canUpload = !!j.can_upload; } } catch (e) {}
+  try { const r = await apiFetch("/api/cad/me"); if (r.ok) { const j = await r.json(); S.canUpload = !!j.can_upload; S.rebuildable = j.rebuildable || []; } } catch (e) {}
   $("#uploadBtn").classList.toggle("hidden", !S.canUpload);
 }
 async function loadList() {
@@ -386,6 +388,12 @@ async function openStyle(id, ver) {
   $("#backupBadge").innerHTML = !b ? "" : b.ok ? `<span class="badge badge--pass badge--sm">창고 보관</span>` : b.skipped ? `<span class="badge badge--neutral badge--sm">로컬만</span>` : `<span class="badge badge--warn badge--sm">창고 미보관</span>`;
   $("#pieceSel").innerHTML = `<option value="">조각 전체</option>` + view.style.pieces.map((n) => `<option>${esc(n)}</option>`).join("");
   S.piece = "";
+  // 이 버전의 기록(누가·어떻게 만들었나 · PDF 글꼴) — 정보 칸용. 못 읽어도 그림은 그대로 보인다
+  S.meta = null;
+  try { const r2 = await apiFetch(`/api/cad/styles/${encodeURIComponent(id)}`);
+    if (r2.ok) { const d = await r2.json(); S.meta = (d.history || []).find((h) => String(h.version) === String(ver)) || null; } } catch (e) {}
+  $("#rebuildBtn").classList.toggle("hidden", !(S.canUpload && S.rebuildable.includes(id)));
+  if (!S.rebuildJob) $("#rebuildStatus").textContent = "";
   buildAlign(); renderChips(); renderInfo(); renderDownloads(); fitView(); draw(); renderChecks(); renderMeasure();
   try { history.replaceState(null, "", `#${id}/v${ver}`); } catch (e) {}
 }
@@ -689,12 +697,16 @@ async function download(btn, kind, size) {
 }
 function renderInfo() {
   const s = S.styles.find((x) => x.id === S.style) || {}; const L = s.latest || {}; const src = S.view.source || {};
+  const M = S.meta || {}; const run = M.engine_run || {}; const isBuiltin = run.font === "builtin";
   $("#infoBox").innerHTML = `<dl class="kv">
     <dt>스타일</dt><dd>${esc(S.style)}</dd><dt>버전</dt><dd>v${esc(S.ver)}</dd>
     <dt>사이즈</dt><dd>${S.view.style.sizes.map(sizeLabel).map(esc).join(" · ")}</dd>
     <dt>조각</dt><dd>${S.view.style.pieces.length}종</dd>
     <dt>엔진</dt><dd>${esc(src.commit || "—")}</dd><dt>만든 때</dt><dd>${esc((src.made_at || "").replace("T", " "))}</dd>
-    ${L.uploaded_at ? `<dt>올린 때</dt><dd>${esc(L.uploaded_at.replace("T", " "))}</dd>` : ""}</dl>
+    ${L.uploaded_at ? `<dt>올린 때</dt><dd>${esc(L.uploaded_at.replace("T", " "))}</dd>` : ""}
+    ${M.rebuilt_from ? `<dt>만든 곳</dt><dd>서버에서 다시 만듦(v${esc(M.rebuilt_from)} 기준)</dd>` : ""}
+    ${run.font_name ? `<dt>PDF 글꼴</dt><dd>${esc(run.font_name)}</dd>` : ""}</dl>
+    ${isBuiltin ? `<div class="muted-note">${esc("서버에는 맑은 고딕이 없어 PDF 글자를 Droid Sans Fallback 으로 넣었습니다. 선·치수는 같고 글자 모양만 다릅니다.")}</div>` : ""}
     <div class="muted-note">${esc(src.note || "")}</div>`;
 }
 
@@ -721,6 +733,42 @@ $("#zFit").addEventListener("click", () => { S.vb = S.base.slice(); applyVB(); }
 window.addEventListener("resize", () => applyVB());
 $("#backBtn").addEventListener("click", () => { $("#styleView").classList.add("hidden"); $("#listView").classList.remove("hidden"); S.view = null; try { history.replaceState(null, "", location.pathname); } catch (e) {} loadList(); });
 $("#verSel").addEventListener("change", (e) => { CACHE.clear(); openStyle(S.style, e.target.value); });
+
+// ── 다시 만들기(관리자) — 서버 엔진으로 원본부터 다시 만들어 새 버전으로 ──
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+$("#rebuildBtn").addEventListener("click", async () => {
+  if (S.rebuildJob) return;
+  const id = S.style, ver = S.ver;
+  if (!confirm(`서버에서 «${id}» 를 원본부터 다시 만들어 새 버전으로 쌓을까요?
+1분 남짓 걸리고, 지금 버전(v${ver})은 그대로 남습니다.`)) return;
+  const btn = $("#rebuildBtn"), st = $("#rebuildStatus");
+  btn.disabled = true; st.textContent = "요청 중…";
+  try {
+    const r = await apiFetch(`/api/cad/styles/${encodeURIComponent(id)}/v/${encodeURIComponent(ver)}/rebuild`,
+                             { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+    if (r.status !== 202) { st.textContent = ""; toast("fail", "error", "시작하지 못했어요", await apiError(r) || ("서버 응답 " + r.status)); return; }
+    const job = await r.json(); S.rebuildJob = job.job_id;
+    const t0 = Date.now();
+    while (Date.now() - t0 < 30 * 60 * 1000) {                 // 진행률 묻기(1.5초마다) — 끝나거나 실패하면 멈춘다
+      await sleep(1500);
+      const pr = await apiFetch(`/api/cad/jobs/${encodeURIComponent(job.job_id)}`);
+      if (!pr.ok) { st.textContent = ""; toast("fail", "error", "진행 상황을 못 읽었어요", await apiError(pr)); return; }
+      const j = await pr.json();
+      const pct = j.total ? Math.round(100 * (j.done || 0) / j.total) : 0;
+      st.textContent = (j.stage_ko || "진행 중") + " · " + pct + "%";
+      if (j.status === "error") { st.textContent = ""; toast("fail", "error", "다시 만들기 실패", j.error || ""); return; }
+      if (j.status === "done") {
+        const nv = j.result && j.result.version; st.textContent = "";
+        const b = (j.result && j.result.backup) || {};
+        toast(b.ok || b.skipped ? "pass" : "warn", "check_circle", "v" + nv + " 를 만들었어요", b.ok ? "창고에 보관하고 되읽어 확인했습니다." : (b.skipped ? "로컬에만 저장(창고 미설정)" : "창고 보관을 확인해 주세요"));
+        CACHE.clear(); await loadList(); await openStyle(id, nv);  // 새 버전으로 바로 이동
+        return;
+      }
+    }
+    st.textContent = ""; toast("warn", "schedule", "오래 걸려요", "잠시 뒤 목록에서 새 버전을 확인해 주세요.");
+  } catch (e) { st.textContent = ""; if (!/로그인/.test(String(e.message))) toast("fail", "error", "서버에 연결하지 못했습니다", ""); }
+  finally { S.rebuildJob = null; btn.disabled = false; }
+});
 
 // ── 올리기(관리자) ──
 const upModal = $("#upModal");
@@ -760,7 +808,7 @@ $("#acctBtn").addEventListener("click", async () => {
 });
 
 // ── 시험·자동 확인용 창구(화면 동작에는 쓰지 않는다) ──
-window.CAD = { state: S, measureNodes, checkValue, open: openStyle, setSize,
+window.CAD = { state: S, renderInfo, measureNodes, checkValue, open: openStyle, setSize,
   setMode: (m) => { S.mode = m; syncMode(); }, pickAt: (sid, piece, node) => { const o = P(sid, piece); const i = o.raw.nodes[node];
     return { piece, idx: i, x: o.seam[i][0], y: o.seam[i][1], s: o.cum[i], name: node }; },
   measurePicks: (a, b) => { S.picks = [a, b]; drawHi(); renderMeasure(); return measurement(); } };
