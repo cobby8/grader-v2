@@ -174,6 +174,20 @@ def _bbox(pts: List[Point]) -> Tuple[float, float, float, float]:
     return min(xs), min(ys), max(xs), max(ys)
 
 
+def _perimeter(pts: List[Point]) -> float:
+    """닫힌 둘레 길이(마지막 점 → 첫 점 포함). 중복 조각 판정용."""
+    n = len(pts)
+    return sum(math.dist(pts[i], pts[(i + 1) % n]) for i in range(n))
+
+
+def _polygon_area(pts: List[Point]) -> float:
+    """신발끈 공식 넓이(절댓값). 중복 조각 판정용."""
+    n = len(pts)
+    s = sum(pts[i][0] * pts[(i + 1) % n][1] - pts[(i + 1) % n][0] * pts[i][1]
+            for i in range(n))
+    return abs(s) / 2.0
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 3) viewBox 추출
 # ─────────────────────────────────────────────────────────────────────────────
@@ -223,7 +237,8 @@ def normalize_svg(in_path: str, out_path: str, *,
                        면적이 충분하면(밴드) 보존. 0.002 = 0.2%(예: 4337²×0.002≈3.8만pt²).
                        실측 밴드 최소 면적 ≈ 24만pt² 이므로 안전히 보존, 0면적 보조선만 제거.
       dedup_tol_ratio: 중복 조각 판정 허용오차(페이지 대비 비율). bbox 폭·높이·중심이 모두
-                       이 안에서 같으면 같은 조각으로 보고 1개만 남긴다(위·아래 중복 제거).
+                       이 안에서 같고 둘레·넓이까지 같으면 같은 조각으로 보고 1개만 남긴다
+                       (위·아래 중복 제거). 크기만 비슷한 다른 조각(목·암홀 밴드)은 남는다.
       flatten_curves : (인터페이스만) 곡선 평탄화 모드. 현재 V넥 곡선 0이라 미사용.
       samples        : (인터페이스만) 곡선 평탄화 분할 수.
 
@@ -306,30 +321,39 @@ def normalize_svg(in_path: str, out_path: str, *,
             continue
         kept.append((pts, bb))
 
-    # ── 중복 조각 제거(위·아래 2벌 같은 조각 → 1개). bbox 폭·높이·중심 근사 동일 기준. ──
+    # ── 중복 조각 제거(위·아래 2벌 같은 조각 → 1개). bbox 폭·높이·중심 근사 동일 + 모양 동일 기준. ──
+    #    (2026-10-19) bbox 만 보면 «크기가 비슷한 다른 조각»까지 버린다. 실측: V넥 슬림(암홀O)
+    #    2XL~5XL 에서 목 밴드(661mm)와 암홀 밴드(644mm)가 tol(≈20mm) 안이라 암홀 밴드가 사라졌다.
+    #    그래서 둘레·넓이까지 같아야 복제로 본다. 드라이브 218개 실측: 진짜 복제는 둘레차 ≤1.1pt·
+    #    넓이차 ≤0.04%, 잘못 버려지던 조각은 둘레차 ≥12pt·넓이차 ≥1.8%.
     tol = page_dim * dedup_tol_ratio
-    deduped = []  # (pts, bbox)
+    deduped = []  # (pts, bbox, 둘레, 넓이)
     dropped_dup = 0
     for pts, bb in kept:
         x0, y0, x1, y1 = bb
         w = x1 - x0
         h = y1 - y0
         cx = (x0 + x1) / 2.0
+        per = _perimeter(pts)
+        area = _polygon_area(pts)
         is_dup = False
-        for _, ebb in deduped:
+        for _, ebb, eper, earea in deduped:
             ex0, ey0, ex1, ey1 = ebb
             ew = ex1 - ex0
             eh = ey1 - ey0
             ecx = (ex0 + ex1) / 2.0
-            # 폭·높이·가로중심이 모두 tol 안에서 같으면 같은 조각(세로위치만 다른 복제).
+            # 폭·높이·가로중심이 모두 tol 안에서 같고(세로위치만 다른 복제),
+            # 둘레·넓이도 같아야(모양이 같은 복제) 같은 조각.
             if (abs(w - ew) <= tol and abs(h - eh) <= tol
-                    and abs(cx - ecx) <= tol):
+                    and abs(cx - ecx) <= tol
+                    and abs(per - eper) <= max(2.0, 0.002 * eper)
+                    and abs(area - earea) <= 0.005 * max(earea, 1e-9)):
                 is_dup = True
                 break
         if is_dup:
             dropped_dup += 1
             continue
-        deduped.append((pts, bb))
+        deduped.append((pts, bb, per, area))
 
     # ── 출력 SVG 작성: U넥 과 동일 골격(viewBox 그대로, polyline class="st0"). ──
     #    조각 순서는 입력 path 순서 유지(parse_svg 가 어차피 높이 내림차순 재정렬한다).
@@ -349,7 +373,7 @@ def normalize_svg(in_path: str, out_path: str, *,
         "  </defs>",
     ]
     bboxes = []
-    for pts, bb in deduped:
+    for pts, bb, _, _ in deduped:
         pts_str = " ".join(f"{x:g} {y:g}" for (x, y) in pts)
         lines.append(f'  <polyline class="st0" points="{pts_str}"/>')
         bboxes.append([round(v, 2) for v in bb])
