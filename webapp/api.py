@@ -1915,6 +1915,57 @@ def _align_size_pieces(converted_map: Dict[str, str], order: List[str], base: st
     return {"n": len(base_desc), "base": base, "disabled": disabled, "dropped": dropped, "aligned": aligned}
 
 
+def _set_piece_fit(pieces: List[Dict[str, Any]], base_svg: Optional[str], warnings: List[str],
+                   use_kind: bool = False) -> None:
+    """조각마다 «디자이너 방식» 맞춤(fit)을 정해 preset 에 적는다(2026-10-20 — 새로 등록하는 패턴부터).
+
+    실주문 5건 비교 결과(그림 맞춤 실험):
+      · 몸판(세로가 길거나, 가장 큰 조각 넓이의 절반 이상)  → top_height : 높이 비율 등방 + 위·가운데
+      · 띠(긴 변이 짧은 변의 4배 이상 — 목 밴드·카라)       → stretch    : 조각 길이·높이에 맞춰 늘이기
+      · 그 밖(소매 등)                                      → 적지 않음  : 예전 방식(좁은 쪽 비율 + 왼아래) — 소매는 이쪽이 더 맞았다
+    fit 이 없는 조각·예전 프리셋은 엔진이 예전 방식 그대로 그린다.
+    """
+    if not base_svg or not os.path.exists(base_svg):
+        return
+    try:
+        from engine.pattern import parse_svg
+        polys = parse_svg(base_svg)
+    except Exception as e:
+        warnings.append(f"🟡 조각 맞춤 방식을 정하지 못해 예전 방식으로 둡니다: {e}")
+        return
+    if not polys:
+        return
+    areas = [abs(sum(p.points[i][0] * p.points[(i + 1) % len(p.points)][1] - p.points[(i + 1) % len(p.points)][0] * p.points[i][1]
+                     for i in range(len(p.points)))) / 2 for p in polys]
+    big = max(areas) or 1.0
+    MM = 25.4 / 72
+    # 노치 규칙이 이미 조각 종류를 정해 두었으면 그것부터(리뷰 지적: 기하만 보면 긴팔·슈팅저지 소매가 몸판으로 갔다)
+    KIND_FIT = {"front": "top_height", "back": "top_height", "one_piece": "top_height", "one_piece_slit": "top_height",
+                "split_front": "top_height", "split_back": "top_height", "neck": "stretch", "band": None,
+                "sleeve": None, "part": None}
+    chosen = []
+    for pc in pieces:
+        i = pc.get("svg_index")
+        if not isinstance(i, int) or not (0 <= i < len(polys)):
+            continue
+        kind = re.sub(r"_\d+$", "", str(pc.get("id") or "")) if use_kind else None   # 노치 등록: id = 종류(둘째부터 _2)
+        fit = None
+        if kind in KIND_FIT:
+            fit = KIND_FIT[kind]
+        else:
+            w, h = polys[i].width, polys[i].height
+            short, long_ = min(w, h), max(w, h)
+            if short > 0 and long_ / short >= 4.0 and short * MM <= 150:
+                fit = "stretch"                      # 얇은 띠(목 밴드·카라) — 무늬를 길이에 맞춰 늘인다
+            elif areas[i] >= 0.85 * big:
+                fit = "top_height"                   # 몸판(앞·뒤판·하의 다리) — 소매(가장 큰 조각의 30~75%)는 예전 방식
+        if fit:
+            pc["fit"] = fit
+        chosen.append(f"{pc.get('name') or pc.get('id')}={ {'top_height': '위 맞춤', 'stretch': '늘이기'}.get(fit, '예전') }")
+    if chosen:
+        warnings.append("ℹ️ 조각별 그림 맞춤: " + " · ".join(chosen))
+
+
 def _build_pieces(svg_index_count: int, page_w: float, page_h: float,
                   warnings: List[str]) -> List[Dict[str, Any]]:
     """조각 개수만큼 pieces 항목을 만든다(svg_index 매핑 + design_region 추정).
@@ -2603,6 +2654,7 @@ async def create_pattern(
     pieces = _build_pieces(piece_n, page_dims[0], page_dims[1], warnings)
     if notch:
         _notch_name_pieces(pieces, notch_meta, converted_map, warnings)  # 조각 이름을 노치 규칙의 판정대로(앞판·뒤판·소매·목 띠·작은 조각…)
+    _set_piece_fit(pieces, converted_map.get(base), warnings, use_kind=bool(notch))
 
     preset: Dict[str, Any] = {
         "preset_name": pattern_id,

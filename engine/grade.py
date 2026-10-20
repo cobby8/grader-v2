@@ -33,7 +33,7 @@ from typing import List
 from .compose import Piece, SizeLayout, compose
 from .pattern import parse_svg
 from .pdfutil import bbox as bbox_of
-from .pdfutil import scale_translate
+from .pdfutil import scale_translate, fit_matrix, FIT_MODES
 from .text import render_text_ops  # 배번·이름 글자를 PDF 벡터 경로로 펴는 순수 함수
 
 # preset.json 에 반드시 있어야 하는 최상위 키 (없으면 설계도 결함이므로 즉시 알린다).
@@ -68,6 +68,9 @@ def load_preset(preset_path: str) -> dict:
         for key in ("svg_index", "design_region_pt"):
             if key not in p:
                 raise ValueError(f"조각 '{p.get('id', '?')}' 에 '{key}' 가 없습니다.")
+        if p.get("fit") and p["fit"] not in FIT_MODES:
+            # 손으로 고친 값이 틀리면 작업 시작 전에 막는다(안 막으면 선수마다 «레이아웃 실패»로 조용히 건너뜀)
+            raise ValueError(f"조각 '{p.get('id', '?')}' 의 fit '{p['fit']}' 를 모릅니다(가능: {', '.join(FIT_MODES)}).")
         if len(p["design_region_pt"]) != 4:
             raise ValueError(
                 f"조각 '{p.get('id', '?')}' 의 design_region_pt 는 [x0,y0,x1,y1] 4개여야 합니다.")
@@ -225,7 +228,11 @@ def build_layouts(preset: dict, design_pdf_path: str,
             poly = polys[idx]
 
             # 방식 A: 디자인 영역을 이 조각 bbox 에 앵커정렬+contain 스케일.
-            transform = _piece_transform(pdef["design_region_pt"], poly, shrink_x, shrink_y)
+            if pdef.get("fit"):
+                # 조각별 «디자이너 방식»(2026-10-20 등록분부터) — 없으면 아래 예전 방식 그대로
+                transform = fit_matrix(pdef["design_region_pt"], poly.bbox, pdef["fit"], min(shrink_x, shrink_y))
+            else:
+                transform = _piece_transform(pdef["design_region_pt"], poly, shrink_x, shrink_y)
             # 클립 윤곽은 조각 윤곽 그대로(시트 좌표). 디자인이 이 모양으로 잘린다.
             layout_pieces.append(
                 Piece(outline=poly.points, transform=transform, name=pdef.get("name", pdef.get("id", ""))))

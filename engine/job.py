@@ -35,7 +35,7 @@ from .flatten import flatten_transparency  # 디자인 투명도 벡터 평탄�
 # 내부 함수 _resolve_font_path 는 '호출만' 한다(복제 대신 재사용 — 동작 일치 보장).
 from .grade import _resolve_font_path, build_layouts, load_preset
 from .pattern import parse_svg  # 사이즈별 패턴 SVG → 조각 윤곽(정밀배치 경로에서 사용)
-from .pdfutil import cm_matrix, scale_translate  # 글자 ops 를 시트좌표로 감쌀 cm 행렬 생성
+from .pdfutil import cm_matrix, scale_translate, fit_matrix  # 글자 ops 를 시트좌표로 감쌀 cm 행렬 생성
 from .text import place_name, place_number  # Phase B 정밀 배치기(완성본 실측 수치 재현)
 from .verify import all_passed, verify_output
 
@@ -196,6 +196,29 @@ def _auto_bleed(front_design_region, front_poly, k: float, lo: float, hi: float)
     bleed = 1.0 + float(k) * dev
     # clamp(lo, hi): 너무 작으면 흰틈, 너무 크면 과도 확대(번호 위치 흔들림) 방지.
     return max(float(lo), min(float(hi), bleed))
+
+
+def _ops_bbox(ops: str, transform) -> Optional[tuple]:
+    """글자 ops(m/l/c 좌표, 디자인 좌표) → transform 적용한 시트 bbox. 좌표가 없으면 None."""
+    a, b, c, d, e, f = transform
+    pts = []
+    stack: List[float] = []
+    for t in ops.split():
+        try:
+            stack.append(float(t))
+            continue
+        except ValueError:
+            pass
+        if t in ("m", "l") and len(stack) >= 2:
+            pts.append((stack[-2], stack[-1]))
+        elif t == "c" and len(stack) >= 6:
+            pts += [(stack[-6], stack[-5]), (stack[-4], stack[-3]), (stack[-2], stack[-1])]
+        stack = []
+    if not pts:
+        return None
+    tx = [a * x + c * y + e for x, y in pts]
+    ty = [b * x + d * y + f for x, y in pts]
+    return min(tx), min(ty), max(tx), max(ty)
 
 
 def _wrap_design_ops(transform, ops: str) -> str:
@@ -750,8 +773,12 @@ def _build_precise_layout(preset: dict, size_def: dict, *,
                 f" (사이즈 {size_def['name']}, 파일 {size_def['pattern_file']})")
         poly = polys[idx]
         # cover_bleed 가 지정되면(작업2) cover+블리드, 아니면 기존 contain(bleed=None→contain).
-        transform = _job_piece_transform(pdef["design_region_pt"], poly,
-                                         shrink_x, shrink_y, bleed=bleed_value)
+        if pdef.get("fit"):
+            # 조각별 «디자이너 방식»(2026-10-20 등록분부터) — 블리드 없이 그 방식대로. 없으면 예전 그대로.
+            transform = fit_matrix(pdef["design_region_pt"], poly.bbox, pdef["fit"], min(shrink_x, shrink_y))
+        else:
+            transform = _job_piece_transform(pdef["design_region_pt"], poly,
+                                             shrink_x, shrink_y, bleed=bleed_value)
         piece_transforms.append(transform)
         layout_pieces.append(
             # bg_cmyk: 본체색(있으면). place_block 이 클립 안을 디자인 전에 칠해 흰틈 제거.
@@ -806,6 +833,14 @@ def _build_precise_layout(preset: dict, size_def: dict, *,
         # ── 디자인좌표 → 시트좌표: 그 조각의 transform 으로 감싼다(핵심). ──
         wrapped = _wrap_design_ops(piece_transforms[pidx], ops)
         tp = layout_pieces[pidx]
+        if pieces_def[pidx].get("fit"):
+            # 글자는 조각 윤곽으로 잘리지 않는다(클립 밖). 예전 방식은 디자인 영역이 늘 조각 안이라 괜찮았지만,
+            #   «위 맞춤»은 작은 사이즈에서 영역이 조각보다 넓어질 수 있다 → 조각 밖으로 나가면 알린다(2026-10-20 리뷰).
+            gb = _ops_bbox(ops, piece_transforms[pidx])
+            if gb:
+                xs = [x for x, _ in tp.outline]; ys = [y for _, y in tp.outline]
+                if gb[0] < min(xs) - 2 or gb[2] > max(xs) + 2 or gb[1] < min(ys) - 2 or gb[3] > max(ys) + 2:
+                    warnings.append(f"🟡 [{size_def['name']}] '{value}' 글자가 {tp.name} 조각 밖으로 나갑니다 — 인쇄물 확인 필요.")
         tp.extra_ops = (tp.extra_ops + "\n" + wrapped) if tp.extra_ops else wrapped
 
     # 앞·뒤 번호는 '같은 배번'(number) — 앞=front 조각, 뒤=back 조각.

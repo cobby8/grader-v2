@@ -41,6 +41,34 @@ def scale_translate(scale: float, ox: float, oy: float) -> Matrix:
     return (scale, 0.0, 0.0, scale, ox, oy)
 
 
+# 조각별 «디자이너 방식» 맞춤(2026-10-20) — preset.pieces[].fit 이 있을 때만 쓴다(없으면 예전 방식 그대로).
+#   실주문 5건(고려대·홍해·신탄진·페가수스·구미혜당)을 디자이너 사이즈별 결과와 견준 결과:
+#     몸판  : 높이 비율로 등방 + 위·가운데(목선) 정렬이 디자이너와 같았다(다른 픽셀 3.6~9.8% → 0.3~2.1%)
+#     띠    : 조각 길이·높이에 맞춰 늘이기(목 밴드 22% → 0~3.6%)
+FIT_MODES = ("top_height", "stretch")
+
+
+def fit_matrix(design_region, piece_bbox, fit: str, shrink: float = 1.0) -> Matrix:
+    """design_region(디자인 좌표) → 조각 bbox(시트 좌표, y 위로) 행렬.
+
+    top_height : s = 조각높이/영역높이 (등방). 영역 위·가운데 → 조각 위·가운데.
+                 폭이 남으면 본체색이 채우고, 넘치면 조각 윤곽이 잘라 낸다.
+    stretch    : 가로 = 조각폭/영역폭, 세로 = 조각높이/영역높이 (비등방). 왼아래 → 왼아래.
+    """
+    dx0, dy0, dx1, dy1 = design_region
+    px0, py0, px1, py1 = piece_bbox
+    dw, dh = (dx1 - dx0), (dy1 - dy0)
+    pw, ph = (px1 - px0), (py1 - py0)
+    if fit == "stretch":
+        sx = pw / dw * shrink
+        sy = ph / dh * shrink
+        return (sx, 0.0, 0.0, sy, px0 - sx * dx0, py0 - sy * dy0)
+    if fit == "top_height":
+        s = ph / dh * shrink
+        return scale_translate(s, (px0 + px1) / 2.0 - s * (dx0 + dx1) / 2.0, py1 - s * dy1)
+    raise ValueError(f"알 수 없는 fit '{fit}' (가능: {FIT_MODES})")
+
+
 def _fill_polygon_ops(polygon: Sequence[Point], cmyk: Sequence[float]) -> str:
     """폴리곤을 device CMYK 본체색으로 채우는 ops(m/l…h f)를 만든다.
 
