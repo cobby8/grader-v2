@@ -311,6 +311,13 @@
             <input class="input" id="notchSide" placeholder='(하의만·선택) 옆선 자리 지정 {"XL":[허리mm,밑단mm]}' style="margin-top:6px; display:none;" />
             <div class="muted" style="font:var(--text-caption); margin-top:4px;">고르면 재단선에 노치(안쪽 5mm 일자 홈)가 들어가고, 좌우 두 장 조각은 거울로 한 장 더 만듭니다. 원본에 노치가 이미 있으면 그대로 씁니다.</div>
           </div>
+          <div class="field">
+            <label class="field__label" for="companionPattern">함께 찍을 패턴</label>
+            <select class="input" id="companionPattern">
+              <option value="">없음</option>
+            </select>
+            <div class="muted" style="font:var(--text-caption); margin-top:4px;">상의 디자인 파일에 하의도 같이 그려져 있으면, 등록된 하의 패턴을 고르세요. 주문 PDF 한 장에 하의가 아래로 함께 찍힙니다.</div>
+          </div>
           <div>
             <div class="field__label" style="margin-bottom:8px;">사이즈별 패턴 파일</div>
             <div class="wrap-2" id="sizeChips"></div>
@@ -827,6 +834,7 @@ function loadPatternList() {
       PATTERNS_LOAD = "ok";
       PATTERNS = list;
       renderPatternGrid();
+      fillCompanionOptions();
     })
     .catch((e) => {
       PATTERNS = [];
@@ -836,6 +844,16 @@ function loadPatternList() {
     });
 }
 loadPatternList();
+
+// 함께 찍을 패턴 고르기 — 이미 등록된 패턴 목록(id)으로 채운다
+function fillCompanionOptions() {
+  const sel = $("#companionPattern");
+  if (!sel) return;
+  const keep = sel.value;
+  sel.innerHTML = '<option value="">없음</option>' + PATTERNS.map((p) =>
+    `<option value="${driveEsc(p.id || p.name)}">${driveEsc(p.name || p.id)}</option>`).join("");
+  sel.value = keep;
+}
 
 // ---- size chips (실제 파일 선택과 연결) ----
 //   각 칩을 클릭하면 그 사이즈의 패턴 파일(.ai/.svg)을 고른다. 고른 사이즈는
@@ -1419,6 +1437,8 @@ function savePattern() {
     const side = (($("#notchSide") && $("#notchSide").value) || "").trim();
     if (side) fd.append("notch_side", side);
   }
+  const comp = ($("#companionPattern") && $("#companionPattern").value) || "";
+  if (comp) fd.append("companion", comp);
 
   saving = true;
   const btn = $("#regNext");

@@ -49,6 +49,26 @@ class HiddenLayers(unittest.TestCase):
         self.assertTrue(info["found"])
         self.assertEqual(info["removed_layers"], ["레이어 2"])
 
+    def test_same_name_on_layer_kept(self):
+        """이름이 같은 레이어가 켜진 것·꺼진 것 둘이면 켜진 쪽은 남긴다(리뷰 지적 — 이름이 아니라 레이어 객체로)"""
+        import fitz, pikepdf
+        from engine.job import hide_off_layers
+        d = fitz.open()
+        on = d.add_ocg("레이어 2", on=True)
+        off = d.add_ocg("레이어 2", on=False)
+        pg = d.new_page(width=1000, height=1400)
+        pg.draw_rect(fitz.Rect(100, 100, 400, 400), color=None, fill=(0, 0, 1), oc=on)
+        pg.draw_rect(fitz.Rect(600, 100, 900, 400), color=None, fill=(0, 1, 0), oc=off)
+        src = os.path.join(self.tmp, "same.pdf"); tmp = src + ".t.pdf"; d.save(tmp)
+        with pikepdf.open(tmp) as pdf:
+            pdf.pages[0].contents_coalesce(); pdf.save(src)
+        out = os.path.join(self.tmp, "same_o.pdf")
+        info = hide_off_layers(src, src, out)
+        self.assertEqual(info["removed_spans"], 1, info)
+        p = fitz.open(out)[0].get_pixmap(dpi=18, alpha=False)
+        s = 18 / 72
+        self.assertLess(p.pixel(int(250 * s), int(250 * s))[0], 80, "켜진 같은 이름 레이어(파랑)가 지워짐")
+
     def _job(self, remove=True):
         import pikepdf
         from engine.job import run_job

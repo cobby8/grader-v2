@@ -934,12 +934,16 @@ def _normalize_rows(rows: Any) -> List[dict]:
     """
     out: List[dict] = []
     for r in (rows or []):
-        out.append({
+        item = {
             "name": (r.get("name") or "").strip(),
             "number": str(r.get("number") or "").strip(),
             "size": (r.get("size") or "").strip(),
             "qty": int(r.get("qty") or 1),
-        })
+        }
+        bs = (r.get("bottom_size") or "").strip() if isinstance(r.get("bottom_size"), str) else ""
+        if bs:
+            item["bottom_size"] = bs     # (2026-10-20) 하의 사이즈 — 상의+하의 함께 찍기
+        out.append(item)
     return out
 
 
@@ -2395,6 +2399,7 @@ async def create_pattern(
     notch_rule: Optional[str] = Form(None),    # (선택) 노치 규칙 jersey|pants — 없으면 100% 기존 동작
     notch_select: Optional[str] = Form(None),  # (선택) 남길 조각 이름(쉼표) — 하의 방법 고르기
     notch_side: Optional[str] = Form(None),    # (선택) 한 장짜리 옆선 자리 지정 JSON {"XL":[허리mm,밑단mm]}
+    companion: Optional[str] = Form(None),     # (선택) 같은 디자인에 함께 그려진 다른 패턴(하의) id — 주문 PDF 한 장에 함께
 ) -> Dict[str, Any]:
     """패턴 1개를 등록한다(폴더 + preset.json 생성). 핵심 2단계 엔드포인트.
 
@@ -2684,6 +2689,14 @@ async def create_pattern(
     #   레이어가 있으면 지워 두 줄을 막는다(없으면 아무것도 안 함).
     preset["cutline"] = {"draw_from": "svg_polygon", "color_cmyk": [0, 0.96, 0.95, 0], "stroke_width": 2.0,
                          "hide_design_cutline_layer": True}
+    # (2026-10-20) 함께 찍을 패턴(상의 + 하의) — 등록된 패턴일 때만. 행의 bottom_size(없으면 같은 사이즈)로 찍는다.
+    comp = _fix_mojibake(companion).strip() if isinstance(companion, str) and companion.strip() else ""
+    if comp:
+        if (comp != pattern_id and comp == _safe_pattern_dirname(comp) and ".." not in comp
+                and os.path.isfile(os.path.join(state.get_patterns_dir(), comp, "preset.json"))):
+            preset["companion"] = {"pattern": comp, "size_key": "bottom_size"}
+        else:
+            warnings.append(f"🟡 함께 찍을 패턴 «{comp}» 을 찾지 못해 넣지 않았습니다.")
     if notch:
         # 주문 PDF 빨간 재단선은 «<사이즈>.notched.svg» 로 그린다(engine/job.py) — 합성·클립은 깨끗한 <사이즈>.svg 그대로
         preset["notches"] = {"rule": notch["rule"], "select": notch["select"], "side_override": notch["side"],
@@ -3088,7 +3101,7 @@ async def create_pattern_from_drive(request: Request, payload: Dict[str, Any] = 
             reference=ref_upload,
             files=size_uploads,
             # 함수로 직접 부르면 빠진 칸이 FastAPI Form 객체(참)로 들어와 layout.strip() 등이 터진다 — 명시적으로 None(2026-10-20)
-            layout=None, notch_rule=None, notch_select=None, notch_side=None,
+            layout=None, notch_rule=None, notch_select=None, notch_side=None, companion=None,
         )
     except gdrive.DriveError as e:
         return JSONResponse(status_code=502, content={"error": f"Drive 파일 다운로드 실패: {e}"})

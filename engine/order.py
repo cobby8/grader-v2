@@ -276,10 +276,15 @@ def _parse_form1(rows: list) -> list[dict]:
     # 3) 데이터 시작행: 헤더 바로 아래가 부제행(상의/하의)이면 건너뛴다.
     #    부제행 판정: 사이즈 열 또는 그 옆에 '상의'/'하의' 텍스트가 있으면 부제행.
     start_r = header_r + 1
+    bottom_col = None   # (2026-10-20) 부제행의 «하의» 열 = 하의 사이즈 — 상의+하의 함께 찍기(companion)에 쓴다
     if start_r < len(rows):
         sub = rows[start_r]
         joined = "".join(_norm_header(v) for v in sub[:6])
         if "상의" in joined or "하의" in joined:
+            for c, v in enumerate(sub[:8]):
+                if "하의" in _norm_header(v):
+                    bottom_col = c
+                    break
             start_r += 1  # 부제행을 건너뛰고 그 다음 행부터 데이터.
 
     # 4) 데이터 행 추출: 빈 행 또는 푸터 키워드를 만나면 종료.
@@ -314,12 +319,17 @@ def _parse_form1(rows: list) -> list[dict]:
         if not size and not number:
             continue
 
-        result.append({
+        item = {
             "name": name,
             "number": number,
             "size": size,   # 정규화 실패 시 ""(웹에서 강조 → 수기 보정)
             "qty": "1",     # 양식①은 1선수=1벌 → qty 고정.
-        })
+        }
+        if bottom_col is not None and bottom_col != size_col:
+            bsz = _normalize_size(cell(bottom_col))
+            if bsz:
+                item["bottom_size"] = bsz   # 하의 사이즈(있을 때만 — 없으면 상의 사이즈로 찍는다)
+        result.append(item)
 
     return result
 

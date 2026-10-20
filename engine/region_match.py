@@ -96,7 +96,7 @@ def _shape_cost(A, B, mirror=False) -> float:
     return float((d.min(1).mean() + d.min(0).mean()) / 2 * MM)
 
 
-def match_regions(design_pdf: str, svg_polys, max_cost_mm: float = 4.0,
+def match_regions(design_pdf: str, svg_polys, max_cost_mm: float = 6.0,
                   prefer: str = "top") -> Dict[int, dict]:
     """패턴 조각(svg_polys, parse_svg 결과) 마다 디자인 속 같은 모양 윤곽을 찾는다.
 
@@ -137,10 +137,27 @@ def match_regions(design_pdf: str, svg_polys, max_cost_mm: float = 4.0,
     for cost, si, oi, mir, other in cand:
         if si in got or oi in used:
             continue
-        alts = sum(1 for c in cand if c[1] == si and not c[3] and abs(c[0] - cost) < 1.0)
+        same = [c for c in cand if c[1] == si and not c[3] and abs(c[0] - cost) < 1.0]
         got[si] = {"region_pt": tuple(round(v, 2) for v in outs[oi]["bbox"]), "cost_mm": round(cost, 2),
-                   "mirrored": mir, "alts": alts}
+                   "mirrored": mir, "alts": len(same)}
         used.add(oi)
+    # 양면(두 번째 면 이후): 첫 면에 쓰지 않은 윤곽만으로 «모든 조각»이 다시 한 벌씩 짝지어지면 한 면 더.
+    #   (리뷰 지적: 조각마다 같은 모양 목록을 따로 만들면 옆 조각 윤곽까지 들어가 면이 섞이고 면 수가 부풀었다)
+    sides = []
+    first = {si: v for si, v in got.items() if not v["mirrored"]}
+    if first and len(first) == len(got):
+        while True:
+            rnd: Dict[int, tuple] = {}
+            taken = set()
+            for cost, si, oi, mir, other in sorted(cand, key=key):
+                if mir or si in rnd or oi in used or oi in taken or si not in first:
+                    continue
+                rnd[si] = tuple(round(v, 2) for v in outs[oi]["bbox"])
+                taken.add(oi)
+            if len(rnd) != len(first):
+                break
+            sides.append(rnd)
+            used |= taken
     # 디자인엔 한 장뿐인 거울 짝(왼·오른 소매): 남은 조각은 이미 쓴 윤곽이라도 «뒤집어 맞으면» 그 그림을 뒤집어 쓴다
     for cost, si, oi, mir, other in sorted(cand, key=key):
         if si in got:
@@ -151,4 +168,6 @@ def match_regions(design_pdf: str, svg_polys, max_cost_mm: float = 4.0,
         elif mir and oi in used:
             got[si] = {"region_pt": tuple(round(v, 2) for v in outs[oi]["bbox"]), "cost_mm": round(cost - 0.5, 2),
                        "mirrored": True, "alts": 1}
+    if sides:
+        got["_sides"] = sides      # [ {svg_index: region} ] — 두 번째 면부터
     return got

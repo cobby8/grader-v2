@@ -60,11 +60,12 @@ def _nums(operands):
 
 
 # ── 배경색 자동 감지 ─────────────────────────────────────────────────────────
-def detect_background_cmyk(pdf: pikepdf.Pdf, page_index: int = 0) -> Optional[CMYK]:
+def detect_background_cmyk(pdf: pikepdf.Pdf, page_index: int = 0, region=None) -> Optional[CMYK]:
     """페이지에서 '면적이 가장 큰 불투명 4채널(CMYK) 채움'의 색을 배경으로 본다.
 
     유니폼 본판이 보통 가장 큰 단색 면적이므로 이 휴리스틱이 잘 맞는다.
     CTM 를 추적해 page 좌표계 bbox 면적으로 비교한다. 못 찾으면 None.
+    region=(x0,y0,x1,y1) 이면 bbox 가운데가 그 안인 채움만 센다(2026-10-20 — 양면은 면마다 본체색이 다르다).
     """
     page = pdf.pages[page_index]
     areas: dict = {}  # color(tuple) -> 누적 면적
@@ -104,7 +105,9 @@ def detect_background_cmyk(pdf: pikepdf.Pdf, page_index: int = 0) -> Optional[CM
             if pts and fill_color is not None:
                 xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
                 area = (max(xs) - min(xs)) * (max(ys) - min(ys))
-                areas[fill_color] = areas.get(fill_color, 0.0) + area
+                cx = (max(xs) + min(xs)) / 2; cy = (max(ys) + min(ys)) / 2
+                if region is None or (region[0] <= cx <= region[2] and region[1] <= cy <= region[3]):
+                    areas[fill_color] = areas.get(fill_color, 0.0) + area
             pts = []
         elif o in ("n", "S", "s", "W", "W*"):
             pts = []

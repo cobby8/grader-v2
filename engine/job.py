@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import os
 import tempfile
 from dataclasses import asdict
@@ -290,7 +291,7 @@ def _ocg_name(ocg) -> str:
 
 def hide_design_cutline_layer(design_pdf: str, out_pdf: str,
                               layer_names=("패턴선", "재단선"),
-                              page_index: int = 0) -> dict:
+                              page_index: int = 0, target_objgens=None) -> dict:
     """디자인 PDF 의 페이지 콘텐츠에서 '패턴선/재단선' OCG 마킹 구간을 통째로 제거한다.
 
     절차:
@@ -315,7 +316,8 @@ def hide_design_cutline_layer(design_pdf: str, out_pdf: str,
         for mc_name in list(props.keys()):
             ocg = props[mc_name]
             nm = _ocg_name(ocg)
-            if nm in layer_names:
+            hit = (ocg.objgen in target_objgens) if target_objgens is not None else (nm in layer_names)
+            if hit:
                 target_mc.add(str(mc_name))   # 예: "/MC3"
                 if nm not in info["removed_layers"]:
                     info["removed_layers"].append(nm)
@@ -391,6 +393,30 @@ def _off_layer_names(pdf) -> set:
     return names
 
 
+def _off_layer_objgens(pdf):
+    """꺼진 레이어 객체 번호 집합. 레이어 정보가 없으면 None."""
+    ocp = pdf.Root.get("/OCProperties")
+    if ocp is None:
+        return None
+    d = ocp.get("/D") or {}
+    all_ocgs = list(ocp.get("/OCGs") or [])
+    if str(d.get("/BaseState", "/ON")) == "/OFF":
+        on = {o.objgen for o in (d.get("/ON") or [])}
+        return {o.objgen for o in all_ocgs if o.objgen not in on}
+    return {o.objgen for o in (d.get("/OFF") or [])}
+
+
+def _on_layer_names(pdf) -> set:
+    try:
+        ocp = pdf.Root.get("/OCProperties")
+        if ocp is None:
+            return set()
+        off = _off_layer_objgens(pdf) or set()
+        return {_ocg_name(o) for o in (ocp.get("/OCGs") or []) if o.objgen not in off}
+    except Exception:
+        return set()
+
+
 def hide_off_layers(state_pdf: str, design_pdf: str, out_pdf: str, page_index: int = 0) -> dict:
     """디자이너가 «꺼 둔» 레이어의 콘텐츠를 지운 사본을 만든다(2026-10-20).
 
@@ -401,8 +427,16 @@ def hide_off_layers(state_pdf: str, design_pdf: str, out_pdf: str, page_index: i
     design_pdf: 지울 대상(평탄화·패턴선 지운 base)
     반환: {"removed_layers": [...], "removed_spans": n, "found": bool}
     """
+    # 이름이 같은 레이어가 둘(켜진 것·꺼진 것)일 수 있어(합친 파일) «이름»이 아니라 레이어 객체로 가린다(리뷰 지적).
+    #   대상 파일에 레이어 정보(OCProperties)가 있으면 그 파일의 꺼진 객체로, 없으면 원본 이름으로(켜진 같은 이름은 뺀다).
+    with pikepdf.open(design_pdf) as dp:
+        off_obj = _off_layer_objgens(dp)
+    if off_obj is not None:
+        if not off_obj:
+            return {"removed_layers": [], "removed_spans": 0, "found": False}
+        return hide_design_cutline_layer(design_pdf, out_pdf, page_index=page_index, target_objgens=off_obj)
     with pikepdf.open(state_pdf) as sp:
-        off = _off_layer_names(sp)
+        off = _off_layer_names(sp) - _on_layer_names(sp)
     if not off:
         return {"removed_layers": [], "removed_spans": 0, "found": False}
     return hide_design_cutline_layer(design_pdf, out_pdf, layer_names=tuple(sorted(off)), page_index=page_index)
@@ -944,6 +978,98 @@ def _build_precise_layout(preset: dict, size_def: dict, *,
     return SizeLayout(name=size_def["name"], page_size=page, pieces=layout_pieces)
 
 
+def _auto_regions(pd: dict, design_pdf: str, warnings: list, label: str = "") -> list:
+    """(2026-10-20) 디자인 속 재단 윤곽으로 pd 조각 영역을 맞추고(좌우 거울 포함), 양면이면 두 번째 면 이후의
+    프리셋 사본 목록을 돌려준다. 실패하면 빈 목록(등록 때 어림값 그대로)."""
+    extra_sides: list = []
+    try:
+        from .region_match import match_regions
+        _bs = pd["design"].get("base_size")
+        _bsd = next((s for s in pd["sizes"] if s["name"] == _bs), pd["sizes"][0])
+        _polys = parse_svg(os.path.join(pd["_dir"], _bsd["pattern_file"]))
+        _m = match_regions(design_pdf, _polys)
+        _done = []
+        for pdef in pd["pieces"]:
+            hit = _m.get(pdef.get("svg_index"))
+            if not hit:
+                continue
+            pdef["design_region_pt"] = list(hit["region_pt"])
+            if hit["mirrored"]:
+                pdef["mirror"] = True
+            _done.append(f"{pdef.get('name') or pdef.get('id')}{'(뒤집음)' if hit['mirrored'] else ''}")
+        _sides = _m.pop("_sides", [])
+        miss = [p.get("name") or p.get("id") for p in pd["pieces"] if p.get("svg_index") not in _m]
+        if _done:
+            warnings.append(f"[영역] {label}디자인 속 재단 윤곽으로 조각 영역을 맞췄습니다: " + ", ".join(_done))
+            if miss:
+                warnings.append(f"🟡 [영역] {label}디자인에서 못 찾은 조각은 빼고 찍습니다: {', '.join(miss)} — "
+                                "디자인에 있는 조각이면 재단이 빠지니 확인해 주세요.")
+            if miss:
+                # 이 디자인에 없는 조각(반팔 주문의 긴팔 소매·한 장짜리 하의 디자인의 옆선판 등)은 어림값으로 그리지 않는다
+                pd["pieces"] = [p for p in pd["pieces"] if p.get("svg_index") in _m]
+                miss = []
+        elif miss:
+            warnings.append(f"🟡 [영역] {label}디자인에서 재단 윤곽을 찾지 못해 등록 때 어림값을 씁니다 — 그림이 어긋날 수 있습니다.")
+            pd["_auto_failed"] = True
+        # (2026-10-20) 양면: 모든 조각이 같은 모양 두 벌 이상(위·아래)이면 두 번째 면도 함께 찍는다
+        #   (preset.reversible=false 면 끔). 번호·이름 영역은 그 조각이 옮겨간 만큼 같이 옮긴다.
+        _all_ok = (not miss) and all(not _m[p["svg_index"]]["mirrored"] for p in pd["pieces"])
+        if _all_ok and _sides and pd.get("reversible", True) is not False:
+            n_sides = len(_sides) + 1
+            for rnd in _sides:
+                if not all(p["svg_index"] in rnd for p in pd["pieces"]):
+                    continue
+                pd2 = copy.deepcopy(pd)
+                deltas = {}
+                for p2 in pd2["pieces"]:
+                    ra = pd["pieces"][[q["svg_index"] for q in pd["pieces"]].index(p2["svg_index"])]["design_region_pt"]
+                    rb = rnd[p2["svg_index"]]
+                    p2["design_region_pt"] = list(rb)
+                    deltas[p2.get("id")] = (rb[0] - ra[0], rb[1] - ra[1])
+                for akey in ("front_number_area", "back_number_area", "back_name_area"):
+                    area = pd2.get(akey)
+                    if not area:
+                        continue
+                    dx, dy = deltas.get(area.get("piece_id"), (0.0, 0.0))
+                    if "center" in area:
+                        area["center"] = [area["center"][0] + dx, area["center"][1] + dy]
+                    if "center_x" in area:
+                        area["center_x"] = area["center_x"] + dx
+                    if "baseline" in area:
+                        area["baseline"] = area["baseline"] + dy
+                extra_sides.append(pd2)
+            if extra_sides:
+                warnings.append(f"[양면] {label}디자인에 같은 조각이 {n_sides}벌 — {n_sides}면을 한 장에 위·아래로 함께 찍습니다.")
+    except Exception as e:
+        warnings.append(f"🟡 [영역] {label}자동 짝짓기 실패(어림값 사용): {e}")
+        pd["_auto_failed"] = True
+    return extra_sides
+
+
+def _stack_layouts(name: str, layouts: list, gap: float = 60.0) -> SizeLayout:
+    """여러 레이아웃을 한 장에 위→아래로 쌓는다(2026-10-20 — 양면 두 면·상의+하의).
+
+    PDF 좌표는 y 가 위로 크므로 마지막(아래) 레이아웃부터 0 에 두고 위로 올린다.
+    조각 윤곽·transform 은 옮기고, 이미 시트 좌표로 만든 extra_ops(글자·재단선)는 통째로 평행이동해 감싼다.
+    덮어 찍기(overlays)는 조각 transform 다음에 적용되므로 따로 옮길 필요가 없다.
+    """
+    pieces = []
+    y = 0.0
+    width = 0.0
+    for lay in reversed(layouts):
+        w, h = lay.page_size
+        for p in lay.pieces:
+            p.outline = [(px, py + y) for px, py in p.outline]
+            a, b, c, d, e, f = p.transform
+            p.transform = (a, b, c, d, e, f + y)
+            if p.extra_ops:
+                p.extra_ops = f"q 1 0 0 1 0 {y:.4f} cm\n{p.extra_ops}\nQ"
+        pieces.extend(lay.pieces)
+        y += h + gap
+        width = max(width, w)
+    return SizeLayout(name=name, page_size=(width, y - gap), pieces=pieces)
+
+
 def _sized_preset(preset: dict, size_def: dict) -> dict:
     """preset 을 얕게 복제하고 sizes 만 [size_def] 1개로 좁힌다(원본 무변형).
 
@@ -1110,30 +1236,31 @@ def run_job(preset: str,
     # ── (2026-10-20) 디자인 영역 자동 짝짓기: 등록 때 영역을 안 맞춘 패턴(design.auto_regions)은 디자인 속
     #    재단 윤곽을 모양으로 찾아 조각마다 영역을 정한다(좌우 거울까지 가림 — 왼소매 그림이 오른소매에 가지 않게).
     #    못 찾은 조각은 등록 때 어림값 그대로. 화면에서 맞춘 영역(auto_regions 없음)은 건드리지 않는다.
+    extra_sides: list = []   # 양면 두 번째 면 이후의 프리셋 사본(영역만 그 면으로)
     if (preset_dict.get("design") or {}).get("auto_regions"):
+        extra_sides = _auto_regions(preset_dict, design_pdf, warnings)
+
+    # ── (2026-10-20) 함께 찍을 패턴(상의 + 하의): preset.companion.pattern 이 있으면 같은 디자인에서 그 패턴 조각도
+    #    윤곽으로 찾아 같은 장 아래에 찍는다. 사이즈는 행의 bottom_size(없으면 상의 사이즈).
+    companion = None
+    _ccfg = preset_dict.get("companion") or {}
+    if _ccfg.get("pattern"):
         try:
-            from .region_match import match_regions
-            _bs = preset_dict["design"].get("base_size")
-            _bsd = next((s for s in preset_dict["sizes"] if s["name"] == _bs), preset_dict["sizes"][0])
-            _polys = parse_svg(os.path.join(preset_dict["_dir"], _bsd["pattern_file"]))
-            _m = match_regions(design_pdf, _polys)
-            _done = []
-            for pdef in preset_dict["pieces"]:
-                hit = _m.get(pdef.get("svg_index"))
-                if not hit:
-                    continue
-                pdef["design_region_pt"] = list(hit["region_pt"])
-                if hit["mirrored"]:
-                    pdef["mirror"] = True
-                _done.append(f"{pdef.get('name') or pdef.get('id')}{'(뒤집음)' if hit['mirrored'] else ''}")
-            miss = [p.get("name") or p.get("id") for p in preset_dict["pieces"] if p.get("svg_index") not in _m]
-            if _done:
-                warnings.append("[영역] 디자인 속 재단 윤곽으로 조각 영역을 맞췄습니다: " + ", ".join(_done)
-                                + (f" · 못 찾음(어림값 사용): {', '.join(miss)}" if miss else ""))
-            elif miss:
-                warnings.append("🟡 [영역] 디자인에서 재단 윤곽을 찾지 못해 등록 때 어림값을 씁니다 — 그림이 어긋날 수 있습니다.")
+            _cname = str(_ccfg["pattern"])
+            if os.path.basename(_cname) != _cname or ":" in _cname or ".." in _cname:
+                raise ValueError("패턴 이름에 경로 문자가 있습니다")      # 패턴 폴더 밖을 가리키지 못하게
+            _cpath = os.path.join(os.path.dirname(preset_dict["_dir"]), _cname, "preset.json")
+            _cp = load_preset(_cpath)
+            _csides = _auto_regions(_cp, design_pdf, warnings, label="함께 찍을 패턴 ")
+            if _cp.pop("_auto_failed", False) or not _cp["pieces"]:
+                # 하의 조각을 이 디자인에서 하나도 못 찾으면, 하의 프리셋의 옛 영역(다른 디자인 좌표)으로 잘라 붙이지 않는다
+                raise ValueError("이 디자인에서 하의 조각을 찾지 못했습니다")
+            companion = {"preset": _cp, "sides": _csides, "size_key": _ccfg.get("size_key") or "bottom_size",
+                         "size_map": {sd["name"]: sd for sd in _cp["sizes"]},
+                         "precise": _has_precise_areas(_cp) or (_cp.get("cutline") or {}).get("draw_from") == "svg_polygon"}
+            warnings.append(f"[함께 찍기] «{_ccfg['pattern']}» 조각을 같은 장 아래에 함께 찍습니다.")
         except Exception as e:
-            warnings.append(f"🟡 [영역] 자동 짝짓기 실패(어림값 사용): {e}")
+            warnings.append(f"🟡 [함께 찍기] 함께 찍을 패턴 «{_ccfg.get('pattern')}» 을 못 읽어 건너뜁니다: {e}")
 
     # ── (작업 A) 본체색 1회 결정: preset.body_fill > 디자인 자동감지 > None(채움 생략). ──
     #    왜 1회만: 모든 선수가 같은 base 디자인을 공유하므로 본체색도 1번만 정하면 된다.
@@ -1269,19 +1396,28 @@ def run_job(preset: str,
     # ── (2026-10-20) 사이즈 택: 디자인 속 기준 사이즈 택을 한 번 찾아 두고, 사이즈마다 그 사이즈 택을 덮어 찍는다 ──
     #    preset.size_tag.enabled=false 면 끈다. 못 찾으면(점수 낮음·라이브러리 없음) 아무것도 안 한다(예전 그대로).
     tag_hits = []   # [(조각 번호, hit)]
+    _all_tag_hits: list = []
+
+    def _map_tags(pieces_list):
+        """찾은 택마다, 그 택을 품은 조각 번호(영역 기준)."""
+        res = []
+        for h in _all_tag_hits:
+            cx = (h["rect_pt"][0] + h["rect_pt"][2]) / 2
+            cy = (h["rect_pt"][1] + h["rect_pt"][3]) / 2
+            for pi, pdef in enumerate(pieces_list):
+                rx0, ry0, rx1, ry1 = pdef["design_region_pt"]
+                if rx0 <= cx <= rx1 and ry0 <= cy <= ry1:
+                    res.append((pi, h))
+                    break
+        return res
+
     if (preset_dict.get("size_tag") or {}).get("enabled", True):
         try:
             from .size_tag import find_tags, overlay_for, load_library
             _tag_lib = load_library()
             _base_sz = (preset_dict.get("design") or {}).get("base_size") or ""
-            for h in find_tags(base_design, _base_sz, _tag_lib):
-                cx = (h["rect_pt"][0] + h["rect_pt"][2]) / 2
-                cy = (h["rect_pt"][1] + h["rect_pt"][3]) / 2
-                for pi, pdef in enumerate(preset_dict["pieces"]):
-                    rx0, ry0, rx1, ry1 = pdef["design_region_pt"]
-                    if rx0 <= cx <= rx1 and ry0 <= cy <= ry1:
-                        tag_hits.append((pi, h))
-                        break
+            _all_tag_hits = find_tags(base_design, _base_sz, _tag_lib)
+            tag_hits = _map_tags(preset_dict["pieces"])
             if tag_hits:
                 warnings.append("[택] 기준 사이즈 택 " + ", ".join(
                     f"{preset_dict['pieces'][pi].get('name') or preset_dict['pieces'][pi].get('id')}({h['family']} {h['size']}, 일치 {h['score']})"
@@ -1289,8 +1425,39 @@ def run_job(preset: str,
         except Exception as e:
             warnings.append(f"🟡 [택] 사이즈 택 찾기를 건너뜀: {e}")
 
-    def _apply_size_tags(layout, size: str, row_warns: list) -> None:
-        for pi, h in tag_hits:
+    side_tag_hits = [_map_tags(pd2["pieces"]) for pd2 in extra_sides] if _all_tag_hits else [[] for _ in extra_sides]
+
+    # (2026-10-20) 양면 본체색: 면마다 그 면 조각 자리에서 다시 감지(흰 면 색으로 자주 면 틈을 칠하지 않게).
+    #   preset.body_fill 을 디자이너가 적었으면 모든 면에 그 색.
+    side_fill: list = []
+    if extra_sides:
+        if preset_dict.get("body_fill") or body_fill is None:
+            side_fill = [body_fill for _ in extra_sides]
+        else:
+            try:
+                from .flatten import detect_background_cmyk
+
+                def _union(pieces_list):
+                    rs = [p["design_region_pt"] for p in pieces_list]
+                    return (min(r[0] for r in rs), min(r[1] for r in rs), max(r[2] for r in rs), max(r[3] for r in rs))
+                with pikepdf.open(base_design) as _bgp:
+                    f1 = detect_background_cmyk(_bgp, 0, region=_union(preset_dict["pieces"]))
+                    if f1:
+                        body_fill = tuple(float(v) for v in f1)
+                    for pd2 in extra_sides:
+                        fk = detect_background_cmyk(_bgp, 0, region=_union(pd2["pieces"]))
+                        side_fill.append(tuple(float(v) for v in fk) if fk else None)
+                warnings.append(f"[본체색] 면마다 감지: 1면 {body_fill} · " + " · ".join(
+                    f"{i + 2}면 {c}" for i, c in enumerate(side_fill)))
+            except Exception as e:
+                side_fill = [None for _ in extra_sides]
+                warnings.append(f"🟡 [본체색] 면별 감지 실패(두 번째 면부터 채움 생략): {e}")
+    if companion is not None:
+        companion["tags"] = [_map_tags(pdx["pieces"]) if _all_tag_hits else []
+                             for pdx in [companion["preset"]] + companion["sides"]]
+
+    def _apply_size_tags(layout, size: str, row_warns: list, hits=None) -> None:
+        for pi, h in (tag_hits if hits is None else hits):
             if size == h["size"] or pi >= len(layout.pieces):
                 continue          # 기준 사이즈는 디자인 택이 이미 맞다
             ov = overlay_for(h, size, _tag_lib)
@@ -1355,6 +1522,47 @@ def run_job(preset: str,
             continue
         if tag_hits:
             _apply_size_tags(layout, size, row_warns)
+        if extra_sides:
+            stack = [layout]
+            try:
+                for si, pd2 in enumerate(extra_sides):
+                    if use_precise:
+                        lay2 = _build_precise_layout(
+                            pd2, size_map[size], number=number, name=name, warnings=row_warns,
+                            cutline_strokes=cutline_strokes, cover_bleed=cover_bleed,
+                            bg_cmyk=side_fill[si] if si < len(side_fill) else None)   # 면마다 본체색(자주 면에 흰 면 색 X)
+                    else:
+                        lay2 = build_layouts(_sized_preset(pd2, size_map[size]), base_design,
+                                             number=number, name=name, warnings=row_warns)[0]
+                    if side_tag_hits[si]:
+                        _apply_size_tags(lay2, size, row_warns, side_tag_hits[si])
+                    stack.append(lay2)
+                layout = _stack_layouts(layout.name, stack)
+            except Exception as e:
+                row_warns.append(f"🟡 [양면] 두 번째 면을 못 만들어 첫 면만 찍습니다: {e}")
+        if companion is not None:
+            if not (row.get(companion["size_key"]) or "").strip():
+                companion["no_bottom"] = companion.get("no_bottom", 0) + 1
+            csize = (row.get(companion["size_key"]) or size or "").strip()
+            if csize not in companion["size_map"]:
+                row_warns.append(f"🟡 [함께 찍기] 함께 찍을 패턴에 «{csize}» 사이즈가 없어 빼고 찍습니다.")
+            else:
+                try:
+                    clays = []
+                    for ci, cpd in enumerate([companion["preset"]] + companion["sides"]):
+                        if companion["precise"]:
+                            cl = _build_precise_layout(cpd, companion["size_map"][csize], number=None, name=None,
+                                                       warnings=row_warns, cutline_strokes=None, cover_bleed=None,
+                                                       bg_cmyk=cpd.get("body_fill"))
+                        else:
+                            cl = build_layouts(_sized_preset(cpd, companion["size_map"][csize]), base_design,
+                                               warnings=row_warns)[0]
+                        if companion["tags"][ci]:
+                            _apply_size_tags(cl, csize, row_warns, companion["tags"][ci])
+                        clays.append(cl)
+                    layout = _stack_layouts(layout.name, [layout] + clays)
+                except Exception as e:
+                    row_warns.append(f"🟡 [함께 찍기] 함께 찍을 패턴을 못 만들어 빼고 찍습니다: {e}")
 
         # 글리프 누락 등 행 경고는 선수 식별과 함께 전체 warnings 에 누적(사람 검수용).
         for w in row_warns:
@@ -1518,6 +1726,9 @@ def run_job(preset: str,
     # ── summary 집계 ──
     produced = len(outputs)
     verify_ok = sum(1 for o in outputs if o.get("verify_pass"))
+    if companion is not None and companion.get("no_bottom"):
+        warnings.append(f"🟡 [함께 찍기] 하의 사이즈가 없는 {companion['no_bottom']}행은 상의 사이즈로 하의를 찍었습니다 — "
+                        "상·하의 사이즈가 다르면 주문서 «하의» 칸을 채워 다시 만들어 주세요.")
     summary = {
         "job_dir": os.path.abspath(out_dir),
         "split": split,
