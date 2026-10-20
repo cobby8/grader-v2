@@ -69,6 +69,19 @@ def fit_matrix(design_region, piece_bbox, fit: str, shrink: float = 1.0) -> Matr
     raise ValueError(f"알 수 없는 fit '{fit}' (가능: {FIT_MODES})")
 
 
+def with_mirror(design_region, m: Matrix) -> Matrix:
+    """디자인 영역을 좌우로 뒤집은 뒤 m 을 적용하는 행렬(2026-10-20 — 거울 짝 조각).
+
+    디자인엔 소매가 한 장만 그려져 있고 패턴엔 왼·오른 두 장이면, 반대쪽은 그림을 뒤집어 얹는다.
+    뒤집기: x' = (dx0 + dx1) - x  → 행렬 (-1, 0, 0, 1, dx0+dx1, 0) 를 먼저.
+    """
+    dx0, _, dx1, _ = design_region
+    a, b, c, d, e, f = m
+    # (-1,0,0,1,t,0) × m  (뒤집기를 먼저 적용)
+    t = dx0 + dx1
+    return (-a, -b, c, d, t * a + e, t * b + f)
+
+
 def _fill_polygon_ops(polygon: Sequence[Point], cmyk: Sequence[float]) -> str:
     """폴리곤을 device CMYK 본체색으로 채우는 ops(m/l…h f)를 만든다.
 

@@ -2734,6 +2734,10 @@ async def create_pattern(
         # 조각을 전부 화면 값으로 채웠으면 '균등분할 추정' 경고는 더 이상 사실이 아니다 → 뺀다.
         if pieces and layout_applied["pieces"] >= len(pieces):
             warnings[:] = [w for w in warnings if not w.startswith(_LAYOUT_ESTIMATE_WARN_PREFIX)]
+    # (2026-10-20) 화면에서 조각 영역을 다 맞추지 않았으면, 작업 때 디자인 속 재단 윤곽으로 자동 짝짓기(engine/job.py)
+    #   — 어림값(균등분할)으로 그림이 잘리던 문제 + 왼·오른 소매가 뒤바뀌던 문제를 함께 막는다.
+    if not (pieces and layout_applied["pieces"] >= len(pieces)):
+        preset["design"]["auto_regions"] = True
 
     if not (preset.get("front_number_area") or preset.get("back_number_area")):
         warnings.append(

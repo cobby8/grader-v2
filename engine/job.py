@@ -35,7 +35,7 @@ from .flatten import flatten_transparency  # 디자인 투명도 벡터 평탄�
 # 내부 함수 _resolve_font_path 는 '호출만' 한다(복제 대신 재사용 — 동작 일치 보장).
 from .grade import _resolve_font_path, build_layouts, load_preset
 from .pattern import parse_svg  # 사이즈별 패턴 SVG → 조각 윤곽(정밀배치 경로에서 사용)
-from .pdfutil import cm_matrix, scale_translate, fit_matrix  # 글자 ops 를 시트좌표로 감쌀 cm 행렬 생성
+from .pdfutil import cm_matrix, scale_translate, fit_matrix, with_mirror  # 글자 ops 를 시트좌표로 감쌀 cm 행렬 생성
 from .text import place_name, place_number  # Phase B 정밀 배치기(완성본 실측 수치 재현)
 from .verify import all_passed, verify_output
 
@@ -819,6 +819,8 @@ def _build_precise_layout(preset: dict, size_def: dict, *,
         else:
             transform = _job_piece_transform(pdef["design_region_pt"], poly,
                                              shrink_x, shrink_y, bleed=bleed_value)
+        if pdef.get("mirror"):
+            transform = with_mirror(pdef["design_region_pt"], transform)   # 거울 짝(디자인엔 한 장뿐)
         piece_transforms.append(transform)
         layout_pieces.append(
             # bg_cmyk: 본체색(있으면). place_block 이 클립 안을 디자인 전에 칠해 흰틈 제거.
@@ -1104,6 +1106,34 @@ def run_job(preset: str,
                                 f"({off_info['removed_spans']}구간)를 출력에서 뺐습니다.")
         except Exception as e:
             warnings.append(f"🟡 [숨김 레이어] 꺼 둔 레이어 빼기 실패(출력에 찍힐 수 있음): {e}")
+
+    # ── (2026-10-20) 디자인 영역 자동 짝짓기: 등록 때 영역을 안 맞춘 패턴(design.auto_regions)은 디자인 속
+    #    재단 윤곽을 모양으로 찾아 조각마다 영역을 정한다(좌우 거울까지 가림 — 왼소매 그림이 오른소매에 가지 않게).
+    #    못 찾은 조각은 등록 때 어림값 그대로. 화면에서 맞춘 영역(auto_regions 없음)은 건드리지 않는다.
+    if (preset_dict.get("design") or {}).get("auto_regions"):
+        try:
+            from .region_match import match_regions
+            _bs = preset_dict["design"].get("base_size")
+            _bsd = next((s for s in preset_dict["sizes"] if s["name"] == _bs), preset_dict["sizes"][0])
+            _polys = parse_svg(os.path.join(preset_dict["_dir"], _bsd["pattern_file"]))
+            _m = match_regions(design_pdf, _polys)
+            _done = []
+            for pdef in preset_dict["pieces"]:
+                hit = _m.get(pdef.get("svg_index"))
+                if not hit:
+                    continue
+                pdef["design_region_pt"] = list(hit["region_pt"])
+                if hit["mirrored"]:
+                    pdef["mirror"] = True
+                _done.append(f"{pdef.get('name') or pdef.get('id')}{'(뒤집음)' if hit['mirrored'] else ''}")
+            miss = [p.get("name") or p.get("id") for p in preset_dict["pieces"] if p.get("svg_index") not in _m]
+            if _done:
+                warnings.append("[영역] 디자인 속 재단 윤곽으로 조각 영역을 맞췄습니다: " + ", ".join(_done)
+                                + (f" · 못 찾음(어림값 사용): {', '.join(miss)}" if miss else ""))
+            elif miss:
+                warnings.append("🟡 [영역] 디자인에서 재단 윤곽을 찾지 못해 등록 때 어림값을 씁니다 — 그림이 어긋날 수 있습니다.")
+        except Exception as e:
+            warnings.append(f"🟡 [영역] 자동 짝짓기 실패(어림값 사용): {e}")
 
     # ── (작업 A) 본체색 1회 결정: preset.body_fill > 디자인 자동감지 > None(채움 생략). ──
     #    왜 1회만: 모든 선수가 같은 base 디자인을 공유하므로 본체색도 1번만 정하면 된다.

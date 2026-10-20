@@ -33,7 +33,7 @@ from typing import List
 from .compose import Piece, SizeLayout, compose
 from .pattern import parse_svg
 from .pdfutil import bbox as bbox_of
-from .pdfutil import scale_translate, fit_matrix, FIT_MODES
+from .pdfutil import scale_translate, fit_matrix, FIT_MODES, with_mirror
 from .text import render_text_ops  # 배번·이름 글자를 PDF 벡터 경로로 펴는 순수 함수
 
 # preset.json 에 반드시 있어야 하는 최상위 키 (없으면 설계도 결함이므로 즉시 알린다).
@@ -233,6 +233,8 @@ def build_layouts(preset: dict, design_pdf_path: str,
                 transform = fit_matrix(pdef["design_region_pt"], poly.bbox, pdef["fit"], min(shrink_x, shrink_y))
             else:
                 transform = _piece_transform(pdef["design_region_pt"], poly, shrink_x, shrink_y)
+            if pdef.get("mirror"):
+                transform = with_mirror(pdef["design_region_pt"], transform)   # 거울 짝(디자인엔 한 장뿐)
             # 클립 윤곽은 조각 윤곽 그대로(시트 좌표). 디자인이 이 모양으로 잘린다.
             layout_pieces.append(
                 Piece(outline=poly.points, transform=transform, name=pdef.get("name", pdef.get("id", ""))))
