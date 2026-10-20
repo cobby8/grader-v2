@@ -368,6 +368,46 @@ def hide_design_cutline_layer(design_pdf: str, out_pdf: str,
         pdf.close()
 
 
+def _off_layer_names(pdf) -> set:
+    """문서 기본 보기(/OCProperties /D)에서 «꺼진» 레이어 이름들."""
+    names = set()
+    try:
+        ocp = pdf.Root.get("/OCProperties")
+        if ocp is None:
+            return names
+        d = ocp.get("/D") or {}
+        all_ocgs = list(ocp.get("/OCGs") or [])
+        if str(d.get("/BaseState", "/ON")) == "/OFF":
+            on = {o.objgen for o in (d.get("/ON") or [])}
+            off = [o for o in all_ocgs if o.objgen not in on]
+        else:
+            off = list(d.get("/OFF") or [])
+        for o in off:
+            nm = _ocg_name(o)
+            if nm:
+                names.add(nm)
+    except Exception:
+        pass
+    return names
+
+
+def hide_off_layers(state_pdf: str, design_pdf: str, out_pdf: str, page_index: int = 0) -> dict:
+    """디자이너가 «꺼 둔» 레이어의 콘텐츠를 지운 사본을 만든다(2026-10-20).
+
+    왜: compose 는 디자인 페이지를 Form 으로 옮기면서 문서의 레이어 켜짐/꺼짐(OCProperties)을 버린다.
+        그래서 디자이너가 꺼 둔 «레이어 2»(사이즈 택 아래 초록 상자 등)가 출력에 찍혔다(최근 주문 5건 전부).
+        → 꺼진 레이어의 '/OC /MCx BDC … EMC' 구간을 지운다(패턴선 지우기와 같은 방법).
+    state_pdf : 꺼짐 정보를 읽을 원본(평탄화본은 OCProperties 가 없을 수 있다)
+    design_pdf: 지울 대상(평탄화·패턴선 지운 base)
+    반환: {"removed_layers": [...], "removed_spans": n, "found": bool}
+    """
+    with pikepdf.open(state_pdf) as sp:
+        off = _off_layer_names(sp)
+    if not off:
+        return {"removed_layers": [], "removed_spans": 0, "found": False}
+    return hide_design_cutline_layer(design_pdf, out_pdf, layer_names=tuple(sorted(off)), page_index=page_index)
+
+
 def _mat_mul(m1, m2):
     """PDF 행렬 곱(flatten._mat_mul 과 동일): cm 은 현재 CTM 왼쪽에 곱해진다(new = m1 × m2)."""
     a1, b1, c1, d1, e1, f1 = m1
@@ -1051,6 +1091,19 @@ def run_job(preset: str,
                     "(레이어명/구조 확인 필요). 우리 재단선만 1줄로 그려집니다.")
         except Exception as e:
             warnings.append(f"🟡 [패턴선] OCG 레이어 제거 실패(디자인 패턴선 잔존 가능): {e}")
+
+    # ── (2026-10-20) 디자이너가 꺼 둔 레이어는 출력에서도 뺀다(compose 가 켜짐/꺼짐을 버려 찍히던 문제).
+    #    preset.hidden_layers.remove=false 면 끈다(예전 동작).
+    if (preset_dict.get("hidden_layers") or {}).get("remove", True):
+        try:
+            off_path = os.path.join(out_dir, "_design_no_hidden.pdf")
+            off_info = hide_off_layers(design_pdf, base_design, off_path)
+            if off_info.get("found"):
+                base_design = off_path
+                warnings.append(f"[숨김 레이어] 디자인에서 꺼 둔 레이어 {off_info['removed_layers']} "
+                                f"({off_info['removed_spans']}구간)를 출력에서 뺐습니다.")
+        except Exception as e:
+            warnings.append(f"🟡 [숨김 레이어] 꺼 둔 레이어 빼기 실패(출력에 찍힐 수 있음): {e}")
 
     # ── (작업 A) 본체색 1회 결정: preset.body_fill > 디자인 자동감지 > None(채움 생략). ──
     #    왜 1회만: 모든 선수가 같은 base 디자인을 공유하므로 본체색도 1번만 정하면 된다.
