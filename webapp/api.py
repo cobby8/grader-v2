@@ -11,7 +11,9 @@ engine/ 에 있고, 여기서는 그걸 호출해 화면이 먹기 좋은 JSON �
 from __future__ import annotations
 
 import io
+import math
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -1717,6 +1719,202 @@ def _safe_pattern_dirname(name: str) -> str:
     return cleaned or "패턴"
 
 
+# ── 사이즈끼리 «같은 조각 = 같은 번호» 맞추기 (2026-10-20) ──────────────────────
+#   왜: 엔진은 조각을 번호(svg_index)로 찾는데, 번호는 SVG 안 «높이순» 이었다. 마스터 .ai 는
+#   사이즈마다 조각 구성이 다르거나(하의: 트임판이 일부 사이즈에만) 높이가 비슷하면 순서가 뒤바뀌어,
+#   같은 번호가 사이즈마다 다른 조각을 가리켰다. → 기준 사이즈 조각을 «정답 순서»로 삼고, 다른 사이즈
+#   조각을 모양(비율·굴곡·채움 + 크기·위치)으로 짝지어 같은 번호(data-order)를 붙여 다시 쓴다.
+_ALIGN_MAX_COST = 0.9   # 이보다 안 닮았으면 짝 아님(실측: 같은 조각 ≤0.35, 다른 조각 ≥1.2)
+
+
+def _svg_piece_elems(path: str):
+    """polyline SVG → (트리, [(요소, 점 목록)...]) — 점 3개 미만은 뺀다."""
+    import xml.etree.ElementTree as _ET
+    _ET.register_namespace("", "http://www.w3.org/2000/svg")
+    tree = _ET.parse(path)
+    out = []
+    for el in tree.getroot().iter():
+        tag = el.tag.split("}", 1)[-1]
+        if tag not in ("polyline", "polygon"):
+            continue
+        nums = [float(v) for v in re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", el.get("points", ""))]
+        pts = [(nums[i], nums[i + 1]) for i in range(0, len(nums) - 1, 2)]
+        if len(pts) >= 3:
+            out.append((el, pts))
+    return tree, out
+
+
+def _shape_desc(pts) -> Dict[str, float]:
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    w = max(xs) - min(xs) or 1e-6
+    h = max(ys) - min(ys) or 1e-6
+    n = len(pts)
+    area = abs(sum(pts[i][0] * pts[(i + 1) % n][1] - pts[(i + 1) % n][0] * pts[i][1] for i in range(n))) / 2 or 1e-6
+    per = sum(math.dist(pts[i], pts[(i + 1) % n]) for i in range(n))
+    # 넓이 무게중심이 bbox 가운데서 어느 쪽으로 쏠렸나(-0.5~0.5) — 좌우 거울 조각(왼·오른 소매)을 가른다
+    a2 = 0.0; gx = 0.0
+    for i in range(n):
+        x0, y0 = pts[i]; x1, y1 = pts[(i + 1) % n]
+        c = x0 * y1 - x1 * y0
+        a2 += c; gx += (x0 + x1) * c
+    skx = ((gx / (3 * a2)) - (min(xs) + max(xs)) / 2) / w if a2 else 0.0
+    return {"w": w, "h": h, "area": area, "aspect": w / h, "comp": per * per / area, "fill": area / (w * h),
+            "skx": skx, "cx": (min(xs) + max(xs)) / 2, "cy": (min(ys) + max(ys)) / 2}
+
+
+def _rel_positions(descs: List[Dict[str, float]]) -> None:
+    """조각 묶음 안에서의 상대 위치(0~1) — 좌우 거울 소매처럼 모양이 같은 조각을 가르는 데 쓴다."""
+    if not descs:
+        return
+    x0 = min(d["cx"] for d in descs); x1 = max(d["cx"] for d in descs)
+    y0 = min(d["cy"] for d in descs); y1 = max(d["cy"] for d in descs)
+    for d in descs:
+        d["rx"] = (d["cx"] - x0) / (x1 - x0) if x1 > x0 else 0.5
+        d["ry"] = (d["cy"] - y0) / (y1 - y0) if y1 > y0 else 0.5
+
+
+def _match_cost(a: Dict[str, float], b: Dict[str, float]) -> float:
+    return (2.0 * abs(math.log(b["aspect"] / a["aspect"]))
+            + 1.5 * abs(math.log(b["comp"] / a["comp"]))
+            + 2.0 * abs(b["fill"] - a["fill"])
+            + 0.8 * abs(math.log(math.sqrt(b["area"] / a["area"])))
+            + 4.0 * abs(b["skx"] - a["skx"])
+            + 0.3 * abs(b["rx"] - a["rx"]) + 0.3 * abs(b["ry"] - a["ry"]))
+
+
+def _align_size_pieces(converted_map: Dict[str, str], order: List[str], base: str,
+                       warnings: List[str]) -> Dict[str, Any]:
+    """기준 사이즈 조각 순서(높이 내림차순 — 예전 svg_index 와 같다)에 맞춰 모든 사이즈 SVG 를 다시 쓴다.
+
+    반환: {"n": 기준 조각 수, "base": 실제 기준, "disabled": [{name, reason}], "dropped": {사이즈: [폭×높이mm]}}
+      · 기준 조각이 없는 사이즈 → disabled(이유에 빠진 조각 크기). 조용히 엉뚱한 조각에 합성하지 않는다.
+      · 기준에 없는 남는 조각 → 그 사이즈 SVG 에서 뺀다(경고).
+    """
+    MM = 25.4 / 72
+    parsed = {}
+    for sz in order:
+        p = converted_map.get(sz)
+        if not p or not os.path.exists(p):
+            continue
+        try:
+            parsed[sz] = _svg_piece_elems(p)
+        except Exception as e:
+            warnings.append(f"🟡 [{sz}] 조각 짝맞추기용으로 SVG 를 못 읽음: {e}")
+    if not parsed:
+        return {"n": 0, "base": base, "disabled": [], "dropped": {}, "aligned": []}
+    # 기준은 «조각 수가 가장 흔한» 사이즈여야 한다 — 기준만 조각이 빠지거나 남으면 나머지 전 사이즈가
+    #   망가진다(리뷰 지적: 기준 0조각이면 다른 사이즈가 0조각으로 다시 써졌다).
+    counts = [len(v[1]) for v in parsed.values()]
+    mode = max(set(counts), key=lambda c: (counts.count(c), c))
+    if mode == 0:
+        warnings.append("🔴 어느 사이즈에서도 조각(닫힌 윤곽)을 읽지 못했습니다 — 원본 파일을 확인해 주세요.")
+        return {"n": 0, "base": base, "disabled": [], "dropped": {}, "aligned": []}
+    #   · 기준이 0조각이거나 남들보다 «많으면»(군더더기) 바꾼다 — 그대로 두면 다른 사이즈가 전부 꺼진다.
+    #   · 기준이 «적으면» 그대로 둔다 — 기준에 없는 조각은 다른 사이즈에서 빠질 뿐 사이즈는 산다
+    #     (하의 마스터: XL 트임판이 대지에 잘려 3조각 → 트임판만 빼고 13사이즈 모두 산다. 기준을 S 로 바꾸면 XL·2XL·3XL 이 꺼졌다).
+    nb_now = len(parsed[base][1]) if base in parsed else 0
+    if base not in parsed or nb_now == 0 or nb_now > mode:
+        cands = [sz for sz in order if sz in parsed and len(parsed[sz][1]) == mode]
+        nb = cands[len(cands) // 2]
+        if base in parsed:
+            warnings.append(f"🟡 기준 {base} 의 조각 수({nb_now})가 다른 사이즈 대부분({mode})과 달라 "
+                            f"조각 짝맞추기 기준을 {nb} 로 잡았습니다.")
+        base = nb
+    elif nb_now < mode:
+        warnings.append(f"🟡 기준 {base} 의 조각이 {nb_now}개로 다른 사이즈 대부분({mode}개)보다 적습니다 — "
+                        "기준에 없는 조각은 다른 사이즈에서도 뺍니다.")
+    _, base_items = parsed[base]
+    canon = sorted(range(len(base_items)), key=lambda i: -_shape_desc(base_items[i][1])["h"])   # 안정 정렬 = parse_svg 와 같은 순서
+    base_desc = [_shape_desc(base_items[i][1]) for i in canon]
+    _rel_positions(base_desc)
+
+    disabled: List[Dict[str, Any]] = []
+    dropped: Dict[str, List[str]] = {}
+    aligned: List[str] = []
+    # 기준 안에서 서로 닮았는데 크기만 1~8% 다른 조각(목 밴드 ↔ 암홀 밴드)은 위치로 갈린다 → 알린다
+    for j in range(len(base_desc)):
+        for j2 in range(j + 1, len(base_desc)):
+            a, b = base_desc[j], base_desc[j2]
+            r = math.sqrt(max(a["area"], b["area"]) / min(a["area"], b["area"]))
+            if 1.01 < r < 1.08 and _match_cost(a, b) < 0.3:
+                warnings.append(f"🟡 모양이 아주 비슷한 조각 두 개({round(a['w'] * MM)}×{round(a['h'] * MM)} · "
+                                f"{round(b['w'] * MM)}×{round(b['h'] * MM)}mm)는 대지 위 자리로 짝을 정했습니다 — "
+                                "사이즈마다 배치가 다르면 뒤바뀔 수 있으니 결과를 확인해 주세요.")
+
+    def _pair(ref_desc, descs):
+        pairs = sorted((_match_cost(ref_desc[j], descs[k]), j, k)
+                       for j in range(len(ref_desc)) for k in range(len(descs)))
+        got: Dict[int, int] = {}
+        used = set()
+        for cost, j, k in pairs:
+            if cost > _ALIGN_MAX_COST:
+                break
+            if j in got or k in used:
+                continue
+            got[j] = k
+            used.add(k)
+        return got, used
+
+    def _align_one(sz: str, ref_desc: List[Dict[str, float]]):
+        """sz 의 조각을 ref_desc(이웃 사이즈, 정답 순서)와 짝지어 다시 쓴다. 성공하면 sz 의 정답 순서 desc 반환."""
+        tree, items = parsed[sz]
+        descs = [_shape_desc(pts) for _, pts in items]
+        _rel_positions(descs)
+        got, used = _pair(ref_desc, descs)
+        if len(used) < len(descs):
+            # 남는 조각이 상대 위치를 밀지 않게, 짝지은 것끼리 위치를 다시 재고 한 번 더 짝짓는다
+            keep = sorted(used)
+            sub = [dict(descs[k]) for k in keep]
+            _rel_positions(sub)
+            g2, u2 = _pair(ref_desc, sub)
+            if len(g2) >= len(got):
+                got = {j: keep[k] for j, k in g2.items()}
+                used = {keep[k] for k in u2}
+        missing = [j for j in range(len(ref_desc)) if j not in got]
+        if missing:
+            want = ", ".join(f"{round(base_desc[j]['w'] * MM)}×{round(base_desc[j]['h'] * MM)}mm" for j in missing)
+            disabled.append({"name": sz, "reason": f"기준 {base} 의 조각 {len(missing)}개({want})와 닮은 조각이 없음 — "
+                                                  "원본 파일을 고친 뒤 다시 등록해야 켜진다"})
+            return None
+        extra = [k for k in range(len(descs)) if k not in used]
+        if extra:
+            dropped[sz] = [f"{round(descs[k]['w'] * MM)}×{round(descs[k]['h'] * MM)}" for k in extra]
+        # 다시 쓰기: 짝지은 조각만, 정답 순서대로, data-order 를 달아서
+        root = tree.getroot()
+        par = {c: p for p in root.iter() for c in p}
+        for el, _ in items:
+            if el in par:
+                par[el].remove(el)
+        for j in range(len(ref_desc)):
+            el = items[got[j]][0]
+            el.set("data-order", str(j))
+            root.append(el)
+        tree.write(converted_map[sz], encoding="utf-8", xml_declaration=True)
+        aligned.append(sz)
+        out = [descs[got[j]] for j in range(len(ref_desc))]
+        _rel_positions(out)
+        return out
+
+    # 기준에서 바깥으로 «이웃 사이즈끼리» 짝짓는다 — 목·암홀 밴드처럼 높이는 그대로고 길이만 느는 조각은
+    #   5XS 와 XL 을 바로 견주면 비율이 많이 달라 못 알아본다(이웃끼리는 3~5% 차이).
+    _align_one(base, base_desc)
+    seq = [sz for sz in order if sz in parsed]
+    bi = seq.index(base)
+    for side in (seq[bi + 1:], list(reversed(seq[:bi]))):
+        ref = base_desc
+        for sz in side:
+            got_desc = _align_one(sz, ref)
+            if got_desc is not None:
+                ref = got_desc     # 꺼진 사이즈는 건너뛰고 마지막 성공 사이즈와 계속 견준다
+    if dropped:
+        warnings.append("🟡 기준 사이즈에 없는 조각을 사이즈별로 뺐습니다(폭×높이 mm): "
+                        + " · ".join(f"{k} {v}" for k, v in dropped.items()))
+    for d in disabled:
+        warnings.append(f"🔴 [{d['name']}] {d['reason']}")
+    return {"n": len(base_desc), "base": base, "disabled": disabled, "dropped": dropped, "aligned": aligned}
+
+
 def _build_pieces(svg_index_count: int, page_w: float, page_h: float,
                   warnings: List[str]) -> List[Dict[str, Any]]:
     """조각 개수만큼 pieces 항목을 만든다(svg_index 매핑 + design_region 추정).
@@ -1978,7 +2176,7 @@ def _extract_bearer_token(request: Optional[Request]) -> Optional[str]:
 #   엔진 사본(vendor/pattern_engine)의 notch_rules·preset_export 를 쓴다(stizshop tools/pattern-engine 이 정본).
 #   · 등록: 노치 규칙을 고르면 엔진이 .ai/.svg 를 읽어 <사이즈>.svg(깨끗한 외곽선 — 합성·클립용)와
 #           <사이즈>.notched.svg(노치 든 재단선 — 주문 PDF 빨간 선용)를 쓰고, 노치 자리를 preset.notches 에 남긴다.
-#           곡선은 엔진이 16토막으로 편다(normalize_svg 는 곡선 끝점만 이어 모양이 어긋난다).
+#           곡선은 엔진이 16토막으로 편다(normalize_svg 도 2026-10-20 부터 16토막으로 편다 — 그 전엔 끝점만 이었다).
 #   · 좌우 두 장 조각(소매·작은 조각·하의 다리)은 거울로 한 장 더 만든다(notch_rules.quantity).
 #   · 노치 규칙이 없는 등록·기존 프리셋은 한 줄도 바뀌지 않는다.
 NOTCHED_SUFFIX = ".notched.svg"
@@ -2272,6 +2470,17 @@ async def create_pattern(
     sizes_meta.sort(key=_size_key)
     order = [m["name"] for m in sizes_meta]
 
+    # ── 1-a) 사이즈끼리 같은 조각에 같은 번호(data-order) — 노치 규칙 등록은 엔진이 이미 조각을 갈라 두므로 건너뛴다 ──
+    align_disabled: List[Dict[str, Any]] = []
+    if not notch and converted_map:
+        want_base = (base_size or "").strip().upper()
+        if want_base not in order:
+            want_base = "XL" if "XL" in order else order[len(order) // 2]
+        al = _align_size_pieces(converted_map, order, want_base, warnings)
+        align_disabled = al["disabled"]
+        if al["n"]:
+            piece_counts = {sz: al["n"] for sz in al["aligned"]}
+
     # 조각수 일관성 점검: 사이즈마다 조각수가 다르면 경고(자산 의심).
     distinct_pc = set(piece_counts.values())
     if len(distinct_pc) > 1:
@@ -2287,10 +2496,12 @@ async def create_pattern(
         warnings.append("🟡 조각 수를 확정하지 못해 3조각(앞/뒤/밴드)으로 가정했습니다.")
 
     # ── 1-b) 사이즈 단조성(자산결함) 검사 → disabled_sizes 산출 ───────────
-    disabled_sizes: List[Dict[str, Any]] = []
-    if len(converted_map) >= 2:
+    disabled_sizes: List[Dict[str, Any]] = list(align_disabled)
+    guard_map = {k: v for k, v in converted_map.items() if k not in {d["name"] for d in align_disabled}}
+    if len(guard_map) >= 2:
         try:
-            guard = check_size_monotonicity(converted_map, size_order=order)
+            # 0번 = 가장 큰 조각(앞판). 예전엔 대지 테두리가 0번이라 오판했는데, 이제 테두리는 조각에서 빠진다(2026-10-20).
+            guard = check_size_monotonicity(guard_map, size_order=order)
             for w in (guard.get("warnings") or []):
                 warnings.append(w)
             # 좌표 100% 동일한 쌍이 있으면, '둘 중 더 큰 사이즈'를 비활성한다
@@ -2382,6 +2593,12 @@ async def create_pattern(
     base = (base_size or "").strip().upper()
     if base not in order:
         base = "XL" if "XL" in order else order[len(order) // 2]  # XL→중앙값
+    active_names = [m["name"] for m in active_sizes]
+    if base not in active_names:
+        # 기준이 꺼지면 작업이 시작하자마자 멈췄다(하키티·슈팅셔츠 실측) → 살아 있는 가운데 사이즈로
+        nb = active_names[len(active_names) // 2]
+        warnings.append(f"🟡 기준 사이즈 {base} 가 비활성이라 기준을 {nb} 로 바꿨습니다.")
+        base = nb
 
     pieces = _build_pieces(piece_n, page_dims[0], page_dims[1], warnings)
     if notch:

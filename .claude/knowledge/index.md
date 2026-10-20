@@ -4,12 +4,13 @@
 | 파일 | 항목 수 | 최종 업데이트 |
 |------|--------|------------|
 | architecture.md | 9 | 2026-07-09 |
-| errors.md | 17 | 2026-09-22 |
+| errors.md | 18 | 2026-10-20 |
 | conventions.md | 5 | 2026-07-06 |
 | decisions.md | 22 | 2026-10-20 |
 | lessons.md | 2 | 2026-07-09 |
 
 ## 최근 추가된 지식 (최근 5건)
+- [2026-10-20] errors: 마스터 .ai 등록 오인식 — clipPath 테두리=조각0 → 복붙 오판·대지 밖 잘림·잘린 사본·사이즈별 조각 순서(이웃 짝짓기 data-order)·곡선 16분할
 - [2026-10-20] decisions: 패턴 의뢰 지우기=휴지통(deleted_at) — 직원 내 draft 만·되살리기/완전삭제 관리자, 칸 규칙은 트리거 trash_guard, 목록은 deleted_at 거르기 필수 + PWA(intake-sw 껍데기만)
 - [2026-10-20] decisions: 재단 패턴 «공장 보냄» 잠금 풀기 절차 — 창고 `{style}/v{n}/lock` 지우기(대시보드) + 디스크 lock.json 지우기, 하나만 지우면 복원 때 다시 잠김
 - [2026-09-22] decisions: 자동 정리 TTL — uploads 7일·jobs(`web_`만) 30일·24h daemon·realpath 방어·env 로 끄기/조정

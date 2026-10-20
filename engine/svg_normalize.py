@@ -37,7 +37,7 @@ Point = Tuple[float, float]
 # 숫자 토큰(부호·소수·지수 허용). parse_svg 의 _NUM 과 동형으로 맞춘다.
 _NUM = r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?"
 # d 속성 토큰화: 명령 글자(직선 + 곡선) 또는 숫자.
-_DTOK = re.compile(r"[MmLlHhVvZzCcQqSsAa]|" + _NUM)
+_DTOK = re.compile(r"[MmLlHhVvZzCcQqSsTtAa]|" + _NUM)
 _NUM_RE = re.compile(_NUM)
 _SVG_NS = "http://www.w3.org/2000/svg"
 
@@ -45,21 +45,22 @@ _SVG_NS = "http://www.w3.org/2000/svg"
 # ─────────────────────────────────────────────────────────────────────────────
 # 1) d 속성 파서 (직선 명령 전개)
 # ─────────────────────────────────────────────────────────────────────────────
-def _parse_path_d(d: str, *, flatten_curves: bool = False, samples: int = 16):
+def _parse_path_d(d: str, *, flatten_curves: bool = True, samples: int = 16):
     """SVG path 의 d 문자열을 직선 점열로 전개한다.
 
     지원 명령(현재 V넥 데이터에 존재하는 것):
       M/m 이동(시작), L/l 선, H/h 수평선, V/v 수직선, Z/z 닫기(시작점 복귀).
       절대(대문자)는 그대로, 상대(소문자)는 현재 좌표에 더한다.
 
-    곡선(C/Q/S/A): 현재 V넥 데이터엔 0개라 미사용. flatten_curves=True 면 끝점만
-      이어 직선 근사(거친 폴백)하고 has_curves=True 로 표시. False 면 끝점만 잇되
-      경고용으로 has_curves 만 올린다(1차는 직선 데이터만 정확 처리하는 게 목표).
+    곡선(C/S/Q/T): 베지어를 samples 등분한 직선으로 평탄화한다(2026-10-20).
+      예전엔 끝점만 이어 축구 소매 산에서 재단선이 최대 1.3mm 어긋났다(곡선 마스터 실측).
+      flatten_curves=False 면 그 옛 동작(끝점만)을 그대로 한다 — 비교·회귀 확인용.
+      호(A)는 드물어 끝점만 잇고 has_curves 로 알린다.
 
     반환: (points, closed, has_curves)
       points     : [(x, y), ...] viewBox 좌표(flip 하지 않음 — 핵심).
       closed     : Z 가 있었거나 시작점≈끝점이면 True.
-      has_curves : 곡선 명령을 만났으면 True(경고용).
+      has_curves : 끝점만 이은 곡선(호, 또는 flatten_curves=False 의 베지어)이 있으면 True(경고용).
     """
     toks = _DTOK.findall(d)
     pts: List[Point] = []
@@ -70,6 +71,23 @@ def _parse_path_d(d: str, *, flatten_curves: bool = False, samples: int = 16):
     n = len(toks)
     had_z = False
     has_curves = False
+    last_c = None     # 직전 C/S 의 두 번째 조절점(S 의 반사용)
+    last_q = None     # 직전 Q/T 의 조절점(T 의 반사용)
+
+    def _bezier(p0, p1, p2, p3=None):
+        """베지어(3차 또는 p3=None 이면 2차)를 samples 등분한 점들(시작점 제외)."""
+        out = []
+        for k in range(1, samples + 1):
+            t = k / samples
+            u = 1.0 - t
+            if p3 is None:
+                x = u * u * p0[0] + 2 * u * t * p1[0] + t * t * p2[0]
+                y = u * u * p0[1] + 2 * u * t * p1[1] + t * t * p2[1]
+            else:
+                x = u ** 3 * p0[0] + 3 * u * u * t * p1[0] + 3 * u * t * t * p2[0] + t ** 3 * p3[0]
+                y = u ** 3 * p0[1] + 3 * u * u * t * p1[1] + 3 * u * t * t * p2[1] + t ** 3 * p3[1]
+            out.append((x, y))
+        return out
 
     def _read(k: int) -> List[float]:
         """다음 k개 숫자 토큰을 읽어 float 로 반환(인덱스 i 전진)."""
@@ -87,6 +105,7 @@ def _parse_path_d(d: str, *, flatten_curves: bool = False, samples: int = 16):
                 # 닫기: 시작점으로 복귀(점을 또 찍지는 않음 — 시작점과 동일).
                 had_z = True
                 cx, cy = sx, sy
+                last_c = last_q = None
             continue
 
         # 명령 없이 숫자가 이어지면 직전 명령의 반복(SVG 규약).
@@ -117,13 +136,40 @@ def _parse_path_d(d: str, *, flatten_curves: bool = False, samples: int = 16):
                 y += cy
             cy = y
             pts.append((cx, cy))
-        elif cmd in "CcQqSsAa":
-            # 곡선 — 현재 데이터엔 없음. 파라미터 개수만큼 소비하고 끝점만 직선으로 잇는다.
+        elif cmd in "CcSsQqTt" and flatten_curves:
+            # 베지어 평탄화 — 상대 명령(소문자)은 모든 좌표에 현재점을 더한다.
+            params = {"C": 6, "S": 4, "Q": 4, "T": 2}[cmd.upper()]
+            vals = _read(params)
+            if cmd.islower():
+                vals = [v + (cx if j % 2 == 0 else cy) for j, v in enumerate(vals)]
+            p0 = (cx, cy)
+            up = cmd.upper()
+            if up == "C":
+                p1, p2, p3 = (vals[0], vals[1]), (vals[2], vals[3]), (vals[4], vals[5])
+                pts.extend(_bezier(p0, p1, p2, p3))
+                last_c, last_q = p2, None
+            elif up == "S":
+                p1 = (2 * cx - last_c[0], 2 * cy - last_c[1]) if last_c else p0
+                p2, p3 = (vals[0], vals[1]), (vals[2], vals[3])
+                pts.extend(_bezier(p0, p1, p2, p3))
+                last_c, last_q = p2, None
+            elif up == "Q":
+                q1, p3 = (vals[0], vals[1]), (vals[2], vals[3])
+                pts.extend(_bezier(p0, q1, p3))
+                last_q, last_c = q1, None
+            else:  # T
+                q1 = (2 * cx - last_q[0], 2 * cy - last_q[1]) if last_q else p0
+                p3 = (vals[0], vals[1])
+                pts.extend(_bezier(p0, q1, p3))
+                last_q, last_c = q1, None
+            cx, cy = p3
+            continue
+        elif cmd in "CcQqSsTtAa":
+            # 끝점만 잇는 폴백 — 호(A), 또는 flatten_curves=False(옛 동작 확인용) 의 베지어.
             has_curves = True
-            params = {"C": 6, "c": 6, "S": 4, "s": 4, "Q": 4, "q": 4,
+            params = {"C": 6, "c": 6, "S": 4, "s": 4, "Q": 4, "q": 4, "T": 2, "t": 2,
                       "A": 7, "a": 7}[cmd]
             vals = _read(params)
-            # 끝점(마지막 좌표쌍)만 사용 — 1차 폴백(정밀 평탄화는 후속 과제).
             ex, ey = vals[-2], vals[-1]
             if cmd.islower():
                 ex += cx; ey += cy
@@ -131,6 +177,8 @@ def _parse_path_d(d: str, *, flatten_curves: bool = False, samples: int = 16):
             pts.append((cx, cy))
         else:
             i += 1  # 알 수 없는 토큰은 건너뜀(방어)
+        last_c = last_c if cmd in "CcSs" else None   # S/T 반사는 바로 앞 명령이 같은 계열일 때만
+        last_q = last_q if cmd in "QqTt" else None
 
     # 닫힘 판정: Z 가 있었거나, 점이 충분하고 시작점≈끝점이면 닫힌 면적 조각.
     closed = had_z
@@ -219,8 +267,11 @@ def normalize_svg(in_path: str, out_path: str, *,
                   min_dim_ratio: float = 0.05,
                   min_area_ratio: float = 0.002,
                   dedup_tol_ratio: float = 0.01,
-                  flatten_curves: bool = False,
-                  samples: int = 16) -> dict:
+                  flatten_curves: bool = True,
+                  samples: int = 16,
+                  rel_area_ratio: float = 0.02,
+                  edge_cut_pt: float = 100.0,
+                  margin_pt: float = 50.0) -> dict:
     """path SVG 를 읽어 U넥형 polyline SVG 로 다시 쓴다(원자적 저장).
 
     매개변수
@@ -239,8 +290,14 @@ def normalize_svg(in_path: str, out_path: str, *,
       dedup_tol_ratio: 중복 조각 판정 허용오차(페이지 대비 비율). bbox 폭·높이·중심이 모두
                        이 안에서 같고 둘레·넓이까지 같으면 같은 조각으로 보고 1개만 남긴다
                        (위·아래 중복 제거). 크기만 비슷한 다른 조각(목·암홀 밴드)은 남는다.
-      flatten_curves : (인터페이스만) 곡선 평탄화 모드. 현재 V넥 곡선 0이라 미사용.
-      samples        : (인터페이스만) 곡선 평탄화 분할 수.
+      flatten_curves : 베지어를 samples 등분 직선으로 평탄화(기본 True). False 는 옛 «끝점만» 동작.
+      samples        : 곡선 하나를 나눌 직선 수.
+      rel_area_ratio : 면적 임계를 «가장 큰 조각 bbox 넓이 × 이 비율» 과 페이지 기준 중 작은 쪽으로(2026-10-20).
+                       대지가 크면(축구 5080mm) 페이지 기준만으로는 목 밴드(54mm 띠)가 보조선으로 버려졌다.
+      edge_cut_pt    : 대지 테두리 위에 곧게 누운 변의 합이 이 길이(pt, 100≈35mm) 이상인 조각은
+                       «대지에 잘린 조각»으로 보고 뺀다(하키티 소매·하의 XL 트임판 — 온전한 사본이 따로 있거나 자산 결함).
+      margin_pt      : 조각이 대지 밖으로 나가 있으면 전체를 이만큼 여백을 두고 대지 안으로 옮긴다
+                       (그레이더 출력 페이지는 좌하단 원점이라 음수 좌표 조각이 잘렸다 — 슈팅셔츠 M).
 
     반환(dict): {
       "in", "out", "viewBox", "pieces_written", "dropped_open", "dropped_small",
@@ -260,11 +317,32 @@ def normalize_svg(in_path: str, out_path: str, *,
     vb_str, vb_w, vb_h = _get_viewbox(root)
     page_dim = max(vb_w, vb_h) if max(vb_w, vb_h) > 0 else 1.0
 
+    vb_nums = [float(v) for v in _NUM_RE.findall(vb_str)[:4]]
+    vb_x, vb_y = (vb_nums[0], vb_nums[1]) if len(vb_nums) >= 2 else (0.0, 0.0)
+
+    # ── 자르개(클립)·정의 안의 path 는 «그림»이 아니다 — 건너뛴다(2026-10-20). ──
+    #    PyMuPDF 는 페이지 테두리를 <clipPath> 안 사각형으로 내보낸다. 이걸 조각으로 읽어
+    #    테두리가 사이즈마다 같은 좌표라 «복붙 결함» 오판 → 하키티·슈팅셔츠·축구·하의 사이즈가 꺼졌다.
+    _NON_DRAWING = ("clipPath", "mask", "defs", "pattern", "symbol", "marker")
+    parent = {c: p for p in root.iter() for c in p}
+
+    def _inside_non_drawing(e) -> bool:
+        while e in parent:
+            e = parent[e]
+            if _strip_ns(e.tag) in _NON_DRAWING:
+                return True
+        return False
+
     # ── 모든 <path> 를 순회하며 점열로 전개 + matrix 적용 ──
     candidates = []  # (pts(viewBox 좌표), bbox, closed)
+    stroked = {}     # id(pts) → 윤곽선(stroke)이 있는 요소인가 — 채움만 있는 «잘린 사본» 판정용
     any_curves = False
+    dropped_clip = 0
     for el in root.iter():
         if _strip_ns(el.tag) != "path":
+            continue
+        if _inside_non_drawing(el):
+            dropped_clip += 1
             continue
         d = el.get("d", "")
         if not d:
@@ -277,12 +355,16 @@ def normalize_svg(in_path: str, out_path: str, *,
             continue
         mat = _parse_matrix(el.get("transform", ""))
         pts = _apply_matrix(pts, mat)  # viewBox 좌표(flip 안 함)
+        stroke = (el.get("stroke") or "").strip().lower()
+        style = (el.get("style") or "").replace(" ", "").lower()
+        if "stroke:" in style:
+            stroke = style.split("stroke:", 1)[1].split(";", 1)[0]
+        stroked[id(pts)] = bool(stroke) and stroke != "none"
         candidates.append((pts, _bbox(pts), closed))
 
     if any_curves:
         warnings.append(
-            "🟡 곡선 명령(C/Q/S/A)을 만나 끝점만 직선 근사했습니다. 형태가 어긋날 수 있어 "
-            "확인이 필요합니다(현재 V넥 데이터엔 곡선이 없어야 정상).")
+            "🟡 곡선(호)을 끝점만 이어 직선으로 근사했습니다. 형태가 어긋날 수 있어 확인이 필요합니다.")
 
     # ── 보조선·작은 표식 필터 (이슈3에서 정정) ──
     #   [수정 이유] 종전 "한 축이라도 5%보다 작으면 버림"은 목 '밴드' 조각(폭 1380~1992,
@@ -293,6 +375,15 @@ def normalize_svg(in_path: str, out_path: str, *,
     #     으로 바꿔, 밴드는 보존하고 진짜 보조선만 제거한다.
     dim_thr = page_dim * min_dim_ratio          # 길이 임계(폭/높이)
     area_thr = (page_dim ** 2) * min_area_ratio  # 면적 임계(page_dim² 대비 비율)
+    # (2026-10-20) 대지가 아주 크면 페이지 기준 임계가 진짜 조각(목 밴드)을 버린다 →
+    #   «가장 큰 닫힌 조각» 기준과 견줘 작은 쪽을 쓴다. 보통 대지(V넥 4478pt)에선 면적 임계는 그대로고
+    #   길이 임계만 283→약 200pt 로 낮아지는데, 면적 임계가 남아 있어 결과는 같다(농구 마스터 4종 실측 0.0pt).
+    big = [(bb[2] - bb[0], bb[3] - bb[1]) for pts, bb, closed in candidates
+           if closed and len(pts) >= min_points]
+    if big:
+        bw, bh = max(big, key=lambda wh: wh[0] * wh[1])
+        dim_thr = min(dim_thr, max(bw, bh) * 0.1)
+        area_thr = min(area_thr, bw * bh * rel_area_ratio)
     dropped_open = 0
     dropped_small = 0
     kept = []  # (pts, bbox)
@@ -337,7 +428,7 @@ def normalize_svg(in_path: str, out_path: str, *,
         per = _perimeter(pts)
         area = _polygon_area(pts)
         is_dup = False
-        for _, ebb, eper, earea in deduped:
+        for e_pts, ebb, eper, earea in deduped:
             ex0, ey0, ex1, ey1 = ebb
             ew = ex1 - ex0
             eh = ey1 - ey0
@@ -349,11 +440,85 @@ def normalize_svg(in_path: str, out_path: str, *,
                     and abs(per - eper) <= max(2.0, 0.002 * eper)
                     and abs(area - earea) <= 0.005 * max(earea, 1e-9)):
                 is_dup = True
+                stroked[id(e_pts)] = stroked.get(id(e_pts), False) or stroked.get(id(pts), False)   # 채움+선 쌍이면 «선 있음»
                 break
         if is_dup:
             dropped_dup += 1
             continue
         deduped.append((pts, bb, per, area))
+
+    # ── 대지에 잘린 조각 빼기(2026-10-20) ──
+    #    대지 테두리 위에 곧게 누운 변이 길면 «대지에서 잘린» 모양이다. 하키티 소매는 온전한 윤곽과
+    #    대지에 잘린 흰 채움이 함께 들어 있어 두 번 잡혔고, 하의 XL 트임판은 잘린 모양만 있다(자산 결함).
+    def _edge_run(pts) -> float:
+        lines = ((0, vb_x), (0, vb_x + vb_w), (1, vb_y), (1, vb_y + vb_h))   # (축, 값)
+        run = 0.0
+        n = len(pts)
+        for k in range(n):
+            a, b = pts[k], pts[(k + 1) % n]
+            for ax, v in lines:
+                if abs(a[ax] - v) <= 0.5 and abs(b[ax] - v) <= 0.5:
+                    run += math.dist(a, b)
+                    break
+        return run
+
+    #    단, 대지를 그림에 딱 맞춘 파일은 «멀쩡한» 조각의 곧은 변도 경계 위에 놓인다 → 아래 둘 중 하나일 때만 뺀다.
+    #      ① 같은 자리에 더 큰 «온전한 사본»이 있다(하키티 소매)  ② 윤곽선 없이 채움만 있는 요소다(잘린 색 면 — 하의 XL 트임판)
+    #    둘 다 아니면 남기고 경고만 한다.
+    def _contains(big, small, tol=2.0):
+        return (big[0] - tol <= small[0] and big[1] - tol <= small[1]
+                and big[2] + tol >= small[2] and big[3] + tol >= small[3])
+
+    edge_cut = []
+    edge_kept = []
+    if edge_cut_pt and vb_w > 0 and vb_h > 0:
+        kept2 = []
+        for item in deduped:
+            if _edge_run(item[0]) < edge_cut_pt:
+                kept2.append(item)
+                continue
+            bx0, by0, bx1, by1 = item[1]
+            size_mm = [round((bx1 - bx0) * 25.4 / 72), round((by1 - by0) * 25.4 / 72)]
+            has_full = any(o is not item and _contains(o[1], item[1]) and o[3] > item[3] * 1.02 for o in deduped)
+            if has_full or not stroked.get(id(item[0]), False):
+                edge_cut.append(size_mm)
+            else:
+                edge_kept.append(size_mm)
+                kept2.append(item)
+        if edge_cut:
+            warnings.append(
+                f"🟡 대지 경계에 잘린 조각 {len(edge_cut)}개를 뺐습니다(폭×높이 mm {edge_cut}). "
+                "온전한 모양이 따로 없다면 원본 .ai 에서 대지를 넓혀 다시 저장해 주세요.")
+        if edge_kept:
+            warnings.append(
+                f"🟡 대지 경계에 붙은 조각 {len(edge_kept)}개(폭×높이 mm {edge_kept})는 윤곽선이 있어 남겼습니다 — "
+                "대지에서 잘린 것이면 원본 대지를 넓혀 다시 저장해 주세요.")
+        deduped = kept2
+
+    # ── 대지 밖 조각은 전체를 대지 안으로 옮긴다(2026-10-20) ──
+    #    그레이더 출력 페이지는 좌하단 원점 + «가장 먼 조각까지» 라, 음수 좌표 조각은 잘린다
+    #    (슈팅셔츠 M 뒤판 590mm 중 188mm 만 인쇄). 조각끼리의 상대 위치는 그대로 둔다.
+    shifted = None
+    if deduped:
+        ux0 = min(bb[0] for _, bb, _, _ in deduped)
+        uy0 = min(bb[1] for _, bb, _, _ in deduped)
+        ux1 = max(bb[2] for _, bb, _, _ in deduped)
+        uy1 = max(bb[3] for _, bb, _, _ in deduped)
+        # parse_svg 는 viewBox 원점을 무시하고 y 를 «높이 − y» 로 뒤집는다 → 그 기준(x≥0 · 0≤y≤높이)으로 본다
+        dx = (margin_pt - ux0) if ux0 < 0 else 0.0
+        dy = (margin_pt - uy0) if uy0 < 0 else 0.0
+        new_w = max(vb_w, ux1 + dx + (margin_pt if ux1 + dx > vb_w else 0.0))
+        new_h = max(vb_h, uy1 + dy + (margin_pt if uy1 + dy > vb_h else 0.0))
+        if dx or dy or new_w != vb_w or new_h != vb_h:
+            deduped = [([(x + dx, y + dy) for x, y in pts], (bb[0] + dx, bb[1] + dy, bb[2] + dx, bb[3] + dy), per, ar)
+                       for pts, bb, per, ar in deduped]
+            vb_w, vb_h = new_w, new_h
+            vb_str = f"0 0 {vb_w:g} {vb_h:g}"
+            shifted = [round(dx, 2), round(dy, 2)]
+            how = (f"전체를 {round(dx * 25.4 / 72)}·{round(dy * 25.4 / 72)}mm 옮기고 " if (dx or dy) else "")
+            warnings.append(
+                f"🟡 대지 밖에 놓인 조각이 있어 {how}대지를 {round(vb_w * 25.4 / 72)}×{round(vb_h * 25.4 / 72)}mm 로 넓혔습니다"
+                "(조각끼리의 위치는 그대로).")
 
     # ── 출력 SVG 작성: U넥 과 동일 골격(viewBox 그대로, polyline class="st0"). ──
     #    조각 순서는 입력 path 순서 유지(parse_svg 가 어차피 높이 내림차순 재정렬한다).
@@ -403,6 +568,9 @@ def normalize_svg(in_path: str, out_path: str, *,
         "dropped_open": dropped_open,
         "dropped_small": dropped_small,
         "dropped_dup": dropped_dup,
+        "dropped_clip": dropped_clip,
+        "dropped_edge_cut": edge_cut,
+        "shifted": shifted,
         "has_curves": any_curves,
         "bboxes": bboxes,
         "warnings": warnings,
@@ -441,7 +609,7 @@ def _piece_coord_hash(points: List[Point], *, ndigits: int = 2) -> str:
 
 def check_size_monotonicity(svg_paths, *,
                             size_order=None,
-                            piece_index: int = 0,
+                            piece_index=0,
                             fail_on_duplicate: bool = True):
     """여러 사이즈 SVG 의 조각 좌표를 비교해 '사이즈 단조성'을 점검한다.
 
@@ -458,7 +626,8 @@ def check_size_monotonicity(svg_paths, *,
                          리스트면 파일명(확장자 제외)을 사이즈명으로 쓴다.
       size_order       : 작은→큰 사이즈 이름 순서 리스트(예: ["5XS",...,"5XL"]).
                          None 이면 단조(높이) 검사는 건너뛰고 좌표 동일 검사만 한다.
-      piece_index      : 비교 기준 조각 인덱스(parse_svg 높이 내림차순). 0=가장 큰 조각(앞판).
+      piece_index      : 비교 기준 조각 인덱스(parse_svg 순서). 0=가장 큰 조각(앞판).
+                         None 이면 «모든 조각»을 함께 비교(등록 화면은 이것을 쓴다).
       fail_on_duplicate: True 면 좌표 동일 발견 시 passed=False(출고 차단용).
 
     반환(dict): {
@@ -501,15 +670,22 @@ def check_size_monotonicity(svg_paths, *,
             missing.append(size_name)
             warnings.append(f"🟡 [{size_name}] parse_svg 실패(가드 건너뜀): {e}")
             continue
-        if not polys or piece_index >= len(polys):
+        if not polys or (piece_index is not None and piece_index >= len(polys)):
             missing.append(size_name)
             warnings.append(
                 f"🟡 [{size_name}] 조각 {piece_index} 없음(조각수 {len(polys)}) — 가드 건너뜀.")
+            continue
+        if piece_index is None:
+            # (2026-10-20) 모든 조각을 함께 본다 — 한 조각(예전엔 0번 = 대지 테두리)만 같아도
+            #   «복붙»으로 오판해 멀쩡한 사이즈를 껐다. 조각 전부가 같아야 진짜 복붙이다.
+            hashes[size_name] = "|".join(_piece_coord_hash(p.points) for p in polys)
+            heights[size_name] = round(polys[0].height, 2)
             continue
         poly = polys[piece_index]
         hashes[size_name] = _piece_coord_hash(poly.points)
         heights[size_name] = round(poly.height, 2)
 
+    lab = "조각 전부" if piece_index is None else f"조각{piece_index}"
     # ── (A) 좌표 동일(=같은 자산 복붙) 검출: 서로 다른 사이즈인데 해시가 같으면 결함 ──
     duplicates: List[Tuple[str, str]] = []
     items = list(hashes.items())
@@ -520,7 +696,7 @@ def check_size_monotonicity(svg_paths, *,
             if ha == hb:
                 duplicates.append((na, nb))
                 warnings.append(
-                    f"🔴 [{na}] 와(과) [{nb}] 의 조각{piece_index} 좌표가 100% 동일합니다 "
+                    f"🔴 [{na}] 와(과) [{nb}] 의 {lab} 좌표가 100% 동일합니다 "
                     f"(해시 {ha}). 같은 자산을 복붙한 결함 의심 — 사이즈가 다른데 도형이 "
                     f"같으면 한쪽 사이즈로 오출고됩니다. 원본 .ai 재확보 후 재변환 필요.")
 
@@ -539,14 +715,14 @@ def check_size_monotonicity(svg_paths, *,
                         "size": sz, "prev": prev_name,
                         "height": h, "prev_height": prev_h, "kind": "감소"})
                     warnings.append(
-                        f"🟡 [{sz}] 조각{piece_index} 높이({h})가 더 작은 사이즈 "
+                        f"🟡 [{sz}] {lab} 높이({h})가 더 작은 사이즈 "
                         f"[{prev_name}]({prev_h})보다 작습니다(단조 감소). 자산 순서 확인 필요.")
                 elif abs(h - prev_h) <= 1e-6:
                     non_monotonic.append({
                         "size": sz, "prev": prev_name,
                         "height": h, "prev_height": prev_h, "kind": "동일"})
                     warnings.append(
-                        f"🟡 [{sz}] 조각{piece_index} 높이({h})가 인접 사이즈 "
+                        f"🟡 [{sz}] {lab} 높이({h})가 인접 사이즈 "
                         f"[{prev_name}]와 동일합니다 — 사이즈 구분이 없습니다(자산 의심).")
             prev_name = sz
             prev_h = h

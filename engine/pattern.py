@@ -71,6 +71,7 @@ def parse_svg(path: str, flip_y: bool = True) -> List[Polyline]:
     _, _, _, vb_h = _viewbox(root)
 
     polylines: List[Polyline] = []
+    orders: List[object] = []
     for tag in ("polyline", "polygon"):
         for el in root.iter(f"{_SVG_NS}{tag}"):
             pts = _parse_points_attr(el.get("points", ""))
@@ -79,7 +80,13 @@ def parse_svg(path: str, flip_y: bool = True) -> List[Polyline]:
             if flip_y and vb_h:
                 pts = [(x, vb_h - y) for (x, y) in pts]
             polylines.append(Polyline(points=pts))
+            orders.append(el.get("data-order"))
 
+    # 등록 때 «사이즈끼리 같은 조각 = 같은 번호» 로 맞춰 둔 SVG 는 data-order 를 따른다(2026-10-20).
+    #   높이순은 사이즈마다 조각 구성이 다르거나 높이가 비슷하면 뒤바뀌었다(하의: S·L 0번=테두리, M 0번=작은 조각).
+    #   data-order 가 하나라도 없으면 예전 그대로 높이 내림차순.
+    if polylines and all(o is not None and str(o).isdigit() for o in orders):
+        return [pl for _, pl in sorted(zip((int(o) for o in orders), polylines), key=lambda t: t[0])]
     polylines.sort(key=lambda pl: pl.height, reverse=True)
     return polylines
 
