@@ -43,6 +43,9 @@ class Piece:
     name: str = ""
     extra_ops: str = ""
     bg_cmyk: Optional[Sequence[float]] = None
+    # (2026-10-20) 디자인 위에 덮어 찍을 작은 PDF(사이즈 택 등): [(pdf 경로, 디자인 좌표 행렬)].
+    #   기본 빈 목록 → 기존과 완전 동일. 조각 transform 과 함께 적용돼 디자인과 같이 움직인다.
+    overlays: List[tuple] = field(default_factory=list)
 
 
 @dataclass
@@ -72,6 +75,7 @@ def compose(design_pdf: str, layouts: Sequence[SizeLayout], out_path: str,
         xobj = out.copy_foreign(src.pages[design_page].as_form_xobject())
 
         placements = 0
+        overlay_forms = {}   # (2026-10-20) 덮어 찍을 PDF 경로 → 이 출력 문서에 복사한 Form (같은 것은 한 번만)
         for layout in layouts:
             page = out.add_blank_page(page_size=layout.page_size)
             # 같은 Form 객체를 이 페이지 리소스에 등록(이름 부여). 객체는 공유된다.
@@ -81,6 +85,18 @@ def compose(design_pdf: str, layouts: Sequence[SizeLayout], out_path: str,
                 blocks.append(place_block(piece.outline, piece.transform, str(name),
                                           bg_cmyk=piece.bg_cmyk))
                 placements += 1
+                # (2026-10-20) 사이즈 택 등 덮어 찍기 — 조각 transform → 덮개 행렬 순으로 감싸 Form 을 그린다.
+                #   Do 를 하나 더 쓰므로 placements 에도 센다(verify 의 «배치 횟수 일치» = Do 개수).
+                for ov_path, ov_m in (getattr(piece, "overlays", None) or []):
+                    if ov_path not in overlay_forms:
+                        with pikepdf.open(ov_path) as ov_src:
+                            overlay_forms[ov_path] = out.copy_foreign(ov_src.pages[0].as_form_xobject())
+                    ov_name = page.add_resource(overlay_forms[ov_path], pikepdf.Name("/XObject"))
+                    a, b, c, d, e, f = piece.transform
+                    a2, b2, c2, d2, e2, f2 = ov_m
+                    blocks.append(f"q {a:.6f} {b:.6f} {c:.6f} {d:.6f} {e:.4f} {f:.4f} cm "
+                                  f"{a2:.6f} {b2:.6f} {c2:.6f} {d2:.6f} {e2:.4f} {f2:.4f} cm {ov_name} Do Q")
+                    placements += 1
                 # 디자인 배치(q…Do…Q) 뒤에 추가 벡터(글자 등)를 얹는다 — 디자인 위에 그려짐.
                 # extra_ops 는 Do 를 쓰지 않으므로 placements(=Do 개수)는 변하지 않는다.
                 if piece.extra_ops:

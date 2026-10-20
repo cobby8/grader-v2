@@ -1182,6 +1182,39 @@ def run_job(preset: str,
         eps_rel = os.path.relpath(eps_out, out_dir).replace("\\", "/")
         return eps_rel, checks_eps
 
+    # ── (2026-10-20) 사이즈 택: 디자인 속 기준 사이즈 택을 한 번 찾아 두고, 사이즈마다 그 사이즈 택을 덮어 찍는다 ──
+    #    preset.size_tag.enabled=false 면 끈다. 못 찾으면(점수 낮음·라이브러리 없음) 아무것도 안 한다(예전 그대로).
+    tag_hits = []   # [(조각 번호, hit)]
+    if (preset_dict.get("size_tag") or {}).get("enabled", True):
+        try:
+            from .size_tag import find_tags, overlay_for, load_library
+            _tag_lib = load_library()
+            _base_sz = (preset_dict.get("design") or {}).get("base_size") or ""
+            for h in find_tags(base_design, _base_sz, _tag_lib):
+                cx = (h["rect_pt"][0] + h["rect_pt"][2]) / 2
+                cy = (h["rect_pt"][1] + h["rect_pt"][3]) / 2
+                for pi, pdef in enumerate(preset_dict["pieces"]):
+                    rx0, ry0, rx1, ry1 = pdef["design_region_pt"]
+                    if rx0 <= cx <= rx1 and ry0 <= cy <= ry1:
+                        tag_hits.append((pi, h))
+                        break
+            if tag_hits:
+                warnings.append("[택] 기준 사이즈 택 " + ", ".join(
+                    f"{preset_dict['pieces'][pi].get('name') or preset_dict['pieces'][pi].get('id')}({h['family']} {h['size']}, 일치 {h['score']})"
+                    for pi, h in tag_hits) + " — 사이즈마다 그 사이즈 택으로 바꿔 찍습니다.")
+        except Exception as e:
+            warnings.append(f"🟡 [택] 사이즈 택 찾기를 건너뜀: {e}")
+
+    def _apply_size_tags(layout, size: str, row_warns: list) -> None:
+        for pi, h in tag_hits:
+            if size == h["size"] or pi >= len(layout.pieces):
+                continue          # 기준 사이즈는 디자인 택이 이미 맞다
+            ov = overlay_for(h, size, _tag_lib)
+            if ov is None:
+                row_warns.append(f"🟡 [택] {h['family']} 계열에 «{size}» 택이 없어 기준({h['size']}) 택이 그대로 찍힙니다.")
+                continue
+            layout.pieces[pi].overlays.append(ov)
+
     # single 모드에서 누적할 (layout, meta) 목록.
     single_layouts: list = []
     single_meta: list = []
@@ -1236,6 +1269,8 @@ def run_job(preset: str,
             skipped.append({"row": idx, "name": name,
                             "reason": f"레이아웃 생성 실패: {e}"})
             continue
+        if tag_hits:
+            _apply_size_tags(layout, size, row_warns)
 
         # 글리프 누락 등 행 경고는 선수 식별과 함께 전체 warnings 에 누적(사람 검수용).
         for w in row_warns:

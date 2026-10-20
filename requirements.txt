@@ -13,6 +13,9 @@ shapely==2.0.6
 ezdxf==1.3.5
 # shapely 가 쓰는 배열 계산 — 판을 고정(로컬 시험과 같은 2.4.6. 풀어 두면 빌드 날마다 다른 판이 깔린다)
 numpy==2.4.6
+# 사이즈 택 바꾸기(engine/size_tag.py): 디자인 속 기준 택 자리를 그림 맞추기로 찾는다. 화면 없는 판(headless).
+#   없으면 택 찾기만 조용히 꺼진다(예전 동작). 판은 로컬 시험과 같게 고정.
+opencv-python-headless==5.0.0.93
 # 마커(F10 4단계) 미리보기 PNG — marker.py export_png 가 쓴다. pikepdf 가 이미 끌어오는 것을 판만 고정(로컬 시험과 같은 12.2.0)
 Pillow==12.2.0
 
