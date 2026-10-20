@@ -35,7 +35,8 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEST = os.path.join(ROOT, "vendor", "pattern_engine")
 DEFAULT_SRC = os.environ.get("STIZSHOP_ENGINE_DIR") or os.path.join(os.path.dirname(ROOT), "stizshop", "tools", "pattern-engine")
-ROOTS = ["service.py", "gas_warmup_build.py", "gas_warmup_grade.py"]    # 창구 + 창구가 runpy 로 돌리는 스크립트(import 로는 안 잡힌다)
+ROOTS = ["service.py", "gas_warmup_build.py", "gas_warmup_grade.py",   # 창구 + 창구가 runpy 로 돌리는 스크립트(import 로는 안 잡힌다)
+         "preset_export.py"]    # 노치 일꾼(webapp/notch_child.py)이 쓰는 입구 — notch_rules·illustrator·notching 이 import 로 따라온다(2026-10-20)
 EXTRA = ["requirements.txt"]
 FIXTURES = ["fixtures/gas-warmup-2026/gas_top_2xl.ai", "fixtures/gas-warmup-2026/gas_bottom_2xl.ai",
             "fixtures/gas-warmup-2026/std_warmup_top.ai", "fixtures/gas-warmup-2026/std_warmup_pants.ai"]

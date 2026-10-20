@@ -298,6 +298,19 @@
             <label class="field__label" for="pname">패턴 이름</label>
             <input class="input" id="pname" value="농구 U넥 양면" placeholder="예: 농구 U넥 양면" />
           </div>
+          <div class="field">
+            <label class="field__label" for="notchRule">노치 넣기</label>
+            <select class="input" id="notchRule">
+              <option value="">넣지 않음 (원본 그대로)</option>
+              <option value="jersey">긴팔 슈팅저지 — 래글런 앞 1·뒤 2 + 목 가운데</option>
+              <option value="pants|one_piece">농구 하의 — 한 장짜리 (좌우 2장)</option>
+              <option value="pants|split_front,split_back">농구 하의 — 옆선 있는 판 (앞 2 + 뒤 2)</option>
+              <option value="pants|one_piece_slit">농구 하의 — 한 장짜리 + 밑단 트임 (좌우 2장)</option>
+              <option value="pants|one_piece|slim">농구 하의 슬림 — 한 장짜리 (좌우 2장)</option>
+            </select>
+            <input class="input" id="notchSide" placeholder='(하의만·선택) 옆선 자리 지정 {"XL":[허리mm,밑단mm]}' style="margin-top:6px; display:none;" />
+            <div class="muted" style="font:var(--text-caption); margin-top:4px;">고르면 재단선에 노치(안쪽 5mm 일자 홈)가 들어가고, 좌우 두 장 조각은 거울로 한 장 더 만듭니다. 원본에 노치가 이미 있으면 그대로 씁니다.</div>
+          </div>
           <div>
             <div class="field__label" style="margin-bottom:8px;">사이즈별 패턴 파일</div>
             <div class="wrap-2" id="sizeChips"></div>
@@ -622,6 +635,18 @@ function pickFile(accept, onPick) {
   inp.click();
 }
 
+// 노치 고르기: 하의면 «옆선 자리 지정» 칸을 보이고, 슬림은 원천 DXF(하의 슬림 패턴.dxf) 값으로 채운다
+//   (슬림 XL 원본엔 CAD 옆선이 없고 5XL 은 0.6mm 어긋나 있다 — 2026-10-20 확인. 다른 사이즈는 원본 CAD 옆선을 읽는다)
+const SLIM_SIDE = '{"XL":[283.5,307.8],"5XL":[323.5,339.8]}';
+document.addEventListener("change", (e) => {
+  if (!e.target || e.target.id !== "notchRule") return;
+  const v = e.target.value || "", side = $("#notchSide");
+  if (!side) return;
+  side.style.display = v.startsWith("pants") ? "" : "none";
+  if (v.endsWith("|slim")) side.value = SLIM_SIDE;
+  else if (side.value === SLIM_SIDE) side.value = "";
+});
+
 // ---- list grid (서버 패턴으로 렌더) ----
 function renderPatternGrid() {
   const grid = $("#patternGrid");
@@ -653,7 +678,7 @@ function renderPatternGrid() {
   <div class="card card--interactive" data-pattern="${p.id}" style="padding:0;">
     <div style="aspect-ratio:16/10; background:var(--surface-sunken); display:flex; align-items:center; justify-content:center; border-bottom:1px solid var(--border-subtle); position:relative;">
       <span class="material-symbols-outlined" style="font-size:40px; color:var(--ink-300);">${p.icon}</span>
-      <span style="position:absolute; top:10px; right:10px; display:flex; gap:4px;">${p.glyph_source ? '<span class="badge badge--info badge--sm">글리프셋</span>' : ""}<span class="badge badge--neutral badge--sm tnum">${p.pieces}조각</span></span>
+      <span style="position:absolute; top:10px; right:10px; display:flex; gap:4px;">${p.glyph_source ? '<span class="badge badge--info badge--sm">글리프셋</span>' : ""}${p.notch_rule ? '<span class="badge badge--info badge--sm">노치</span>' : ""}<span class="badge badge--neutral badge--sm tnum">${p.pieces}조각</span></span>
     </div>
     <div style="padding:14px;">
       <div class="row-between" style="align-items:flex-start;">
@@ -663,6 +688,8 @@ function renderPatternGrid() {
         </div>
         <div class="row" style="gap:2px;">
           <!-- 수정: 아직 기능이 없어 disabled + '준비 중'. 삭제: 관리자만(pmDecorateCard 가 권한에 따라 켜고 끈다. 기본은 꺼짐). -->
+          <!-- 공장용 재단 패턴 DXF(사이즈마다 한 장 · zip) — 노치가 있으면 노치까지(레이어 4) -->
+          <button class="icon-btn icon-btn--sm" aria-label="재단 패턴 DXF" data-act="dxf" title="공장용 재단 패턴 DXF 받기${p.notch_rule ? " (노치 포함)" : ""}"><span class="material-symbols-outlined">content_cut</span></button>
           <button class="icon-btn icon-btn--sm" aria-label="수정" data-act="edit" disabled title="준비 중"><span class="material-symbols-outlined">edit</span></button>
           <button class="icon-btn icon-btn--sm icon-btn--danger" aria-label="삭제" data-act="delete" data-name="${driveEsc(p.name)}" disabled title="관리자만 삭제할 수 있어요"><span class="material-symbols-outlined">delete</span></button>
         </div>
@@ -683,11 +710,29 @@ function renderPatternGrid() {
   grid.querySelectorAll(".icon-btn").forEach((btn) => {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
+      if (btn.dataset.act === "dxf") { const c = btn.closest("[data-pattern]"); if (c) downloadCutDxf(c.dataset.pattern, btn); return; }
       if (btn.dataset.act !== "delete" || btn.disabled) return;
       const card = btn.closest("[data-pattern]");
       if (card) deletePattern(card.dataset.pattern, btn.dataset.name || card.dataset.pattern, btn);
     });
   });
+}
+
+// ── 공장용 재단 패턴 DXF 받기 — GET /api/patterns/{id}/cut-dxf (zip) ─────────────────────
+//   apiFetch 로 받아(로그인 토큰 동봉) 파일로 내려준다. 노치가 있는 패턴은 레이어 4 에 노치 점이 들어 있다.
+function downloadCutDxf(id, btn) {
+  if (btn) btn.disabled = true;
+  toast("info", "content_cut", "재단 패턴 DXF 만드는 중", "사이즈마다 한 장씩 묶는 중입니다…");
+  apiFetch(`/api/patterns/${encodeURIComponent(id)}/cut-dxf`)
+    .then((r) => { if (!r.ok) throw new Error(`서버 응답 ${r.status}`); return r.blob(); })
+    .then((b) => {
+      const a = document.createElement("a"); a.href = URL.createObjectURL(b);
+      a.download = `${id}_재단패턴_DXF.zip`; document.body.appendChild(a); a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+      toast("ok", "check_circle", "재단 패턴 DXF 받음", `${id} — 사이즈마다 한 장`);
+    })
+    .catch((e) => toast("error", "error", "DXF 받기 실패", String(e.message || e)))
+    .finally(() => { if (btn) btn.disabled = false; });
 }
 
 // ── 패턴 삭제(TOP7 #3) ────────────────────────────────────────────────────────
@@ -795,7 +840,7 @@ loadPatternList();
 // ---- size chips (실제 파일 선택과 연결) ----
 //   각 칩을 클릭하면 그 사이즈의 패턴 파일(.ai/.svg)을 고른다. 고른 사이즈는
 //   초록 체크로 표시한다. REG.sizeFiles 에 사이즈→File 로 저장한다.
-const SIZES = ["5XS","4XS","3XS","2XS","XS","S","M","L","XL","2XL","3XL","4XL","5XL"];
+const SIZES = ["5XS","4XS","3XS","2XS","XS","S","M","L","XL","2XL","3XL","4XL","5XL","6XL","7XL"];   // 6XL·7XL — 농구 하의 한 장짜리(2026-10-20)
 function renderSizeChips() {
   $("#sizeChips").innerHTML = SIZES.map((s) => {
     const done = !!REG.sizeFiles[s];   // 이 사이즈 파일을 골랐는가
@@ -1365,6 +1410,15 @@ function savePattern() {
   // B·C 편집기에서 손댄 위치만 layout 으로 동봉(없으면 필드 자체를 안 보내 = 서버 100% 기존 동작).
   const layout = buildLayoutPayload();
   if (layout) fd.append("layout", JSON.stringify(layout));
+  // 노치(선택) — 고르지 않으면 필드 자체를 안 보낸다(서버 100% 기존 동작)
+  const nv = ($("#notchRule") && $("#notchRule").value) || "";
+  if (nv) {
+    const [rule, sel] = nv.split("|");
+    fd.append("notch_rule", rule);
+    if (sel) fd.append("notch_select", sel);
+    const side = (($("#notchSide") && $("#notchSide").value) || "").trim();
+    if (side) fd.append("notch_side", side);
+  }
 
   saving = true;
   const btn = $("#regNext");

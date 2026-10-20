@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -19,8 +20,8 @@ import traceback
 import zipfile
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, UploadFile, File, Body, Form, Depends, Request
-from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
+from fastapi import APIRouter, UploadFile, File, Body, Form, Depends, Request, HTTPException
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse, Response
 
 from . import state
 from . import gdrive  # Google Drive 연동(서비스계정 읽기전용). 미설정이면 이 기능만 비활성.
@@ -169,6 +170,7 @@ def _scan_one_pattern(folder: str) -> Dict[str, Any] | None:
         "glyph_source": glyph_source,
         "has_number_area": has_number_area,
         "disabled_sizes": disabled_sizes,
+        "notch_rule": (preset.get("notches") or {}).get("rule"),   # 노치 규칙(없으면 None) — 카드에 «노치» 표시
     }
 
 
@@ -1640,7 +1642,7 @@ def job_zip(job_id: str, format: str = "pdf"):
 
 # ── 사이즈 정렬 순서(작은→큰). 단조성(높이 증가) 검사와 화면 표기에 쓴다. ──
 _SIZE_ORDER = ["5XS", "4XS", "3XS", "2XS", "XS", "S", "M", "L", "XL",
-               "2XL", "3XL", "4XL", "5XL"]
+               "2XL", "3XL", "4XL", "5XL", "6XL", "7XL"]   # 6XL·7XL — 농구 하의 한 장짜리(2026-10-20, 정렬만 — 기존 패턴 무관)
 
 # ai_to_path_svg.py 를 한 번만 동적 로드해 캐시한다(scripts/ 는 패키지가 아니라서
 # import 가 안 되므로 파일 경로로 모듈을 직접 읽어 함수만 빌려 쓴다 — engine 무관).
@@ -1972,6 +1974,164 @@ def _extract_bearer_token(request: Optional[Request]) -> Optional[str]:
     return token or None
 
 
+# ── 노치(선택 기능, 2026-10-20 사장님: «주문 PDF 재단선과 공장용 재단 패턴(DXF) 둘 다 넣어줘») ─────────────
+#   엔진 사본(vendor/pattern_engine)의 notch_rules·preset_export 를 쓴다(stizshop tools/pattern-engine 이 정본).
+#   · 등록: 노치 규칙을 고르면 엔진이 .ai/.svg 를 읽어 <사이즈>.svg(깨끗한 외곽선 — 합성·클립용)와
+#           <사이즈>.notched.svg(노치 든 재단선 — 주문 PDF 빨간 선용)를 쓰고, 노치 자리를 preset.notches 에 남긴다.
+#           곡선은 엔진이 16토막으로 편다(normalize_svg 는 곡선 끝점만 이어 모양이 어긋난다).
+#   · 좌우 두 장 조각(소매·작은 조각·하의 다리)은 거울로 한 장 더 만든다(notch_rules.quantity).
+#   · 노치 규칙이 없는 등록·기존 프리셋은 한 줄도 바뀌지 않는다.
+NOTCHED_SUFFIX = ".notched.svg"
+NOTCH_RULES = ("jersey", "pants")
+NOTCH_KIND_KO = {"front": "앞판", "back": "뒤판", "sleeve": "소매", "neck": "목 띠", "part": "작은 조각",
+                 "split_front": "앞판(옆선 판)", "split_back": "뒤판(옆선 판)", "one_piece": "한 장짜리", "one_piece_slit": "한 장짜리(트임)"}
+
+
+def _notch_engine_dir() -> str:
+    return os.environ.get("GRADER_PATTERN_ENGINE_DIR") or os.path.join(state.PROJECT_ROOT, "vendor", "pattern_engine")
+
+
+def _notch_child(req: Dict[str, Any], timeout: int = 300) -> Dict[str, Any]:
+    """엔진 일꾼(webapp/notch_child.py)을 별도 프로세스로 돌린다 — 웹 프로세스에 엔진(fitz·shapely·ezdxf)을 올리지 않게
+    (cad.py 일꾼과 같은 생각, 2026-10-20 리뷰). 결과는 임시 JSON 파일로 받는다(엔진 경고가 표준출력을 더럽혀도 안전)."""
+    import subprocess
+    eng = _notch_engine_dir()
+    for f in ("notch_rules.py", "preset_export.py"):
+        if not os.path.isfile(os.path.join(eng, f)):
+            raise HTTPException(status_code=503, detail=f"서버 패턴 엔진 사본에 노치 기능이 없습니다(vendor/pattern_engine/{f}). 관리자에게 알려 주세요.")
+    with tempfile.TemporaryDirectory(prefix="notch_") as td:
+        rq, rs = os.path.join(td, "req.json"), os.path.join(td, "res.json")
+        with open(rq, "w", encoding="utf-8") as f:
+            json.dump(dict(req, engine_dir=eng, result=rs), f, ensure_ascii=False)
+        p = subprocess.run([sys.executable, "-m", "webapp.notch_child", rq], cwd=state.PROJECT_ROOT,
+                           capture_output=True, timeout=timeout)
+        if not os.path.isfile(rs):
+            tail = (p.stderr or b"").decode("utf-8", "replace")[-400:]
+            raise RuntimeError(f"노치 일꾼이 결과 없이 끝났습니다(코드 {p.returncode}) {tail}")
+        with open(rs, encoding="utf-8") as f:
+            out = json.load(f)
+    if not out.get("ok"):
+        raise RuntimeError(out.get("error") or "노치 일꾼 오류")
+    return out
+
+
+def _notch_options(rule: Optional[str], select: Optional[str], side: Optional[str], warnings: List[str]) -> Optional[Dict[str, Any]]:
+    """등록 폼의 노치 칸 → {rule, select, side} 또는 None(노치 안 씀 = 기존 동작)
+    ⚠️ 드라이브 등록처럼 함수로 직접 부르면 빠진 칸이 FastAPI Form 객체로 들어온다 → 문자열이 아니면 «없음»으로 본다"""
+    rule = rule.strip().lower() if isinstance(rule, str) else ""
+    select = select if isinstance(select, str) else ""
+    side = side if isinstance(side, str) else ""
+    if not rule:
+        return None
+    if rule not in NOTCH_RULES:
+        raise HTTPException(status_code=400, detail=f"모르는 노치 규칙: {rule} (가능: {', '.join(NOTCH_RULES)})")
+    sel = [s.strip() for s in select.split(",") if s.strip()] or None
+    side_map: Dict[str, List[float]] = {}
+    if side.strip():
+        try:
+            side_map = {str(k).upper(): [float(v[0]), float(v[1])] for k, v in json.loads(side).items()}
+        except Exception:
+            raise HTTPException(status_code=400, detail='노치 옆선 지정은 {"XL":[허리mm,밑단mm]} 모양의 JSON 이어야 합니다.')
+    warnings.append(f"✂️ 노치 규칙 {rule}" + (f" · 조각 {', '.join(sel)}" if sel else "") + (f" · 옆선 지정 {side_map}" if side_map else ""))
+    return {"rule": rule, "select": sel, "side": side_map}
+
+
+def _notch_convert(notch: Dict[str, Any], saved: str, ext: str, size_name: str, out_svg: str, notch_meta: Dict[str, Any]) -> Dict[str, Any]:
+    """한 사이즈: 엔진 일꾼으로 조각·노치 계산 → <사이즈>.svg + <사이즈>.notched.svg. 반환은 normalize_svg 와 같은 꼴(pieces_written·warnings·viewBox)"""
+    if ext not in (".ai", ".pdf", ".svg"):
+        raise ValueError(f"노치 규칙은 .ai/.pdf/.svg 만 읽습니다(받은 것: {ext})")
+    out = _notch_child({"op": "convert", "src": saved, "rule": notch["rule"], "side": notch["side"].get(size_name),
+                        "select": notch["select"], "out_svg": out_svg,
+                        "notched_svg": os.path.splitext(out_svg)[0] + NOTCHED_SUFFIX})
+    meta = out["meta"]; notch_meta[size_name] = meta
+    warns = []
+    if meta["existing"]:
+        warns.append(f"원본에 노치 {meta['existing']}개가 이미 있어 새로 넣지 않고 그대로 옮겼습니다")
+    if out.get("clipped"):
+        warns.append(f"🟡 대지에 잘린 조각 {out['clipped']}개는 건너뛰었습니다 — 온전한 파일로 다시 올려 주세요")
+    return {"pieces_written": out["pieces_written"], "viewBox": out["viewBox"], "warnings": warns}
+
+
+def _svg_file_order(path: str) -> List[int]:
+    """parse_svg 가 돌려주는 조각 순서(높이 내림차순) → 파일 속 polyline 번호. parse_svg 결과를 점으로 맞춰 찾는다
+    (높이를 따로 다시 재면 소수점 끝자리 차이로 같은 높이 짝의 순서가 갈렸다 — 2026-10-20 리뷰)"""
+    import xml.etree.ElementTree as _ET
+    from engine.pattern import parse_svg  # noqa: E402
+    root = _ET.parse(path).getroot()
+    vb = [float(x) for x in (root.get("viewBox") or "0 0 0 0").replace(",", " ").split()]
+    raw = []
+    for el in root.iter():
+        if el.tag.split("}")[-1] == "polyline":
+            v = [float(x) for x in el.get("points", "").replace(",", " ").split()]
+            raw.append([(v[i], (vb[3] - v[i + 1]) if vb[3] else v[i + 1]) for i in range(0, len(v) - 1, 2)])
+    order, used = [], set()
+    for poly in parse_svg(path):
+        hit = next((i for i, R in enumerate(raw) if i not in used and len(R) == len(poly.points)
+                    and all(abs(a[0] - b[0]) < 1e-3 and abs(a[1] - b[1]) < 1e-3 for a, b in zip(R, poly.points))), None)
+        if hit is None:
+            return []
+        used.add(hit); order.append(hit)
+    return order
+
+
+def _notch_name_pieces(pieces: List[Dict[str, Any]], notch_meta: Dict[str, Any], converted_map: Dict[str, str], warnings: List[str]) -> None:
+    """pieces(높이 내림차순 svg_index) 의 id·이름을 노치 규칙 판정(앞판·뒤판·소매…)대로.
+    사이즈마다 «같은 자리에 같은 종류·거울» 인지 확인하고, 다르면 경고(디자인이 다른 조각에 얹힐 수 있다)."""
+    seqs = {}
+    for size, meta in notch_meta.items():
+        order = _svg_file_order(converted_map[size]) if size in converted_map else []
+        if len(order) == len(meta["kinds"]):
+            seqs[size] = [(meta["kinds"][i], meta["mirror"][i]) for i in order]
+    if not seqs:
+        return
+    first = next(iter(seqs.values()))
+    bad = [s for s, q in seqs.items() if q != first]
+    if bad:
+        warnings.append(f"🟡 [노치] 사이즈마다 조각 순서가 다릅니다({', '.join(bad)}) — 조각 이름·디자인 매핑을 확인해 주세요")
+    if len(first) != len(pieces):
+        return
+    used: Dict[str, int] = {}
+    for svg_i, (kind, mir) in enumerate(first):
+        used[kind] = used.get(kind, 0) + 1
+        pieces[svg_i]["id"] = kind if used[kind] == 1 else f"{kind}_{used[kind]}"
+        pieces[svg_i]["name"] = NOTCH_KIND_KO.get(kind, kind) + (" (좌우 거울)" if mir else "")
+
+
+def _dxf_title(pattern_id: str, preset: Dict[str, Any]) -> str:
+    """DXF 안 조각 이름 앞머리(R12 는 한글이 깨진다) — 영문·숫자만 남기고, 없으면 노치 규칙·조각으로 구분되게"""
+    t = "".join(ch if ch.isascii() and (ch.isalnum() or ch in " -_") else "_" for ch in pattern_id).strip("_ ")
+    t = "_".join(x for x in t.split("_") if x)
+    if t:
+        return t
+    rule = ((preset.get("notches") or {}).get("rule") or "PATTERN").upper()
+    sel = (preset.get("notches") or {}).get("select") or []
+    return "STIZ_" + rule + ("_" + "_".join(s.upper() for s in sel) if sel else "")
+
+
+@router.get("/patterns/{pattern_id}/cut-dxf")
+def pattern_cut_dxf(pattern_id: str):
+    """공장용 재단 패턴 DXF(사이즈마다 한 장, zip) — aama 관례: 레이어 1 재단선(뾰족점 없음) · 레이어 4 노치 POINT · 조각 이름 글자.
+    노치 자료가 없는 프리셋은 재단선만 나간다. 엔진은 일꾼 프로세스에서 돈다."""
+    pdir = os.path.join(state.get_patterns_dir(), _safe_pattern_dirname(pattern_id))
+    ppath = os.path.join(pdir, "preset.json")
+    if not os.path.isfile(ppath):
+        raise HTTPException(status_code=404, detail=f"패턴이 없습니다: {pattern_id}")
+    with open(ppath, encoding="utf-8") as f:
+        preset = json.load(f)
+    with tempfile.TemporaryDirectory(prefix="cutdxf_") as td:
+        zpath = os.path.join(td, "cut.zip")
+        try:
+            _notch_child({"op": "dxf", "pattern_dir": pdir, "out_zip": zpath, "title": _dxf_title(pattern_id, preset)})
+        except RuntimeError as e:
+            raise HTTPException(status_code=500, detail=f"재단 패턴 DXF 를 만들지 못했습니다: {e}")
+        with open(zpath, "rb") as f:
+            data = f.read()
+    from urllib.parse import quote as _q
+    fname = f"{pattern_id}_재단패턴_DXF.zip"
+    return Response(content=data, media_type="application/zip",
+                    headers={"Content-Disposition": f"attachment; filename=\"cut_dxf.zip\"; filename*=UTF-8''{_q(fname)}"})
+
+
 @router.post("/patterns", dependencies=[Depends(admin_required)])
 async def create_pattern(
     request: Request,
@@ -1983,6 +2143,9 @@ async def create_pattern(
     reference: Optional[UploadFile] = File(None),
     files: List[UploadFile] = File(default=[]),
     layout: Optional[str] = Form(None),   # (선택) 화면 편집기에서 맞춘 위치 JSON — 없으면 100% 기존 동작
+    notch_rule: Optional[str] = Form(None),    # (선택) 노치 규칙 jersey|pants — 없으면 100% 기존 동작
+    notch_select: Optional[str] = Form(None),  # (선택) 남길 조각 이름(쉼표) — 하의 방법 고르기
+    notch_side: Optional[str] = Form(None),    # (선택) 한 장짜리 옆선 자리 지정 JSON {"XL":[허리mm,밑단mm]}
 ) -> Dict[str, Any]:
     """패턴 1개를 등록한다(폴더 + preset.json 생성). 핵심 2단계 엔드포인트.
 
@@ -2039,6 +2202,10 @@ async def create_pattern(
     piece_counts: Dict[str, int] = {}       # {사이즈명: 조각수} — 일치 검증용
     page_dims: Optional[List[float]] = None  # 첫 .ai 변환에서 viewBox(가로/세로) 회수
 
+    # 노치 규칙(선택) — 엔진(vendor notch_rules)이 .ai/.svg 를 읽어 «깨끗한 외곽선 + 노치 든 재단선 + 노치 자리»를 만든다
+    notch = _notch_options(notch_rule, notch_select, notch_side, warnings)
+    notch_meta: Dict[str, Any] = {}          # {사이즈: {pieces:[노치 자리(pt)…], kinds, notched, existing, dropped}}
+
     for up in size_files:
         # 파일명에서 사이즈 토큰을 뽑는다("XL.ai"·"2XL_무엇.svg" → "XL"·"2XL").
         # 한글 파일명도 mojibake 복원(혹시 한글이 섞여도 안전하게).
@@ -2052,7 +2219,11 @@ async def create_pattern(
         out_svg = os.path.join(pattern_dir, f"{size_name}.svg")
         try:
             saved = state.save_upload(up)  # 업로드를 디스크로(엔진은 경로를 먹음)
-            if ext == ".svg":
+            if notch:
+                rep = _notch_convert(notch, saved, ext, size_name, out_svg, notch_meta)
+                if page_dims is None and rep.get("viewBox"):
+                    page_dims = [float(x) for x in str(rep["viewBox"]).split()[2:4]]
+            elif ext == ".svg":
                 # 이미 polyline SVG 라면 그대로 패턴 폴더로 복사.
                 import shutil as _sh
                 _sh.copyfile(saved, out_svg)
@@ -2213,6 +2384,8 @@ async def create_pattern(
         base = "XL" if "XL" in order else order[len(order) // 2]  # XL→중앙값
 
     pieces = _build_pieces(piece_n, page_dims[0], page_dims[1], warnings)
+    if notch:
+        _notch_name_pieces(pieces, notch_meta, converted_map, warnings)  # 조각 이름을 노치 규칙의 판정대로(앞판·뒤판·소매·목 띠·작은 조각…)
 
     preset: Dict[str, Any] = {
         "preset_name": pattern_id,
@@ -2237,6 +2410,11 @@ async def create_pattern(
     }
     if disabled_sizes:
         preset["disabled_sizes"] = disabled_sizes
+    if notch:
+        # 주문 PDF 빨간 재단선은 «<사이즈>.notched.svg» 로 그린다(engine/job.py) — 합성·클립은 깨끗한 <사이즈>.svg 그대로
+        preset["notches"] = {"rule": notch["rule"], "select": notch["select"], "side_override": notch["side"],
+                             "notched_suffix": NOTCHED_SUFFIX, "depth_mm": 5.0, "sizes": notch_meta}
+        preset["cutline"] = {"draw_from": "svg_polygon", "color_cmyk": [0, 0.96, 0.95, 0], "stroke_width": 2.0}
 
     # area(번호·이름) — 완성본에서 추출된 것만 붙이고, 글리프셋이 있으면 number_area
     # 에 glyph_source 를 함께 단다(없으면 폰트 폴백이라 키 생략).
@@ -2253,6 +2431,10 @@ async def create_pattern(
     #   setdefault 라서 이미 piece_id 가 있으면 그대로 둔다(기존 2패턴 회귀 0).
     front_pid = pieces[0]["id"] if pieces else "front"           # 앞판 조각 id
     back_pid = pieces[1]["id"] if len(pieces) >= 2 else front_pid  # 뒤판 조각 id(폴백)
+    if notch:   # (2026-10-20) 노치 판정이 앞·뒤판을 알면 그것부터 — 슈팅저지는 높이순 1·2위가 소매라 번호가 소매에 찍혔다
+        ids = [pc["id"] for pc in pieces]
+        front_pid = next((x for x in ("front", "split_front") if x in ids), front_pid)
+        back_pid = next((x for x in ("back", "split_back") if x in ids), back_pid)
     fa = areas.get("front_number_area")
     ba = areas.get("back_number_area")
     na = areas.get("back_name_area")
@@ -2628,6 +2810,8 @@ async def create_pattern_from_drive(request: Request, payload: Dict[str, Any] = 
             glyphset=glyph_upload,
             reference=ref_upload,
             files=size_uploads,
+            # 함수로 직접 부르면 빠진 칸이 FastAPI Form 객체(참)로 들어와 layout.strip() 등이 터진다 — 명시적으로 None(2026-10-20)
+            layout=None, notch_rule=None, notch_select=None, notch_side=None,
         )
     except gdrive.DriveError as e:
         return JSONResponse(status_code=502, content={"error": f"Drive 파일 다운로드 실패: {e}"})

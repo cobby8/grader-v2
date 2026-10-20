@@ -58,6 +58,7 @@ except Exception:
 # 아동 호수(피구·줄넘기 76건)는 별도 정규식으로 처리한다(아래 _normalize_size).
 SIZE_KEYWORDS = [
     "5XS", "4XS", "3XS", "2XS",
+    "7XL", "6XL",            # 농구 하의 한 장짜리(2026-10-20) — 없으면 주문서 6XL·7XL 이 빈 사이즈로 읽혔다
     "5XL", "4XL", "3XL", "2XL",
     "XS", "XL",
     "S", "M", "L",

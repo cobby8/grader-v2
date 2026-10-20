@@ -824,8 +824,26 @@ def _build_precise_layout(preset: dict, size_def: dict, *,
         #    각 조각의 윤곽을 빨강 1줄로 그린다(너치 포함, 클립 밖이라 너치 안 잘림).
         color = cutline_cfg.get("color_cmyk", [0, 0.96, 0.95, 0])
         sw = float(cutline_cfg.get("stroke_width", 2.0))
+        # (2026-10-20 노치) preset.notches 가 있으면 재단선만 «<사이즈>.notched.svg»(노치 든 외곽선)로 그린다.
+        #   합성·클립은 위의 깨끗한 polys 그대로. 노치 홈은 안쪽이라 조각 높이가 같아 높이 내림차순 순서도 같다.
+        #   preset.notches 가 없으면(기존 프리셋) cut_polys = polys — 한 줄도 바뀌지 않는다.
+        cut_polys = polys
+        notch_cfg = preset.get("notches") or {}
+        if notch_cfg:
+            npath = os.path.splitext(svg_path)[0] + notch_cfg.get("notched_suffix", ".notched.svg")
+            if os.path.isfile(npath):
+                np_polys = parse_svg(npath)
+                # 같은 조각인지 상자로 확인(노치 홈은 안쪽이라 상자가 같다) — 하나라도 다르면 노치 없이 그린다
+                same = len(np_polys) == len(polys) and all(
+                    max(abs(u - v) for u, v in zip(a.bbox, b.bbox)) < 0.5 for a, b in zip(np_polys, polys))   # bbox 는 속성
+                if same:
+                    cut_polys = np_polys
+                else:
+                    warnings.append(f"🟡 [노치] {os.path.basename(npath)} 조각이 깨끗한 SVG 와 맞지 않습니다 — 노치 없이 재단선을 그립니다")
+            else:
+                warnings.append(f"🟡 [노치] {os.path.basename(npath)} 없음 — 노치 없이 재단선을 그립니다")
         for li, pdef in enumerate(pieces_def):
-            poly = polys[pdef["svg_index"]]
+            poly = cut_polys[pdef["svg_index"]]
             ops = _polygon_cutline_ops(poly.points, color, sw)
             if not ops:
                 continue
@@ -1028,6 +1046,11 @@ def run_job(preset: str,
 
     # 정밀배치 경로 사용 여부(새 area 가 하나라도 있으면 place_*/감싸기 경로). 없으면 폴백.
     use_precise = _has_precise_areas(preset_dict)
+    # (2026-10-20 노치) 노치 설정이 있는 프리셋은 번호 영역이 없어도(하의 등) 정밀 경로로 — 폴백(build_layouts)은
+    #   조각 윤곽 재단선(svg_polygon)을 그리지 않아 노치가 빠진다. 글자 영역이 없으면 _inject 가 건너뛴다.
+    #   노치 설정이 없는 프리셋은 이 줄과 무관(기존 판정 그대로).
+    if preset_dict.get("notches") and (preset_dict.get("cutline") or {}).get("draw_from") == "svg_polygon":
+        use_precise = True
 
     # ── (작업2/B) cover/블리드 배수 결정: preset.cutline.bleed 또는 cover_bleed 키가 있을 때만. ──
     #    왜 키가 있을 때만: 없으면(U넥 등) bleed=None → _job_piece_transform 이 기존 contain
