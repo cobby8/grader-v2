@@ -1137,7 +1137,8 @@ def run_job(preset: str,
     # (2026-10-20 노치) 노치 설정이 있는 프리셋은 번호 영역이 없어도(하의 등) 정밀 경로로 — 폴백(build_layouts)은
     #   조각 윤곽 재단선(svg_polygon)을 그리지 않아 노치가 빠진다. 글자 영역이 없으면 _inject 가 건너뛴다.
     #   노치 설정이 없는 프리셋은 이 줄과 무관(기존 판정 그대로).
-    if preset_dict.get("notches") and (preset_dict.get("cutline") or {}).get("draw_from") == "svg_polygon":
+    #   (2026-10-20) 노치가 없어도 «조각 윤곽 재단선(svg_polygon)» 설정이면 정밀 경로 — 새 등록은 모두 이 설정이다.
+    if (preset_dict.get("cutline") or {}).get("draw_from") == "svg_polygon":
         use_precise = True
 
     # ── (작업2/B) cover/블리드 배수 결정: preset.cutline.bleed 또는 cover_bleed 키가 있을 때만. ──

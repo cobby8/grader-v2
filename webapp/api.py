@@ -2679,11 +2679,15 @@ async def create_pattern(
     }
     if disabled_sizes:
         preset["disabled_sizes"] = disabled_sizes
+    # (2026-10-20) 빨간 재단선 = 조각 윤곽 1줄(모든 새 등록). 예전엔 노치 등록에만 있어, 화면으로 등록한 패턴은
+    #   디자인에 «패턴선» 레이어가 없으면 재단선이 아예 안 그려졌다(최근 주문 5건 검증). 디자인에 패턴선/재단선
+    #   레이어가 있으면 지워 두 줄을 막는다(없으면 아무것도 안 함).
+    preset["cutline"] = {"draw_from": "svg_polygon", "color_cmyk": [0, 0.96, 0.95, 0], "stroke_width": 2.0,
+                         "hide_design_cutline_layer": True}
     if notch:
         # 주문 PDF 빨간 재단선은 «<사이즈>.notched.svg» 로 그린다(engine/job.py) — 합성·클립은 깨끗한 <사이즈>.svg 그대로
         preset["notches"] = {"rule": notch["rule"], "select": notch["select"], "side_override": notch["side"],
                              "notched_suffix": NOTCHED_SUFFIX, "depth_mm": 5.0, "sizes": notch_meta}
-        preset["cutline"] = {"draw_from": "svg_polygon", "color_cmyk": [0, 0.96, 0.95, 0], "stroke_width": 2.0}
 
     # area(번호·이름) — 완성본에서 추출된 것만 붙이고, 글리프셋이 있으면 number_area
     # 에 glyph_source 를 함께 단다(없으면 폰트 폴백이라 키 생략).
