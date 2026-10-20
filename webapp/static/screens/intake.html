@@ -42,10 +42,18 @@
   .ik-card { display: grid; gap: 10px; padding: 14px 16px; border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg); background: var(--surface-card); }
   .ik-card:hover { border-color: var(--border-strong); }
-  .ik-card__open { display: grid; gap: 4px; width: 100%; text-align: left; padding: 0; border: 0; background: none; cursor: pointer; font: var(--text-body); color: var(--text-body); }
-  .ik-card__del { display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding-top: 8px; border-top: 1px solid var(--border-subtle); }
-  .ik-card__del .ik-linkbtn { padding: 4px 0; }
-  .ik-card__ask { flex: 1; font: var(--text-sm); color: var(--text-muted); }
+  .ik-card__open { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 0; border: 0; background: none; cursor: pointer; font: var(--text-body); color: var(--text-body); }
+  .ik-card__open:disabled { cursor: default; color: inherit; }
+  .ik-card__body { flex: 1; min-width: 0; display: grid; gap: 4px; }
+  /* 고르기 — 작성 중인 것만 고를 수 있다 */
+  .ik-listhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 22px; }
+  .ik-listhead .ik-h3 { margin: 0; }
+  .ik-listhead + .ik-cards { margin-top: 10px; }
+  .ik-card__box { flex: none; font-size: 26px; color: var(--text-subtle); }
+  .ik-card.is-on { border-color: var(--text-strong); }
+  .ik-card.is-on .ik-card__box { color: var(--text-strong); }
+  .ik-card.is-off { opacity: .45; }
+  .ik-selask { grid-column: 1 / -1; margin: 0; font: var(--text-sm-strong); color: var(--red-700); }
   .ik-newform { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--surface-card); }
   .ik-newform label { font: var(--text-sm-strong); color: var(--text-body); }
   .ik-newform .input { font-size: 16px; height: 46px; }
@@ -508,23 +516,62 @@ async function showList() {
   setSave("");
   const main = $("#main");
   main.innerHTML = '<div id="newBox">' + NEW_BTN + "</div>" +
-    '<h2 class="ik-h3">내 의뢰</h2><div class="ik-cards" id="cards"><div class="ik-center"><div class="spinner"></div></div></div>';
-  let rows = [];
-  try { rows = await store.list(); }
+    '<div class="ik-listhead"><h2 class="ik-h3">내 의뢰</h2><span id="selSlot"></span></div>' +
+    '<div class="ik-cards" id="cards"><div class="ik-center"><div class="spinner"></div></div></div><div id="selBar"></div>';
+  listRows = []; selMode = false; selAsk = false; picked.clear();
+  try { listRows = await store.list(); }
   catch (e) { $("#cards").innerHTML = '<p class="ik-empty">목록을 불러오지 못했어요 — ' + esc(errText(e)) + "</p>"; return; }
-  $("#cards").innerHTML = rows.length ? rows.map((r) =>
-    '<div class="ik-card" data-card="' + esc(r.id) + '"><button class="ik-card__open" type="button" data-id="' + esc(r.id) + '">' +
+  renderCards();
+}
+
+// 고르기 상태 — selMode: 고르는 중 · picked: 고른 의뢰 id · selAsk: «정말 지울까» 묻는 중
+let listRows = [], selMode = false, selAsk = false;
+const picked = new Set();
+function renderCards() {
+  // 작성 중인 것만 지울 수 있다(제출한 것은 규칙상 본인이 못 지운다) — 지울 게 있을 때만 «고르기»
+  const drafts = listRows.filter((r) => r.status === "draft");
+  $("#selSlot").innerHTML = drafts.length && !selMode ? '<button class="btn btn--ghost btn--sm" type="button" id="selBtn">고르기</button>' : "";
+  $("#cards").innerHTML = listRows.length ? listRows.map((r) => {
+    const can = selMode && r.status === "draft", on = can && picked.has(r.id);
+    return '<div class="ik-card' + (selMode ? (can ? (on ? " is-on" : "") : " is-off") : "") + '" data-card="' + esc(r.id) + '">' +
+      '<button class="ik-card__open" type="button" data-id="' + esc(r.id) + '"' + (selMode && !can ? " disabled" : "") + (can ? ' aria-pressed="' + on + '"' : "") + ">" +
+      (can ? '<span class="material-symbols-outlined ik-card__box">' + (on ? "check_box" : "check_box_outline_blank") + "</span>" : "") +
+      '<span class="ik-card__body">' +
       '<span class="ik-card__top"><span class="ik-card__code">' + esc(r.code) + '</span><span class="ik-status ik-status--' + esc(r.status) + '">' + esc(STATUS[r.status] || r.status) + "</span></span>" +
       '<span class="ik-card__name">' + esc(r.product_name || "(제품 이름 없음)") + (r.size_label ? " · " + esc(r.size_label) : "") + "</span>" +
-      '<span class="ik-card__meta">' + esc(when(r.updated_at)) + "</span></button>" +
-      // 작성 중인 것만 지울 수 있다(제출한 것은 규칙상 본인이 못 지운다)
-      (r.status === "draft" ? '<div class="ik-card__del" data-delbox="' + esc(r.id) + '">' + DEL_BTN(r.id) + "</div>" : "") +
-    "</div>").join("")
-    : '<p class="ik-empty">아직 의뢰가 없어요.</p>';
+      '<span class="ik-card__meta">' + esc(when(r.updated_at)) + "</span></span></button></div>";
+  }).join("") : '<p class="ik-empty">아직 의뢰가 없어요.</p>';
+  renderSelBar();
 }
-const DEL_BTN = (id) => '<button class="ik-linkbtn" type="button" data-del="' + esc(id) + '">지우기</button>';
+// 아래 막대 — 고르는 중에만. «N개 지우기» → 한 번 더 묻고 → 지운다
+function renderSelBar() {
+  const n = picked.size;
+  $("#selBar").innerHTML = !selMode ? "" :
+    '<div class="ik-foot"><div class="ik-foot__in">' +
+    (selAsk ? '<p class="ik-selask">' + n + "개를 지워요. 사진도 함께 지워져요.</p>" : "") +
+    '<button class="btn btn--secondary" type="button" id="' + (selAsk ? "selNo" : "selCancel") + '">그만두기</button>' +
+    '<button class="btn btn--danger" type="button" id="' + (selAsk ? "selYes" : "selDel") + '"' + (n ? "" : " disabled") + ">" + (n ? n + "개 지우기" : "지우기") + "</button></div></div>";
+}
+async function deletePicked(btn) {
+  btn.disabled = true; $("#selNo").disabled = true;
+  btn.innerHTML = '<span class="spinner ik-ai__spin"></span>지우는 중';
+  let ok = 0, fail = null;
+  for (const id of [...picked]) {                      // 하나씩 — 하나가 실패해도 나머지는 지운다
+    try {
+      await store.remove(id);
+      ok++; picked.delete(id);
+      listRows = listRows.filter((r) => r.id !== id);
+    } catch (err) { fail = err; }
+  }
+  selAsk = false;
+  if (!fail || !listRows.some((r) => r.status === "draft")) { selMode = false; picked.clear(); }
+  renderCards();
+  toast(!fail ? ok + "개 지웠어요"
+    : ok ? ok + "개 지웠어요 — " + picked.size + "개는 못 지웠어요: " + errText(fail)
+    : "지우지 못했어요 — " + errText(fail));
+}
 
-// 목록 화면 동작 — 새 의뢰(이름부터 받기)·열기·지우기
+// 목록 화면 동작 — 새 의뢰(이름부터 받기)·열기·고르기·지우기
 $("#main").addEventListener("click", async (e) => {
   if (cur) return;                                     // 의뢰를 연 화면에서는 아래 단계 화면 동작이 맡는다
   const b = e.target.closest("button");
@@ -539,28 +586,21 @@ $("#main").addEventListener("click", async (e) => {
   }
   if (b.id === "newCancel") { $("#newBox").innerHTML = NEW_BTN; return; }
   if (b.id === "newGo") { newIntake(); return; }
-  if (b.dataset.id) { location.assign("intake.html?id=" + encodeURIComponent(b.dataset.id) + "&step=1"); return; }
-  if (b.dataset.del) {
-    b.parentElement.innerHTML = '<span class="ik-card__ask">사진도 함께 지워져요.</span>' +
-      '<button class="btn btn--ghost btn--sm" type="button" data-delno="' + esc(b.dataset.del) + '">그만두기</button>' +
-      '<button class="btn btn--danger btn--sm" type="button" data-delyes="' + esc(b.dataset.del) + '">지우기</button>';
+  if (b.dataset.id) {
+    if (selMode) {                                      // 고르는 중엔 카드를 누르면 고름/풂
+      const id = b.dataset.id;
+      if (picked.has(id)) picked.delete(id); else picked.add(id);
+      selAsk = false; renderCards();
+      return;
+    }
+    location.assign("intake.html?id=" + encodeURIComponent(b.dataset.id) + "&step=1");
     return;
   }
-  if (b.dataset.delno) { b.parentElement.innerHTML = DEL_BTN(b.dataset.delno); return; }
-  if (b.dataset.delyes) {
-    const id = b.dataset.delyes;
-    b.disabled = true;
-    try {
-      await store.remove(id);
-      const card = document.querySelector('[data-card="' + CSS.escape(id) + '"]');
-      if (card) card.remove();
-      if (!document.querySelector(".ik-card")) $("#cards").innerHTML = '<p class="ik-empty">아직 의뢰가 없어요.</p>';
-      toast("지웠어요");
-    } catch (err) {
-      b.disabled = false;
-      toast("지우지 못했어요 — " + errText(err));
-    }
-  }
+  if (b.id === "selBtn") { selMode = true; selAsk = false; picked.clear(); renderCards(); return; }
+  if (b.id === "selCancel") { selMode = false; selAsk = false; picked.clear(); renderCards(); return; }
+  if (b.id === "selDel") { selAsk = true; renderSelBar(); return; }
+  if (b.id === "selNo") { selAsk = false; renderSelBar(); return; }
+  if (b.id === "selYes") { deletePicked(b); return; }
 });
 $("#main").addEventListener("input", (e) => {
   if (!cur && e.target.id === "newName") $("#newGo").disabled = !e.target.value.trim();
