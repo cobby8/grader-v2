@@ -141,3 +141,12 @@
 - **결정**: `pdfutil.fit_matrix`(top_height·stretch). grade/job 은 조각에 `fit` 이 있을 때만 그것(블리드 무시), 없으면 예전 그대로 → **기존 프리셋 무변경**(연세대 38행 0페이지 차이). 새 등록은 `_set_piece_fit` 가 정한다: 노치 등록은 조각 종류(front/back/one_piece/split → 위 맞춤 · neck → 늘이기 · sleeve/part → 예전), 그 밖은 기하(긴변/짧은변 ≥4 이고 짧은변 ≤150mm → 늘이기 · 가장 큰 조각 넓이 85% 이상 → 위 맞춤 · 나머지 예전). 등록 경고에 «조각별 그림 맞춤: …» 한 줄.
 - **안전장치**: fit 조각의 번호·이름이 조각 밖으로 나가면 경고(글자는 클립 밖에 그려진다) · 모르는 fit 값은 load_preset 에서 막음.
 - **남은 것**: 하의는 디자이너 파일이 대지에서 잘려 눈으로만 확인(위 맞춤 10mm vs 예전 25mm) — 완본으로 재확인. 운영 기존 패턴(연세대 V넥 양면 등)은 디자이너 파일로 검증한 뒤 fit 을 붙일지 정한다. 실험 도구: 세션 scratchpad `gv/fix/exp_fit.py`.
+
+### [2026-10-20] 출력 한 장을 디자이너 대지처럼 — 사이즈 택 · 꺼진 레이어 · 재단선 기본 · 영역 자동 짝짓기(거울) · 양면·하의 함께
+- **사이즈 택**: `data/size_tags`(무기고 49개, `scripts/build_size_tags.py` — 택 상자와 겹치는 경로만 + ICC→DeviceCMYK, 756KB) · `engine/size_tag.py` 1px/mm 찾기 → 3px/mm 안쪽 무늬 확인 ≥0.8 → 기준 아닌 사이즈에 그 사이즈 택을 `Piece.overlays` 로 덮음(Do 도 셈). 짙은 바탕(양면 자주)은 1차 0.70 이라 안쪽 확인이 필수.
+- **꺼진 레이어**: compose 가 OCProperties 를 버려 찍히던 것 → `hide_off_layers` 가 대상 파일의 꺼진 «레이어 객체»(objgen)로 BDC…EMC 삭제(같은 이름 켜진 레이어 보존). preset.hidden_layers.remove=false 로 끔.
+- **재단선**: 새 등록은 cutline svg_polygon + hide_design_cutline_layer · job 은 svg_polygon 이면 정밀 경로.
+- **영역 자동 짝짓기**: 화면에서 영역을 다 안 맞춘 등록은 design.auto_regions → job 이 디자인 속 닫힌 윤곽과 기준 SVG 를 «그대로/뒤집어» 겹쳐 짝(크기 ±5%·평균 6mm 이내), 대칭은 좌우 위치로, 한 장뿐인 거울 짝은 뒤집어 재사용(pdef.mirror·with_mirror). 디자인에 없는 조각은 빼고 🟡.
+- **양면·하의**: 첫 면에 안 쓴 윤곽만으로 모든 조각이 다시 짝지어지면 한 면 더 → `_stack_layouts` 로 위·아래(번호 영역 이동·면별 본체색). preset.companion(하의 패턴 id) → 같은 디자인에서 하의도 찾아 아래, 사이즈는 행 bottom_size(주문서 부제행 «하의» → 웹 표 → run_job).
+- **검증**: 고려대 실주문 → «흰 면+자주 면+하의 두 다리» 한 장·택 L/2XL·재단선, 시험 149개, 연세대 38행 0페이지 차이. 기존 프리셋(fit·auto_regions·companion 없음)은 택·꺼진 레이어만 기본 적용(연세대 디자인은 둘 다 없어 무변화).
+- **남은 것**: 운영 기존 패턴에 fit/auto_regions 를 붙일지는 디자이너 파일로 검증 후. 하의 번호(선수별)는 아직 안 찍음. 함께 찍을 패턴은 화면 등록만(드라이브 등록 X).
