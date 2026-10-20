@@ -1,9 +1,9 @@
 {
  "engine": "stizshop tools/pattern-engine",
- "commit": "f7ad0382368ec4b0d18bd535917b380d33b58076",
- "commit_short": "f7ad0382",
+ "commit": "fb7b8deb11b015fba3e48b212540549d5f255fb9",
+ "commit_short": "fb7b8deb",
  "dirty_files": [],
- "synced_at": "2026-10-20T05:48:22",
+ "synced_at": "2026-10-20T09:46:21",
  "note": "🚫 이 폴더를 손으로 고치지 마라 — stizshop 에서 고치고 scripts/sync_pattern_engine.py 를 다시 돌린다",
  "files": {
   "aama.py": "e25bfdab6fd137eb4663185fd0d4e3a2a26fdeaa661d94a32171e20868de2e70",
@@ -18,7 +18,7 @@
   "opticad.py": "f1de27e50285f7099b2697977288c57c49615889543fa22e29cab945bf3054a4",
   "patlib.py": "d85a67dcbbfca592f60cbd68c6f318975aac76266eb5aff4fa16fd43392a4678",
   "piecespec.py": "84b82fd7bdf8adcc94aa667e8b5153191292c38963bde5543b4747a951526bff",
-  "service.py": "555ca9fde89b6461c0eea1c08393f0c371fb10603d56bddfc782b2c5ecd7bce0",
+  "service.py": "9917fe51ea7b2caff02b942f0a3874965631309d9dd3e34eb2cc4b6e66fefae5",
   "style_import.py": "fe98964d07ec2ba71c22fc2f2ad87780b8b5c13827fb04ac61b6898a47474ef8",
   "tile_pdf.py": "9d40e6ca2e5b56b0a871d7a764004c21e603bee6d941bdba886b89be5c59e9d6",
   "requirements.txt": "71c1d8372f321c912615296cb5dcb9aee698fc694704a08aa607a6a7576aefc5",

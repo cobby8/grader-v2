@@ -1397,11 +1397,11 @@ def _server_mb(svc: Any) -> float:
 
 
 def _marker_slow(svc: Any) -> float:
-    """서버가 엔진 실측 PC 보다 느린 배수(입장 판정의 시간 어림에 곱한다) — GRADER_MARKER_SLOW(0.5~10), 없으면 엔진 기본(2.0, 가정)"""
+    """서버가 엔진 실측 PC 보다 느린 배수(입장 판정의 시간 어림에 곱한다) — GRADER_MARKER_SLOW(0.5~10), 없으면 엔진 기본(1.3 — 2026-10-20 Render 실측 1.10·1.22 + 여유)"""
     try:
         return min(10.0, max(0.5, float(os.environ.get("GRADER_MARKER_SLOW") or svc.MARKER_SLOW)))
     except (ValueError, AttributeError):
-        return 2.0
+        return 1.3
 
 
 def _marker_timeout_s() -> float:

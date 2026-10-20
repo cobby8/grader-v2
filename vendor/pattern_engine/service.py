@@ -113,7 +113,21 @@ MARKER_SERVER = {"jobs": 1, "cache_mb": 0.0, "budget": 120.0, "seed": 0}
 MARKER_BOX_MB = 512.0                                       # Render starter 상자
 MARKER_SERVER_MB = 160.0                                    # 서버(uvicorn) 몫 — 실측 151MB(마커 2번 돈 뒤) + 여유
 MARKER_MARGIN_MB = 20.0                                     # 어림 오차 여유
-MARKER_SLOW = 2.0                                           # Render(0.5 CPU) 가 이 PC 보다 느린 배수(가정 — 실측 전) · 시간 어림에 곱한다
+MARKER_SLOW = 1.3                                           # Render 가 이 PC 보다 느린 배수 · 시간 어림에 곱한다
+#   2026-10-20 Render 첫 실측 ÷ 어림(배수 1): 마커(들여온 상의 13벌·117장) 62.4초 ÷ 56.9초 = 1.10 ·
+#   들여오기(표준 웜업 상의 276KB) 37초 ÷ 60.7초 = 0.61(어림 자체가 넉넉) → 큰 쪽 + 여유로 1.3(예전 가정 2.0 은 과했다)
+#   참고: 들여오기 Render 37초 ÷ 윈도우 실측 25.9초 = 1.43 이 «서버가 느린 정도» 그대로지만, 어림이 실측의 2.3배라 1.3 을 곱해도 덮는다
+# 리눅스 메모리 배수 — 어림(MARKER_FIT·IMPORT_FIT)은 윈도우 실측으로 맞췄는데 리눅스 RSS 가 더 크다.
+#   2026-10-20 Render 실측: 마커 13벌 어림 228.1MB → 실제 289.2MB(×1.27) · 들여오기 어림 152.7 → 실제 152.5MB
+#   → 리눅스에서는 메모리 어림에 1.3 을 곱한다(PATTERN_ENGINE_MEM_FACTOR 로 바꿀 수 있다 · 윈도우는 1.0)
+def _mem_factor():
+    try:
+        v = float(os.environ.get("PATTERN_ENGINE_MEM_FACTOR") or 0)
+    except ValueError:
+        v = 0.0
+    if v > 0:
+        return min(5.0, max(0.5, v))
+    return 1.3 if sys.platform.startswith("linux") else 1.0
 MARKER_GRADE_S = 12.0                                       # 그레이딩 일꾼(원본 → graded + 버전 대조) 이 PC 실측 9~10초
 # 실측 맞춤(2026-10-20 · 윈도우 · 일꾼 1·cache 0 · 폭 150cm · 빠르게 · 배치+PDF/DXF/PNG 합) — 아래 값보다 늘 «같거나 크게» 어림하게 맞췄다
 #   상의(벌당 17장)  조각 136 → 204MB·19초 | 238 → 213MB·32초 | 476 → 254MB·80초 | 714 → 294MB·217초 | 952 → 339MB·517초
@@ -505,7 +519,8 @@ def default_style_id(filename, data):
 def estimate_import(nbytes):
     """들여오기 일꾼 최고 메모리(MB)·시간(초, 이 PC) 어림 — IMPORT_FIT(실측보다 늘 크게)"""
     mb = nbytes / 2 ** 20; F = IMPORT_FIT
-    return {"mb": round(mb, 3), "rss_mb": round(F["rss0"] + F["rss_per_mb"] * mb, 1), "secs": round(F["t0"] + F["t_per_mb"] * mb, 1)}
+    rss = (F["rss0"] + F["rss_per_mb"] * mb) * _mem_factor()      # 리눅스 배수(_mem_factor)
+    return {"mb": round(mb, 3), "rss_mb": round(rss, 1), "secs": round(F["t0"] + F["t_per_mb"] * mb, 1)}
 
 
 def admit_import(nbytes, n_sizes, time_limit_s=IMPORT_MAX_SECONDS, box_mb=MARKER_BOX_MB, server_mb=MARKER_SERVER_MB, slow=MARKER_SLOW):
@@ -523,7 +538,7 @@ def admit_import(nbytes, n_sizes, time_limit_s=IMPORT_MAX_SECONDS, box_mb=MARKER
     cap_mb = box_mb - server_mb - MARKER_MARGIN_MB
     need_s = slow * e["secs"]
     if e["rss_mb"] > cap_mb or need_s > time_limit_s:
-        max_mb = min((cap_mb - F["rss0"]) / F["rss_per_mb"], (time_limit_s / slow - F["t0"]) / F["t_per_mb"])
+        max_mb = min((cap_mb / _mem_factor() - F["rss0"]) / F["rss_per_mb"], (time_limit_s / slow - F["t0"]) / F["t_per_mb"])
         raise ServiceError(f"원본이 서버에서 읽기엔 큽니다({e['mb']:.2f}MB — 메모리·시간 한도로 약 {max(0.0, max_mb):.2f}MB 까지). "
                            "사이즈를 나눠 내보내 주세요.")
     return dict(e, sizes=n_sizes, cap_mb=cap_mb, need_s=round(need_s, 1), slow=slow, max_seconds=float(time_limit_s))
@@ -782,6 +797,7 @@ def estimate_marker(pieces, quick, group="top", width_cm=150.0, gap_mm=3.0):
     f = F[group if group in ("top", "bottom") else "bottom"]
     w, g = float(width_cm), float(gap_mm)
     rss = f["rss0"] + f["rss_per_piece"] * pieces + F["rss_per_cm"] * max(0.0, w - 150.0) + (0.0 if quick else F["search_mb"])
+    rss *= _mem_factor()                                            # 리눅스 배수 — 윈도우 맞춤 어림이 Render 실측보다 작았다(×1.27)
     mult = max(1.0, (w / 150.0) ** F["w_pow"]) * (1.0 + F["gap_per_mm"] * max(0.0, g - 3.0))
     secs = (f["t0"] + f["t_lin"] * pieces + f["t_k"] * (pieces ** f["t_pow"])) * mult
     return {"rss_mb": round(rss, 1), "quick_s": round(secs, 1)}
