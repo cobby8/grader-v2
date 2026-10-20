@@ -19,9 +19,13 @@
 | 의뢰 만들기 | ✅ | — | ✅ |
 | 의뢰 고치기 | ❌ | ✅ (검토 완료 전까지) | ✅ |
 | 검토 완료로 바꾸기 | ❌ | ❌ | ✅ |
-| 의뢰 지우기 | ❌ | ✅ 작성 중인 것만 | ✅ |
-| 사진 올리기·지우기 | ❌ | ✅ 자기 의뢰 폴더만 | ✅ |
+| 의뢰 휴지통으로 | ❌ | ✅ 작성 중인 것만 | ✅ 전부 |
+| 휴지통 되살리기·완전 삭제 | ❌ | ❌ | ✅ |
+| 사진 올리기·지우기 | ❌ | ✅ 자기 의뢰 폴더만 (휴지통에 든 것 제외) | ✅ |
 | 예시 사진 관리 | ❌ | ❌ | ✅ |
+
+> 2026-10-20 C-2 부터 «지우기» 는 휴지통으로 옮기기다(아래 «C-2» 절). 행 delete(완전 삭제)는 관리자만, 휴지통을 거친 것만(C-3).
+> 작성자 본인도 «제출» 한 의뢰를 «작성 중» 으로 되돌릴 수 없다(C-3).
 
 로그인 안 한 사람(anon)은 아무것도 못 한다.
 관리자 판정은 기존과 같다 — `app_metadata.role = 'admin'` (pattern_meta·pattern-presets 와 같은 방식).
@@ -253,3 +257,122 @@ drop function if exists public.pattern_intakes_stamp();
 drop function if exists public.intake_is_admin();
 -- 사진 창고는 안에 파일이 있으면 지워지지 않는다 — 대시보드 Storage 에서 비운 뒤 지운다.
 ```
+
+---
+
+## C-2 — 휴지통 + 지우기 권한 정리 (2026-10-20 적용됨 · 마이그레이션 `intake_trash_and_perms`)
+
+운영 그레이더 프로젝트에는 이미 들어가 있다. 새 프로젝트를 만들 때만 1단계 다음에 이것을 실행한다(다시 실행해도 안전).
+
+- 화면의 «지우기» = `deleted_at` 채우기(행·사진 그대로). 시각·누가는 트리거가 DB 시각·`auth.uid()` 로 적는다(폰 값 무시).
+- 트리거 `pattern_intakes_trash_guard` 가 지키는 것 — 직원: 내 «작성 중» 만 휴지통으로 · 되살리기 금지 · 휴지통에 든 행은 어떤 칸도 못 고침 · 처음부터 휴지통에 든 행 못 만듦. 관리자: 전부.
+- 완전 삭제는 화면에서 «휴지통 → 완전 삭제(두 번 확인)»: 사진 파일 먼저 지우고(덜 지워지면 멈춤) 행 delete.
+- 확인은 SQL 로 직원/관리자 JWT 를 흉내 내 시험(오류로 끝내 전부 되돌림) — 결과는 scratchpad 기록.
+
+```sql
+-- =====================================================================
+-- Phase C-2: 패턴 의뢰 휴지통 + 지우기 권한 정리 (다시 실행해도 안전)
+--   · 지우기는 이제 «휴지통으로 옮기기»(deleted_at 채우기)다. 행은 남는다.
+--   · 휴지통 보내기: 관리자 = 아무 의뢰 / 직원 = 내 «작성 중» 의뢰만
+--   · 되살리기·휴지통 안 의뢰 고치기·완전 삭제(행 delete): 관리자만
+--   · 사진 지우기: 관리자, 또는 휴지통이 아닌 내 의뢰(검토 완료 전)를 고치는 중일 때만
+-- =====================================================================
+
+-- 1) 휴지통 칸 두 개
+alter table public.pattern_intakes add column if not exists deleted_at timestamptz;
+alter table public.pattern_intakes add column if not exists deleted_by uuid;
+create index if not exists pattern_intakes_deleted_idx on public.pattern_intakes (deleted_at desc) where deleted_at is not null;
+
+-- 2) 휴지통 규칙 — RLS 만으로는 «어느 칸이 어떻게 바뀌는지»를 못 보므로 트리거로 지킨다.
+--    security definer 아님(부른 사람 권한 그대로) · 이름은 스키마를 붙여 찾는다(search_path 비움)
+create or replace function public.pattern_intakes_trash_guard()
+returns trigger language plpgsql set search_path = '' as $$
+declare
+  is_admin boolean := public.intake_is_admin();
+begin
+  if tg_op = 'INSERT' then
+    -- 처음부터 휴지통에 든 의뢰는 만들 수 없다
+    new.deleted_at := null;
+    new.deleted_by := null;
+    return new;
+  end if;
+
+  -- (UPDATE) 휴지통에 든 의뢰는 관리자만 손댈 수 있다 — 되살리기(값→null)도 여기서 막힌다
+  if old.deleted_at is not null and not is_admin then
+    raise exception 'INTAKE_TRASHED: 휴지통에 있는 의뢰는 관리자만 고치거나 되살릴 수 있어요'
+      using errcode = '42501';
+  end if;
+
+  if old.deleted_at is null and new.deleted_at is not null then
+    -- 휴지통으로 보내기: 직원은 «내 것 + 작성 중» 일 때만
+    if not is_admin and not (old.created_by = auth.uid() and old.status = 'draft') then
+      raise exception 'INTAKE_TRASH_DENIED: 내가 작성 중인 의뢰만 휴지통으로 옮길 수 있어요'
+        using errcode = '42501';
+    end if;
+    new.deleted_at := now();          -- 시각·누가는 DB 가 적는다 (폰 시계·위조 방지)
+    new.deleted_by := auth.uid();
+  elsif old.deleted_at is not null and new.deleted_at is null then
+    new.deleted_by := null;           -- 되살리기 (여기 왔으면 관리자)
+  else
+    new.deleted_at := old.deleted_at; -- 그 밖의 고치기는 휴지통 칸을 못 건드린다
+    new.deleted_by := old.deleted_by;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists pattern_intakes_trash_guard on public.pattern_intakes;
+create trigger pattern_intakes_trash_guard before insert or update on public.pattern_intakes
+  for each row execute function public.pattern_intakes_trash_guard();
+
+-- 3) 행 지우기(완전 삭제)는 관리자만 — 직원이 내 작성 중 의뢰를 영구 삭제하던 길을 닫는다
+drop policy if exists "intakes_delete" on public.pattern_intakes;
+create policy "intakes_delete" on public.pattern_intakes
+  for delete to authenticated
+  using (public.intake_is_admin());
+
+-- 4) 사진 올리기·바꾸기·지우기 판정 — 휴지통에 든 의뢰의 사진은 관리자만
+create or replace function public.intake_photo_writable(object_name text)
+returns boolean language sql stable set search_path = '' as $$
+  select case (storage.foldername(object_name))[1]
+    when 'examples' then public.intake_is_admin()
+    when 'intakes' then exists (
+      select 1 from public.pattern_intakes i
+      where i.id::text = (storage.foldername(object_name))[2]
+        and (public.intake_is_admin()
+             or (i.created_by = auth.uid() and i.status <> 'reviewed' and i.deleted_at is null))
+    )
+    else false
+  end
+$$;
+```
+
+---
+
+## C-3 — 휴지통 규칙 보강 (2026-10-20 적용됨 · 마이그레이션 `intake_trash_hardening`)
+
+C-2 다음에 실행한다(다시 실행해도 안전). 보안 리뷰 권장을 반영한 것:
+
+| 막은 길 | 어떻게 |
+|---|---|
+| 제출 의뢰를 «작성 중» 으로 되돌린 뒤(또는 한 번에) 휴지통에 넣기 | 직원은 제출→작성 중 되돌리기 금지(`INTAKE_STATUS_BACK`) · 휴지통 보낼 때 고치기 전·후 둘 다 작성 중이어야 함 |
+| 남의 이메일로 의뢰 만들기(«전체» 탭에 남 이름) | 만들 때 작성자 이메일을 로그인 JWT 이메일로 덮음 · 제출/검토 기록은 비움 |
+| 제출·검토 기록 위조 | 직원 고치기에서 submitted_at·reviewed_at·reviewed_by 를 원래 값으로 고정(제출할 때 시각만 DB 가 적음) |
+| 살아 있는 의뢰 완전 삭제 | delete 규칙 = 관리자 **그리고** `deleted_at is not null` |
+| 판정이 null 로 새는 것 | «특권» = `coalesce(intake_is_admin(), false)` 또는 RLS 를 안 받는 서버 역할(postgres·service_role) — 서버 역할은 행을 직접 지울 수도 있으므로 관리자와 같게 본다 |
+| 불필요한 표 권한 | `revoke truncate, trigger, references … from authenticated` |
+
+```sql
+-- 함수 두 개(pattern_intakes_stamp · pattern_intakes_trash_guard) 전문은
+-- Supabase 마이그레이션 기록 intake_trash_hardening 과 같다. 요지:
+--   privileged := coalesce(public.intake_is_admin(), false) or current_user not in ('authenticated', 'anon')
+--   stamp INSERT(직원): created_by_email := coalesce(auth.jwt() ->> 'email', ''), submitted_at/reviewed_at/reviewed_by := null
+--   stamp UPDATE(직원): submitted_at/reviewed_at/reviewed_by := old 값 (상태가 submitted 로 바뀌면 submitted_at := now())
+--   trash_guard(직원): old.status <> 'draft' and new.status = 'draft' → 42501
+--                      휴지통 보내기 = 내 것 and old.status = 'draft' and new.status = 'draft' 일 때만
+drop policy if exists "intakes_delete" on public.pattern_intakes;
+create policy "intakes_delete" on public.pattern_intakes
+  for delete to authenticated
+  using (public.intake_is_admin() and deleted_at is not null);
+revoke truncate, trigger, references on public.pattern_intakes from authenticated;
+```
+

@@ -6,10 +6,11 @@
 | architecture.md | 9 | 2026-07-09 |
 | errors.md | 17 | 2026-09-22 |
 | conventions.md | 5 | 2026-07-06 |
-| decisions.md | 21 | 2026-10-20 |
+| decisions.md | 22 | 2026-10-20 |
 | lessons.md | 2 | 2026-07-09 |
 
 ## 최근 추가된 지식 (최근 5건)
+- [2026-10-20] decisions: 패턴 의뢰 지우기=휴지통(deleted_at) — 직원 내 draft 만·되살리기/완전삭제 관리자, 칸 규칙은 트리거 trash_guard, 목록은 deleted_at 거르기 필수 + PWA(intake-sw 껍데기만)
 - [2026-10-20] decisions: 재단 패턴 «공장 보냄» 잠금 풀기 절차 — 창고 `{style}/v{n}/lock` 지우기(대시보드) + 디스크 lock.json 지우기, 하나만 지우면 복원 때 다시 잠김
 - [2026-09-22] decisions: 자동 정리 TTL — uploads 7일·jobs(`web_`만) 30일·24h daemon·realpath 방어·env 로 끄기/조정
 - [2026-09-22] errors: `_find_job_dir` 가 job_id[:6] 부분일치로 폴더를 찾아 폴더명(`web_26…`)을 넣으면 다른 달 작업 ZIP 이 나갔다 → 폴더명 정확일치 우선 + `_<id6>` 접미만

@@ -128,3 +128,10 @@
 - **발견자**: developer
 - **내용**: 잠금 정본은 버전 폴더 `data/cad/{style}/v{n}/lock.json` + 창고(pattern-cad) 물건 `{style}/v{n}/lock` 둘뿐이다(meta.json 은 안 고친다). 화면·API 에는 «풀기» 가 없다(공장 보낸 판을 함부로 못 풀게). 실수로 잠갔으면 사장님 확인 후: ① Supabase 대시보드 → Storage → `pattern-cad` → `{style}/v{n}/lock` 지우기(창고는 덮어쓰기·삭제 규칙이 없어 앱이 못 지운다 — 대시보드에서 사람이) ② Render 셸에서 `rm data/cad/{style}/v{n}/lock.json` ③ 화면 새로고침으로 «공장 보냄» 사라짐 확인. ①을 빼고 ②만 하면 재배포 복원 때 다시 잠긴다. 잠금 기록(누가·언제)은 지우기 전에 lock 내용을 복사해 남겨 둔다.
 - **참조횟수**: 0
+
+### [2026-10-20] 패턴 의뢰 지우기 = 휴지통(deleted_at) · 권한은 트리거로
+- **분류**: decision
+- **발견자**: developer
+- **내용**: pattern_intakes 행 delete 는 관리자만(RLS). 화면 «지우기» 는 `deleted_at` 채우기이고, «누가 어떤 칸을 어떻게 바꾸나»는 RLS 로 못 보므로 BEFORE INSERT/UPDATE 트리거 `pattern_intakes_trash_guard` 가 지킨다 — 직원: 내 draft 만 휴지통·되살리기 금지·휴지통 행은 어떤 칸도 못 고침, deleted_at/by 는 DB 가 now()·auth.uid() 로 덮음. 사진 판정 `intake_photo_writable` 은 휴지통 행이면 관리자만. 목록 쿼리는 반드시 `deleted_at is null`(전체·내 것) / `not null`(휴지통). 완전 삭제는 사진 먼저 지우고 «덜 지워지면 멈춤»(권한 없으면 storage.remove 가 오류 없이 덜 지운다) → 행 delete. 권한 시험은 DO 블록에서 set_config('role','authenticated')+request.jwt.claims 로 흉내 내고 끝에 raise 로 결과를 내보내며 전부 되돌린다. PWA: intake.webmanifest+intake-sw.js(scope /static/screens/), 껍데기만 네트워크 먼저 보관·/api·외부 요청 무접촉. playwright set_offline 은 서비스워커 fetch 에 안 먹는다 — 오프라인 시험은 서버를 꺼서. 보강(C-3 hardening): 직원 제출→작성중 되돌리기 금지(되돌린 뒤 휴지통 우회 차단)·만들 때 작성자 이메일은 JWT 로 덮음·제출/검토 기록은 직원이 못 바꿈·delete 는 관리자 AND deleted_at 있음. 트리거 «특권» 판정은 `coalesce(intake_is_admin(),false) or current_user not in ('authenticated','anon')` — uid null 이 조건식을 null 로 만들어 «통과» 로 새지 않게 명시, 서버 역할은 RLS 를 원래 안 받아 관리자와 같게 본다.
+- **참조횟수**: 0
+

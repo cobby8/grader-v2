@@ -6,6 +6,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>STIZ grader · 패턴 의뢰</title>
 <link rel="icon" href="../assets/logos/stiz-favicon-32.png" />
+<!-- 앱 설치(PWA) — 홈 화면에 «패턴 의뢰» 아이콘으로 깔린다. 껍데기 저장은 intake-sw.js -->
+<link rel="manifest" href="intake.webmanifest" />
+<meta name="theme-color" content="#ffffff" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-title" content="패턴 의뢰" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<link rel="apple-touch-icon" href="intake-icons/apple-touch-icon-180.png" />
 <link rel="stylesheet" href="../styles.css" />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-25..0" />
 <link rel="stylesheet" href="app.css" />
@@ -54,6 +62,20 @@
   .ik-card.is-on .ik-card__box { color: var(--text-strong); }
   .ik-card.is-off { opacity: .45; }
   .ik-selask { grid-column: 1 / -1; margin: 0; font: var(--text-sm-strong); color: var(--red-700); }
+  /* 목록 탭 — 내 의뢰 / 전체 / 휴지통(관리자만) */
+  .ik-tabs { display: flex; gap: 4px; margin-top: 22px; padding: 4px; border-radius: var(--radius-md); background: var(--ink-100); }
+  .ik-tab { flex: 1; height: 40px; border: 0; border-radius: var(--radius-sm); background: none; font: var(--text-sm-strong); color: var(--text-muted); cursor: pointer; }
+  .ik-tab[aria-selected="true"] { background: var(--surface-card); color: var(--text-strong); box-shadow: var(--shadow-sm, 0 1px 2px rgba(14, 17, 20, .08)); }
+  .ik-tabs + .ik-listhead { margin-top: 14px; }
+  .ik-card__who { color: var(--text-muted); }
+  .ik-card__acts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .ik-card__acts .btn { height: 42px; }
+  .ik-card__ask { grid-column: 1 / -1; margin: 0; font: var(--text-sm-strong); color: var(--red-700); }
+  /* 앱 설치 안내 · 연결 없음 */
+  .ik-install { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding: 10px 6px 10px 12px; border-radius: var(--radius-md); background: var(--surface-card); border: 1px solid var(--border-subtle); font: var(--text-sm); color: var(--text-body); }
+  .ik-install p { flex: 1; margin: 0; }
+  .ik-install .ik-bar__back { width: 36px; height: 36px; flex: none; }
+  .ik-offline { background: var(--red-bg); color: var(--red-700); font: var(--text-sm-strong); text-align: center; padding: 6px 12px; }
   .ik-newform { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--surface-card); }
   .ik-newform label { font: var(--text-sm-strong); color: var(--text-body); }
   .ik-newform .input { font-size: 16px; height: 46px; }
@@ -230,6 +252,7 @@
   <div class="ik-bar__title" id="barTitleBox"><b><span id="barTitle">패턴 의뢰</span><span class="material-symbols-outlined ik-bar__edit hidden" id="barEdit" aria-label="이름 고치기">edit</span></b><small id="barSub"></small></div>
   <button class="ik-save" id="saveState" type="button" aria-live="polite"></button>
 </header>
+<div class="ik-offline hidden" id="offlineNote" role="status">연결 없음 — 다시 연결되면 이어서 저장해요</div>
 <div class="ik-practice hidden" id="practiceNote">연습 모드 — 이 브라우저에만 저장돼요</div>
 <div class="ik-ro hidden" id="roNote">검토 완료된 의뢰라 고칠 수 없어요</div>
 
@@ -294,12 +317,26 @@ function RealStore(supa, user) {
   const T = () => supa.from("pattern_intakes");
   const B = () => supa.storage.from("pattern-intake");
   const urls = new Map();
+  // 행 하나를 «0줄이면 실패» 로 고친다 — 권한이 없으면 오류 대신 0줄이 오기 때문
+  const one = async (q) => {
+    const { data, error } = await q.select("id");
+    if (error) throw error;
+    if (!data || !data.length) throw new Error("NOEDIT");
+  };
   return {
     mode: "real",
     userId: user.id,
-    async list() {
-      const { data, error } = await T().select("id,code,product_name,size_label,status,updated_at")
-        .eq("created_by", user.id).order("updated_at", { ascending: false }).limit(50);
+    // 관리자 판정 — DB 의 intake_is_admin() 과 같은 기준(app_metadata.role). 화면 표시용일 뿐, 최종 판정은 DB 규칙이다
+    isAdmin: ((user.app_metadata || {}).role) === "admin",
+    // tab: mine = 내 것(휴지통 빼고) · all = 모든 직원 것(휴지통 빼고) · trash = 휴지통
+    async list(tab) {
+      let q = T().select("id,code,product_name,size_label,status,updated_at,created_by,created_by_email,deleted_at");
+      if (tab === "trash") q = q.not("deleted_at", "is", null).order("deleted_at", { ascending: false });
+      else {
+        q = q.is("deleted_at", null).order("updated_at", { ascending: false });
+        if (tab !== "all") q = q.eq("created_by", user.id);
+      }
+      const { data, error } = await q.limit(tab === "mine" ? 50 : 200);
       if (error) throw error;
       return data;
     },
@@ -322,17 +359,39 @@ function RealStore(supa, user) {
       if (error) throw error;
       return data;
     },
-    async remove(id) {
-      // 사진 창고 규칙은 «그 의뢰를 고칠 수 있는 사람»만 지우게 한다 → 의뢰 행이 있을 때 사진부터 지운다.
-      // 그 전에 지금도 «내 작성 중» 인지 다시 읽어 확인한다 (다른 기기에서 제출했으면 사진만 사라지는 일 방지)
-      const { data: row, error: e0 } = await T().select("status,created_by").eq("id", id).single();
+    // 휴지통으로 — 행·사진은 그대로 두고 deleted_at 만 채운다(시각·누가는 DB 트리거가 적는다).
+    // 직원은 «내 작성 중» 만 된다 — 다른 기기에서 그사이 제출했을 수 있어 다시 읽어 확인한다
+    async trash(id) {
+      if (!this.isAdmin) {
+        const { data: row, error: e0 } = await T().select("status,created_by,deleted_at").eq("id", id).single();
+        if (e0) throw e0;
+        if (row.status !== "draft" || row.created_by !== user.id || row.deleted_at) throw new Error("NOEDIT");
+      }
+      await one(T().update({ deleted_at: new Date().toISOString() }).eq("id", id).is("deleted_at", null));
+    },
+    async restore(id) {                                 // 되살리기 — 관리자만(DB 가 막는다)
+      await one(T().update({ deleted_at: null }).eq("id", id).not("deleted_at", "is", null));
+    },
+    // 완전 삭제 — 관리자만, 휴지통에 든 것만. 사진 창고 규칙이 «행이 있을 때» 판정하므로 사진부터 지우고 행을 지운다
+    async purge(id) {
+      const { data: row, error: e0 } = await T().select("deleted_at").eq("id", id).single();
       if (e0) throw e0;
-      if (row.status !== "draft" || row.created_by !== user.id) throw new Error("NOEDIT");
-      const { data: files } = await B().list("intakes/" + id, { limit: 1000 });
-      if (files && files.length) await B().remove(files.map((f) => "intakes/" + id + "/" + f.name));
-      const { data, error } = await T().delete().eq("id", id).select("id");
-      if (error) throw error;
-      if (!data || !data.length) throw new Error("NOEDIT");
+      if (!row.deleted_at) throw new Error("NOEDIT");   // 휴지통을 거치지 않은 것은 지우지 않는다
+      // 목록은 한 번에 1000개까지라 «빌 때까지» 읽고 지우기를 되풀이한다 (넘치면 남은 사진이 주인 없이 남는다)
+      for (let round = 0; round < 100; round++) {
+        const { data: files, error: e1 } = await B().list("intakes/" + id, { limit: 1000 });
+        if (e1) throw e1;
+        const real = (files || []).filter((f) => f.id); // id 없는 것은 하위 폴더 표시 — 파일만
+        if (!real.length) break;
+        if (round === 99) throw new Error("사진이 너무 많아 다 지우지 못했어요. 다시 눌러 주세요.");
+        const paths = real.map((f) => "intakes/" + id + "/" + f.name);
+        const { data: gone, error: e2 } = await B().remove(paths);
+        if (e2) throw e2;
+        // 권한이 없으면 오류 없이 덜 지워진다 — 사진이 남았는데 행을 지우면 주인 없는 파일이 된다
+        if (!gone || gone.length < paths.length) throw new Error("NOEDIT");
+      }
+      // 휴지통에 든 것만 — DB 규칙(관리자 + deleted_at 있음)과 이중으로 막는다
+      await one(T().delete().eq("id", id).not("deleted_at", "is", null));
     },
     async refresh() {
       try { const { data, error } = await supa.auth.refreshSession(); return !error && !!(data && data.session); } catch (e) { return false; }
@@ -394,10 +453,14 @@ function PracticeStore() {
   return {
     mode: "practice",
     userId: "practice",
+    // 연습 모드는 혼자 쓰는 로컬이라 관리자 화면을 기본으로 보인다. 직원 화면을 시험하려면 주소에 ?practice_role=staff
+    isAdmin: new URLSearchParams(location.search).get("practice_role") !== "staff",
     async refresh() { return true; },
     async token() { return ""; },
-    async list() {
-      return load().sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
+    async list(tab) {                                   // 실제 저장소와 같은 갈래 — 연습 의뢰는 전부 «내 것»
+      const rows = load().filter((r) => (tab === "trash") === !!r.deleted_at);
+      const k = tab === "trash" ? "deleted_at" : "updated_at";
+      return rows.sort((a, b) => (a[k] < b[k] ? 1 : -1));
     },
     async create(fields) {
       const rows = load();
@@ -421,9 +484,22 @@ function PracticeStore() {
       save(rows);
       return { id, status: r.status, updated_at: r.updated_at, submitted_at: r.submitted_at };
     },
-    async remove(id) {
-      save(load().filter((x) => x.id !== id));
+    // 휴지통 · 되살리기 · 완전 삭제 — 실제 저장소(DB 규칙)와 같은 조건을 여기서 흉내 낸다
+    async trash(id) {
+      const rows = load(), r = rows.find((x) => x.id === id);
+      if (!r || r.deleted_at || (!this.isAdmin && r.status !== "draft")) throw new Error("NOEDIT");
+      r.deleted_at = now(); r.deleted_by = "practice"; save(rows);
+    },
+    async restore(id) {
+      const rows = load(), r = rows.find((x) => x.id === id);
+      if (!r || !r.deleted_at || !this.isAdmin) throw new Error("NOEDIT");
+      r.deleted_at = null; r.deleted_by = null; save(rows);
+    },
+    async purge(id) {
+      const r = load().find((x) => x.id === id);
+      if (!r || !r.deleted_at || !this.isAdmin) throw new Error("NOEDIT");
       for (const k of await files.keys()) if (String(k).startsWith("intakes/" + id + "/")) await files.del(k);
+      save(load().filter((x) => x.id !== id));
     },
     async upload(path, blob) { await files.put(path, blob); },
     async removeFile(path) { await files.del(path); },
@@ -449,7 +525,10 @@ function toast(msg) {
 }
 function errText(e) {
   const m = (e && (e.message || e.error_description || e.error)) || String(e || "");
-  if (isNoRow(e) || m === "NOEDIT") return "이 의뢰는 지금 고칠 수 없어요 (검토 완료됐거나 내 의뢰가 아니에요)";
+  if (isNoRow(e) || m === "NOEDIT") return "이 의뢰는 지금 고칠 수 없어요 (검토 완료·휴지통이거나 내 의뢰가 아니에요)";
+  if (/INTAKE_TRASHED/.test(m)) return "휴지통에 있는 의뢰라 관리자만 고치거나 되살릴 수 있어요";
+  if (/INTAKE_TRASH_DENIED/.test(m)) return "내가 작성 중인 의뢰만 휴지통으로 옮길 수 있어요";
+  if (/INTAKE_STATUS_BACK/.test(m)) return "제출한 의뢰를 작성 중으로 되돌릴 수 없어요";
   if (/JWT|token|401|expired/i.test(m)) return "로그인이 끝났어요. 다시 로그인해 주세요.";
   if (/Failed to fetch|NetworkError|network/i.test(m)) return "인터넷 연결을 확인해 주세요.";
   return m;
@@ -461,8 +540,9 @@ function when(iso) {
 }
 const tokensOf = (sel) => Array.from(K.tokens(sel));
 const isNoRow = (e) => !!e && (e.code === "PGRST116" || /0 rows|no\) rows/i.test(e.message || ""));
-// 고칠 수 있는 의뢰인가 — 검토 완료 전 + (실제 저장소면) 내가 만든 것
-const canEdit = (row) => row.status !== "reviewed" && (store.mode !== "real" || row.created_by === store.userId);
+// 고칠 수 있는 의뢰인가 — 휴지통 아님 + 검토 완료 전 + (실제 저장소면) 내가 만든 것
+// (남의 의뢰는 «전체» 탭에서 열어도 읽기 전용 — 고치기·사진 추가·지우기 단추가 안 나온다)
+const canEdit = (row) => !row.deleted_at && row.status !== "reviewed" && (store.mode !== "real" || row.created_by === store.userId);
 function normData(d) {
   const out = Object.assign({ sel: null, photos: {}, skipped: {}, measures: {}, answers: {}, extras: [] }, d || {});
   out.sel = Object.assign(K.defaults(BASE), out.sel || {}, { base: BASE.key });
@@ -481,7 +561,10 @@ async function init() {
   // 공개 설정을 못 읽으면 멈춘다 — 짐작으로 연습 모드에 들어가면 운영에서도 그 폰에만 저장된다
   let cfg = null;
   try { const r = await fetch("/api/public-config"); if (r.ok) cfg = await r.json(); } catch (e) {}
-  if (!cfg) { $("#main").innerHTML = '<p class="ik-empty">서버에 연결하지 못했어요. 새로고침해 주세요.</p>'; return; }
+  if (!cfg) {
+    $("#main").innerHTML = '<p class="ik-empty">' + (navigator.onLine === false ? "연결 없음 — 인터넷이 연결되면 새로고침해 주세요." : "서버에 연결하지 못했어요. 새로고침해 주세요.") + "</p>";
+    return;
+  }
   VISION = !!cfg.intake_vision;
   if (cfg.supabase_url && cfg.supabase_publishable_key && window.supabase) {
     const supa = window.supabase.createClient(cfg.supabase_url, cfg.supabase_publishable_key);
@@ -514,64 +597,111 @@ async function showList() {
   $("#barEdit").classList.add("hidden");
   $("#barTitleBox").classList.remove("is-link");
   setSave("");
-  const main = $("#main");
-  main.innerHTML = '<div id="newBox">' + NEW_BTN + "</div>" +
-    '<div class="ik-listhead"><h2 class="ik-h3">내 의뢰</h2><span id="selSlot"></span></div>' +
-    '<div class="ik-cards" id="cards"><div class="ik-center"><div class="spinner"></div></div></div><div id="selBar"></div>';
-  listRows = []; selMode = false; selAsk = false; picked.clear();
-  try { listRows = await store.list(); }
-  catch (e) { $("#cards").innerHTML = '<p class="ik-empty">목록을 불러오지 못했어요 — ' + esc(errText(e)) + "</p>"; return; }
+  if (listTab === "trash" && !store.isAdmin) listTab = "mine";   // 휴지통은 관리자만
+  const tabs = [["mine", "내 의뢰"], ["all", "전체"]].concat(store.isAdmin ? [["trash", "휴지통"]] : []);
+  $("#main").innerHTML = '<div id="newBox">' + NEW_BTN + '</div><div id="installSlot"></div>' +
+    '<div class="ik-tabs" role="tablist">' + tabs.map(([k, name]) =>
+      '<button class="ik-tab" type="button" role="tab" data-tab="' + k + '" aria-selected="' + (k === listTab) + '">' + name + "</button>").join("") + "</div>" +
+    '<div class="ik-listhead"><h2 class="ik-h3" id="listTitle"></h2><span id="selSlot"></span></div>' +
+    '<div class="ik-cards" id="cards"></div><div id="selBar"></div>';
+  renderInstall();
+  loadList();
+}
+// 지금 탭의 목록을 다시 읽는다 — 탭을 바꿀 때마다
+async function loadList() {
+  listRows = []; selMode = false; selAsk = false; picked.clear(); purgeAsk = null;
+  for (const t of document.querySelectorAll(".ik-tab")) t.setAttribute("aria-selected", String(t.dataset.tab === listTab));
+  $("#listTitle").textContent = { mine: "내 의뢰", all: "전체 의뢰", trash: "휴지통" }[listTab];
+  $("#selSlot").innerHTML = ""; $("#selBar").innerHTML = "";
+  $("#cards").innerHTML = '<div class="ik-center"><div class="spinner"></div></div>';
+  const tab = listTab;
+  let rows;
+  try { rows = await store.list(tab); }
+  catch (e) { if (tab === listTab) $("#cards").innerHTML = '<p class="ik-empty">목록을 불러오지 못했어요 — ' + esc(errText(e)) + "</p>"; return; }
+  if (tab !== listTab || cur) return;                   // 그사이 다른 탭을 눌렀으면 버린다
+  listRows = rows;
   renderCards();
 }
 
-// 고르기 상태 — selMode: 고르는 중 · picked: 고른 의뢰 id · selAsk: «정말 지울까» 묻는 중
-let listRows = [], selMode = false, selAsk = false;
+// 탭 — mine: 내 의뢰 · all: 모든 직원 의뢰 · trash: 휴지통(관리자만). 고른 탭은 이 탭(창)에 기억한다
+let listTab = (() => { try { return sessionStorage.getItem("grader-intake-tab") || "mine"; } catch (e) { return "mine"; } })();
+// 고르기 상태(관리자만) — selMode: 고르는 중 · picked: 고른 의뢰 id · selAsk: «정말 옮길까» 묻는 중
+// purgeAsk: 휴지통에서 완전 삭제를 묻는 중인 카드 {id, n} — n=1 첫 확인, n=2 마지막 확인
+let listRows = [], selMode = false, selAsk = false, purgeAsk = null;
 const picked = new Set();
+// 작성자 표시 — 나 / 이메일 앞부분
+const whoOf = (r) => (r.created_by === store.userId ? "나" : String(r.created_by_email || "").split("@")[0] || "알 수 없음");
 function renderCards() {
-  // 작성 중인 것만 지울 수 있다(제출한 것은 규칙상 본인이 못 지운다) — 지울 게 있을 때만 «고르기»
-  const drafts = listRows.filter((r) => r.status === "draft");
-  $("#selSlot").innerHTML = drafts.length && !selMode ? '<button class="btn btn--ghost btn--sm" type="button" id="selBtn">고르기</button>' : "";
+  const trashTab = listTab === "trash";
+  // 여러 건 휴지통 보내기는 관리자만(직원은 열어서 한 건씩) — 휴지통 탭에서는 고르지 않는다
+  const canPick = store.isAdmin && !trashTab;
+  $("#selSlot").innerHTML = canPick && listRows.length && !selMode ? '<button class="btn btn--ghost btn--sm" type="button" id="selBtn">고르기</button>' : "";
   $("#cards").innerHTML = listRows.length ? listRows.map((r) => {
-    const can = selMode && r.status === "draft", on = can && picked.has(r.id);
+    const can = selMode && canPick, on = can && picked.has(r.id);
+    const meta = trashTab ? "지운 때 " + when(r.deleted_at) + " · " + whoOf(r)
+      : when(r.updated_at) + (listTab === "all" ? " · " + whoOf(r) : "");
+    let acts = "";
+    if (trashTab) {                                     // 휴지통 카드 — 되살리기 · 완전 삭제(두 번 묻는다)
+      const ask = purgeAsk && purgeAsk.id === r.id ? purgeAsk.n : 0;
+      acts = '<div class="ik-card__acts">' + (ask ?
+        '<p class="ik-card__ask">' + (ask === 1 ? "완전히 지울까요? 사진도 함께 지워지고 되돌릴 수 없어요." : "정말 지워요? 마지막 확인이에요.") + "</p>" +
+        '<button class="btn btn--secondary" type="button" data-purge-no="' + esc(r.id) + '">그만두기</button>' +
+        '<button class="btn btn--danger" type="button" data-purge-yes="' + esc(r.id) + '">' + (ask === 1 ? "지우기" : "완전 삭제") + "</button>"
+        : '<button class="btn btn--secondary" type="button" data-restore="' + esc(r.id) + '"><span class="material-symbols-outlined">restore_from_trash</span>되살리기</button>' +
+          '<button class="btn btn--ghost" type="button" data-purge="' + esc(r.id) + '">완전 삭제</button>') + "</div>";
+    }
     return '<div class="ik-card' + (selMode ? (can ? (on ? " is-on" : "") : " is-off") : "") + '" data-card="' + esc(r.id) + '">' +
       '<button class="ik-card__open" type="button" data-id="' + esc(r.id) + '"' + (selMode && !can ? " disabled" : "") + (can ? ' aria-pressed="' + on + '"' : "") + ">" +
       (can ? '<span class="material-symbols-outlined ik-card__box">' + (on ? "check_box" : "check_box_outline_blank") + "</span>" : "") +
       '<span class="ik-card__body">' +
       '<span class="ik-card__top"><span class="ik-card__code">' + esc(r.code) + '</span><span class="ik-status ik-status--' + esc(r.status) + '">' + esc(STATUS[r.status] || r.status) + "</span></span>" +
       '<span class="ik-card__name">' + esc(r.product_name || "(제품 이름 없음)") + (r.size_label ? " · " + esc(r.size_label) : "") + "</span>" +
-      '<span class="ik-card__meta">' + esc(when(r.updated_at)) + "</span></span></button></div>";
-  }).join("") : '<p class="ik-empty">아직 의뢰가 없어요.</p>';
+      '<span class="ik-card__meta">' + esc(meta) + "</span></span></button>" + acts + "</div>";
+  }).join("") : '<p class="ik-empty">' + (trashTab ? "휴지통이 비어 있어요." : listTab === "all" ? "의뢰가 없어요." : "아직 의뢰가 없어요.") + "</p>";
   renderSelBar();
 }
-// 아래 막대 — 고르는 중에만. «N개 지우기» → 한 번 더 묻고 → 지운다
+// 아래 막대 — 고르는 중에만. «N개 휴지통으로» → 한 번 더 묻고 → 옮긴다
 function renderSelBar() {
   const n = picked.size;
   $("#selBar").innerHTML = !selMode ? "" :
     '<div class="ik-foot"><div class="ik-foot__in">' +
-    (selAsk ? '<p class="ik-selask">' + n + "개를 지워요. 사진도 함께 지워져요.</p>" : "") +
+    (selAsk ? '<p class="ik-selask">' + n + "개를 휴지통으로 옮겨요. 휴지통에서 되살릴 수 있어요.</p>" : "") +
     '<button class="btn btn--secondary" type="button" id="' + (selAsk ? "selNo" : "selCancel") + '">그만두기</button>' +
-    '<button class="btn btn--danger" type="button" id="' + (selAsk ? "selYes" : "selDel") + '"' + (n ? "" : " disabled") + ">" + (n ? n + "개 지우기" : "지우기") + "</button></div></div>";
+    '<button class="btn btn--danger" type="button" id="' + (selAsk ? "selYes" : "selDel") + '"' + (n ? "" : " disabled") + ">" + (n ? n + "개 휴지통으로" : "휴지통으로") + "</button></div></div>";
 }
-async function deletePicked(btn) {
+async function trashPicked(btn) {
   btn.disabled = true; $("#selNo").disabled = true;
-  btn.innerHTML = '<span class="spinner ik-ai__spin"></span>지우는 중';
+  btn.innerHTML = '<span class="spinner ik-ai__spin"></span>옮기는 중';
   let ok = 0, fail = null;
-  for (const id of [...picked]) {                      // 하나씩 — 하나가 실패해도 나머지는 지운다
+  for (const id of [...picked]) {                      // 하나씩 — 하나가 실패해도 나머지는 옮긴다(실패한 것은 고른 채 남는다)
     try {
-      await store.remove(id);
+      await store.trash(id);
       ok++; picked.delete(id);
       listRows = listRows.filter((r) => r.id !== id);
     } catch (err) { fail = err; }
   }
   selAsk = false;
-  if (!fail || !listRows.some((r) => r.status === "draft")) { selMode = false; picked.clear(); }
+  if (!fail || !listRows.length) { selMode = false; picked.clear(); }
   renderCards();
-  toast(!fail ? ok + "개 지웠어요"
-    : ok ? ok + "개 지웠어요 — " + picked.size + "개는 못 지웠어요: " + errText(fail)
-    : "지우지 못했어요 — " + errText(fail));
+  toast(!fail ? ok + "개를 휴지통으로 옮겼어요"
+    : ok ? ok + "개 옮겼어요 — " + picked.size + "개는 못 옮겼어요: " + errText(fail)
+    : "옮기지 못했어요 — " + errText(fail));
+}
+// 휴지통 카드 — 되살리기 / 완전 삭제
+async function trashAction(btn, kind, id) {
+  btn.disabled = true;
+  try {
+    if (kind === "restore") await store.restore(id); else await store.purge(id);
+    listRows = listRows.filter((r) => r.id !== id);
+    purgeAsk = null; renderCards();
+    toast(kind === "restore" ? "되살렸어요" : "완전히 지웠어요");
+  } catch (err) {
+    btn.disabled = false;
+    toast((kind === "restore" ? "되살리지 못했어요 — " : "지우지 못했어요 — ") + errText(err));
+  }
 }
 
-// 목록 화면 동작 — 새 의뢰(이름부터 받기)·열기·고르기·지우기
+// 목록 화면 동작 — 새 의뢰(이름부터 받기)·탭·열기·고르기·휴지통
 $("#main").addEventListener("click", async (e) => {
   if (cur) return;                                     // 의뢰를 연 화면에서는 아래 단계 화면 동작이 맡는다
   const b = e.target.closest("button");
@@ -586,6 +716,23 @@ $("#main").addEventListener("click", async (e) => {
   }
   if (b.id === "newCancel") { $("#newBox").innerHTML = NEW_BTN; return; }
   if (b.id === "newGo") { newIntake(); return; }
+  if (b.id === "installGo") { installApp(); return; }
+  if (b.id === "installClose") { closeInstall(); return; }
+  if (b.dataset.tab) {
+    if (b.dataset.tab === listTab) return;
+    listTab = b.dataset.tab;
+    try { sessionStorage.setItem("grader-intake-tab", listTab); } catch (err) {}
+    loadList();
+    return;
+  }
+  if (b.dataset.restore) { trashAction(b, "restore", b.dataset.restore); return; }
+  if (b.dataset.purge) { purgeAsk = { id: b.dataset.purge, n: 1 }; renderCards(); return; }
+  if (b.dataset.purgeNo) { purgeAsk = null; renderCards(); return; }
+  if (b.dataset.purgeYes) {
+    if (purgeAsk && purgeAsk.id === b.dataset.purgeYes && purgeAsk.n === 1) { purgeAsk.n = 2; renderCards(); return; }
+    trashAction(b, "purge", b.dataset.purgeYes);
+    return;
+  }
   if (b.dataset.id) {
     if (selMode) {                                      // 고르는 중엔 카드를 누르면 고름/풂
       const id = b.dataset.id;
@@ -600,7 +747,7 @@ $("#main").addEventListener("click", async (e) => {
   if (b.id === "selCancel") { selMode = false; selAsk = false; picked.clear(); renderCards(); return; }
   if (b.id === "selDel") { selAsk = true; renderSelBar(); return; }
   if (b.id === "selNo") { selAsk = false; renderSelBar(); return; }
-  if (b.id === "selYes") { deletePicked(b); return; }
+  if (b.id === "selYes") { trashPicked(b); return; }
 });
 $("#main").addEventListener("input", (e) => {
   if (!cur && e.target.id === "newName") $("#newGo").disabled = !e.target.value.trim();
@@ -641,7 +788,8 @@ async function openIntake(id, s) {
   go(s);
 }
 function showRo() {
-  $("#roNote").textContent = cur.status === "reviewed" ? "검토 완료된 의뢰라 고칠 수 없어요" : "다른 사람의 의뢰라 볼 수만 있어요";
+  $("#roNote").textContent = cur.deleted_at ? "휴지통에 있는 의뢰라 볼 수만 있어요"
+    : cur.status === "reviewed" ? "검토 완료된 의뢰라 고칠 수 없어요" : "다른 사람의 의뢰라 볼 수만 있어요";
   $("#roNote").classList.toggle("hidden", !readOnly);
 }
 
@@ -760,7 +908,7 @@ function mergePhotos(other) {
   }
 }
 function lockReadOnly(row) {
-  if (row) cur.status = row.status;
+  if (row) { cur.status = row.status; cur.deleted_at = row.deleted_at; }
   readOnly = true; pending = {}; dropBackup();
   showRo(); renderBar(); renderSteps(); renderStep();
   if (sheet) renderSheet();
@@ -777,7 +925,8 @@ async function flush() {
     try {
       return await store.update(cur.id, patch, cur.updated_at);
     } catch (e) {
-      if (!isNoRow(e)) throw e;
+      // 휴지통에 든 의뢰(다른 기기에서 옮김)는 DB 트리거가 오류로 막는다 — 0줄과 같이 다시 읽어 잠근다
+      if (!isNoRow(e) && !/INTAKE_TRASHED/.test((e && e.message) || "")) throw e;
       // 0줄 — 그사이 다른 곳에서 고쳤거나, 이제 고칠 수 없게 됐다. 다시 읽어 가른다
       const fresh = await store.get(cur.id);
       if (!canEdit(fresh)) { lockReadOnly(fresh); throw new Error("NOEDIT"); }
@@ -886,7 +1035,7 @@ function stepInfo() {
   h += '<div class="ik-field"><label for="fUrl">판매 링크</label><input class="input" id="fUrl" data-f="ref_url" type="url" inputmode="url" autocomplete="off" placeholder="https://" value="' + esc(cur.ref_url || "") + '"></div>';
   h += '<div class="ik-field"><label for="fNote">현장 메모</label><textarea class="input" id="fNote" data-f="note" rows="3">' + esc(cur.note || "") + "</textarea></div>";
   if (cur.status === "draft" && !readOnly) {
-    h += '<div class="ik-danger" id="delZone"><button class="ik-linkbtn" type="button" id="delAsk">이 의뢰 지우기</button></div>';
+    h += '<div class="ik-danger" id="delZone"><button class="ik-linkbtn" type="button" id="delAsk">휴지통으로 옮기기</button></div>';
   }
   return h;
 }
@@ -1030,16 +1179,17 @@ $("#main").addEventListener("click", async (e) => {
     return;
   }
   if (b.id === "delAsk") {
-    $("#delZone").innerHTML = '<p class="ik-muted" style="margin:0 0 10px">이 의뢰와 올린 사진을 모두 지울까요? 되돌릴 수 없어요.</p>' +
-      '<div class="ik-addrow"><button class="btn btn--secondary" type="button" id="delNo">그만두기</button><button class="btn btn--danger" type="button" id="delYes">지우기</button></div>';
+    $("#delZone").innerHTML = '<p class="ik-muted" style="margin:0 0 10px">휴지통으로 옮길까요? 관리자가 되살릴 수 있어요</p>' +
+      '<div class="ik-addrow"><button class="btn btn--secondary" type="button" id="delNo">그만두기</button><button class="btn btn--danger" type="button" id="delYes">휴지통으로</button></div>';
     return;
   }
   if (b.id === "delNo") { renderStep(); return; }
   if (b.id === "delYes") {
     b.disabled = true;
     clearTimeout(saveTimer); pending = {};
-    try { await store.remove(cur.id); dropBackup(); location.assign("intake.html"); }
-    catch (err) { b.disabled = false; toast("지우지 못했어요 — " + errText(err)); }
+    // 휴지통으로 — 행·사진은 남는다(관리자가 되살리거나 완전 삭제한다)
+    try { await store.trash(cur.id); dropBackup(); location.assign("intake.html"); }
+    catch (err) { b.disabled = false; toast("휴지통으로 옮기지 못했어요 — " + errText(err)); }
   }
 });
 function refreshSubmit() {
@@ -1403,6 +1553,46 @@ function confirmGroup(gkey) {
 for (const id of ["fileCam", "fileLib"]) {
   $("#" + id).addEventListener("change", (e) => { const fs = Array.from(e.target.files || []); e.target.value = ""; addPhotos(fs); });
 }
+
+/* ---------- 앱 설치(PWA) · 연결 상태 ----------
+   안드로이드 크롬: 설치 조건(manifest + 서비스워커 + HTTPS)이 맞으면 크롬이 beforeinstallprompt 를 준다 → «설치» 단추
+   아이폰 사파리: 설치 단추를 주지 않는다 → «공유 → 홈 화면에 추가» 안내 한 줄(닫으면 다시 안 나온다) */
+let installEvt = null;
+const INSTALL_KEY = "grader-intake-install-hint-closed";
+const isStandalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+function renderInstall() {
+  const slot = $("#installSlot");
+  if (!slot) return;
+  let closed = false;
+  try { closed = localStorage.getItem(INSTALL_KEY) === "1"; } catch (e) {}
+  const x = '<button class="ik-bar__back" type="button" id="installClose" aria-label="안내 닫기"><span class="material-symbols-outlined">close</span></button>';
+  slot.innerHTML = isStandalone() || closed ? ""
+    : installEvt ? '<div class="ik-install"><p>홈 화면에 앱으로 설치할 수 있어요</p><button class="btn btn--primary btn--sm" type="button" id="installGo">설치</button>' + x + "</div>"
+    : isIOS() ? '<div class="ik-install"><p>아래 공유 단추 → «홈 화면에 추가» 하면 앱처럼 열려요</p>' + x + "</div>"
+    : "";
+}
+async function installApp() {
+  if (!installEvt) return;
+  const ev = installEvt; installEvt = null;
+  ev.prompt();
+  try { await ev.userChoice; } catch (e) {}
+  renderInstall();
+}
+function closeInstall() {
+  try { localStorage.setItem(INSTALL_KEY, "1"); } catch (e) {}
+  renderInstall();
+}
+window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installEvt = e; renderInstall(); });
+window.addEventListener("appinstalled", () => { installEvt = null; renderInstall(); });
+// 화면 껍데기만 저장하는 서비스워커 — 의뢰·사진·로그인 요청은 언제나 네트워크로 간다(intake-sw.js)
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("intake-sw.js", { scope: "./" }).catch(() => {});
+
+// 연결 없음 띠 — 다시 연결되면 못 한 저장을 이어서 한다
+function netState() { $("#offlineNote").classList.toggle("hidden", navigator.onLine !== false); }
+window.addEventListener("offline", netState);
+window.addEventListener("online", () => { netState(); if (cur && !readOnly) flush(); });
+netState();
 
 init();
 </script>
