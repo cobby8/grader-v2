@@ -314,7 +314,7 @@ def _glyph_ink_bounds(glyphset, glyph_name: str):
 
 
 def place_number(text, font, cap_h_pt: float, center_x: float, center_y: float, color,
-                 glyph_source=None):
+                 glyph_source=None, outline=None):
     """번호('7','20' 등)를 '자릿수 높이=cap_h_pt' 로 (center_x, center_y) 잉크중심에 배치.
 
     ── 이슈1(번호 글리프셋) 분기 ──
@@ -338,6 +338,8 @@ def place_number(text, font, cap_h_pt: float, center_x: float, center_y: float, 
       center_x   : 번호 가로 중심(시트 절대좌표 pt).
       center_y   : 번호 잉크 세로 중심(시트 절대좌표 pt).
       color      : CMYK (c,m,y,k). 0~1 또는 0~100 모두 허용.
+      outline    : (2026-10-21) {"color_cmyk", "width_pt"} | None — 테두리 번호. 같은 윤곽을 두께×2 로 먼저 긋고
+                   그 위에 채워, 글자 몸 바깥으로 width_pt 만큼 테두리가 보인다(cap_h_pt 는 글자 몸 높이).
     반환: (ops_str, warnings) — render_text_ops 와 동일 규약(ascii ops, k fill, q…Q).
     """
     warnings: List[str] = []
@@ -448,7 +450,12 @@ def place_number(text, font, cap_h_pt: float, center_x: float, center_y: float, 
     c, m, y, k = _normalize_cmyk(color)
     color_op = f"{fmt(c)} {fmt(m)} {fmt(y)} {fmt(k)} k"
     body = "\n".join(glyph_blocks)
-    ops_str = f"q\n{color_op}\n{body}\nf\nQ"
+    stroke = ""
+    if outline and float(outline.get("width_pt") or 0) > 0:
+        oc, om, oy, ok = _normalize_cmyk(outline.get("color_cmyk") or (0, 0, 0, 1))
+        stroke = (f"{fmt(oc)} {fmt(om)} {fmt(oy)} {fmt(ok)} K {fmt(2 * float(outline['width_pt']))} w 1 j\n"
+                  f"{body}\nS\n")
+    ops_str = f"q\n{stroke}{color_op}\n{body}\nf\nQ"
     return ops_str, warnings
 
 

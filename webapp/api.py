@@ -1647,8 +1647,9 @@ def job_zip(job_id: str, format: str = "pdf"):
 #    4) preset.json 생성(design/sizes/pieces/area/glyph_source/disabled_sizes).
 
 # ── 사이즈 정렬 순서(작은→큰). 단조성(높이 증가) 검사와 화면 표기에 쓴다. ──
-_SIZE_ORDER = ["5XS", "4XS", "3XS", "2XS", "XS", "S", "M", "L", "XL",
+_SIZE_ORDER = ["2호", "4호", "6호", "8호", "10호", "12호", "14호", "16호", "5XS", "4XS", "3XS", "2XS", "XS", "S", "M", "L", "XL",
                "2XL", "3XL", "4XL", "5XL", "6XL", "7XL"]   # 6XL·7XL — 농구 하의 한 장짜리(2026-10-20, 정렬만 — 기존 패턴 무관)
+#   (2026-10-21) 아동 호수(2~16호)를 성인 5XS 앞에 — 유소년 마스터(14호 등)를 화면·드라이브로 등록할 수 있게(퍼시픽 점검)
 
 # ai_to_path_svg.py 를 한 번만 동적 로드해 캐시한다(scripts/ 는 패키지가 아니라서
 # import 가 안 되므로 파일 경로로 모듈을 직접 읽어 함수만 빌려 쓴다 — engine 무관).
@@ -1948,6 +1949,7 @@ def _set_piece_fit(pieces: List[Dict[str, Any]], base_svg: Optional[str], warnin
                 "split_front": "top_height", "split_back": "top_height", "neck": "stretch", "band": None,
                 "sleeve": None, "part": None}
     chosen = []
+    chosen_kinds: List[str] = []
     for pc in pieces:
         i = pc.get("svg_index")
         if not isinstance(i, int) or not (0 <= i < len(polys)):
@@ -1965,7 +1967,33 @@ def _set_piece_fit(pieces: List[Dict[str, Any]], base_svg: Optional[str], warnin
                 fit = "top_height"                   # 몸판(앞·뒤판·하의 다리) — 소매(가장 큰 조각의 30~75%)는 예전 방식
         if fit:
             pc["fit"] = fit
+        if not use_kind and kind is None:
+            # (2026-10-21) 이름을 순서가 아니라 모양으로 — 순서대로 «앞판·뒤판·넥밴드» 를 붙이니 마스터에 섞인 긴소매가
+            #   «넥밴드» 로 불려 «넥밴드를 빼고 찍습니다» 경고가 디자이너를 헷갈리게 했다(웹툰·반포고·퍼시픽 점검). id 는 그대로.
+            if fit == "top_height":
+                nb = sum(1 for q in chosen_kinds if q == "body")
+                pc["name"] = ("앞판", "뒤판")[nb] if nb < 2 else f"몸판{nb + 1}"
+                chosen_kinds.append("body")
+            elif fit == "stretch":
+                pc["name"] = "넥밴드" if "band" not in chosen_kinds else f"밴드{chosen_kinds.count('band') + 1}"
+                chosen_kinds.append("band")
+            elif areas[i] >= 0.25 * big:
+                chosen_kinds.append("sleeve")
+                pc["name"] = f"소매{chosen_kinds.count('sleeve')}"
+            else:
+                chosen_kinds.append("part")
+                pc["name"] = f"조각{i}"
         chosen.append(f"{pc.get('name') or pc.get('id')}={ {'top_height': '위 맞춤', 'stretch': '늘이기'}.get(fit, '예전') }")
+    # 몸판이 둘이면 목 파임이 깊은 쪽이 앞판(V넥·라운드 모두 앞이 더 깊다) — 퍼시픽 경고가 빠진 뒤판을 «앞판» 이라 불렀다
+    bodies = [pc for pc in pieces if not use_kind and pc.get("fit") == "top_height" and pc.get("name") in ("앞판", "뒤판")]
+    if len(bodies) == 2:
+        from engine.reference import measure_svg_pieces
+        nd = {m["index"]: m["neck_depth"] for m in measure_svg_pieces(polys)}
+        d0, d1 = nd.get(bodies[0]["svg_index"], 0.0), nd.get(bodies[1]["svg_index"], 0.0)
+        if abs(d0 - d1) >= 15.0:
+            bodies[0]["name"], bodies[1]["name"] = ("앞판", "뒤판") if d0 > d1 else ("뒤판", "앞판")
+            chosen = [f"{pc.get('name') or pc.get('id')}={ {'top_height': '위 맞춤', 'stretch': '늘이기'}.get(pc.get('fit'), '예전') }"
+                      for pc in pieces if isinstance(pc.get("svg_index"), int) and 0 <= pc["svg_index"] < len(polys)]
     if chosen:
         warnings.append("ℹ️ 조각별 그림 맞춤: " + " · ".join(chosen))
 
@@ -2688,7 +2716,7 @@ async def create_pattern(
     #   디자인에 «패턴선» 레이어가 없으면 재단선이 아예 안 그려졌다(최근 주문 5건 검증). 디자인에 패턴선/재단선
     #   레이어가 있으면 지워 두 줄을 막는다(없으면 아무것도 안 함).
     preset["cutline"] = {"draw_from": "svg_polygon", "color_cmyk": [0, 0.96, 0.95, 0], "stroke_width": 2.0,
-                         "hide_design_cutline_layer": True}
+                         "hide_design_cutline_layer": "if_present"}
     # (2026-10-20) 함께 찍을 패턴(상의 + 하의) — 등록된 패턴일 때만. 행의 bottom_size(없으면 같은 사이즈)로 찍는다.
     comp = _fix_mojibake(companion).strip() if isinstance(companion, str) and companion.strip() else ""
     if comp:
@@ -2717,6 +2745,12 @@ async def create_pattern(
     #   setdefault 라서 이미 piece_id 가 있으면 그대로 둔다(기존 2패턴 회귀 0).
     front_pid = pieces[0]["id"] if pieces else "front"           # 앞판 조각 id
     back_pid = pieces[1]["id"] if len(pieces) >= 2 else front_pid  # 뒤판 조각 id(폴백)
+    _bodies = sorted((pc for pc in pieces if pc.get("fit") == "top_height"),
+                     key=lambda pc: {"앞판": 0, "뒤판": 1}.get(pc.get("name"), 2))
+    _bodies = [pc["id"] for pc in _bodies]
+    if not notch and len(_bodies) >= 2:
+        # (2026-10-21) 번호는 몸판에 — 조각 순서 1·2번이 몸판이 아니면(소매가 먼저 나오는 마스터) 번호가 소매에 찍힌다
+        front_pid, back_pid = _bodies[0], _bodies[1]
     if notch:   # (2026-10-20) 노치 판정이 앞·뒤판을 알면 그것부터 — 슈팅저지는 높이순 1·2위가 소매라 번호가 소매에 찍혔다
         ids = [pc["id"] for pc in pieces]
         front_pid = next((x for x in ("front", "split_front") if x in ids), front_pid)
@@ -2867,6 +2901,7 @@ def drive_tree(folderId: Optional[str] = None) -> JSONResponse:
 #   방식: 확장자를 떼고 [공백/_/-] 로 토큰화한 뒤, '토큰 하나가 사이즈 목록과 정확히 일치' 하는
 #     것만 사이즈로 인정한다(부분매칭 금지 → "U넥"의 U, "암홀X"의 X 오인 방지). 여러 개면 끝의 것.
 _SIZE_TOKENS = [
+    "2호", "4호", "6호", "8호", "10호", "12호", "14호", "16호",   # (2026-10-21) 아동 호수
     "5XS", "4XS", "3XS", "2XS", "XS", "S", "M", "L",
     "XL", "2XL", "3XL", "4XL", "5XL", "6XL", "7XL",
 ]

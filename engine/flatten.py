@@ -60,6 +60,45 @@ def _nums(operands):
 
 
 # ── 배경색 자동 감지 ─────────────────────────────────────────────────────────
+def _shoelace(pts) -> float:
+    if len(pts) < 3:
+        return 0.0
+    a = 0.0
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:] + pts[:1]):
+        a += x0 * y1 - x1 * y0
+    return abs(a) / 2.0
+
+
+def _clip_box(bb, clip):
+    """bb 와 clip(없으면 그대로)의 교집합 상자. 겹치지 않으면 None."""
+    if clip is None:
+        return bb
+    x0, y0 = max(bb[0], clip[0]), max(bb[1], clip[1])
+    x1, y1 = min(bb[2], clip[2]), min(bb[3], clip[3])
+    return (x0, y0, x1, y1) if x1 > x0 and y1 > y0 else None
+
+
+def _filled_area(subpaths) -> float:
+    """(2026-10-21) 칠해진 면적 어림 — 가장 큰 윤곽에서, 그 안에 든 윤곽(구멍)은 빼고 밖의 윤곽은 더한다.
+
+    왜: 예전엔 bbox 면적으로 비교해서, 재단선을 «채움 고리»로 그린 얇은 테(웹툰 K50)가 본판보다 넓게 잡혀
+    그 회색이 배경으로 뽑혔다 → 반투명 무늬가 회색과 섞여 진하게 찍혔다(웹툰 점검 40~56%).
+    """
+    polys = [sp for sp in subpaths if len(sp) >= 3]
+    if not polys:
+        return 0.0
+    polys.sort(key=_shoelace, reverse=True)
+    big = polys[0]
+    bx0 = min(x for x, _ in big); bx1 = max(x for x, _ in big)
+    by0 = min(y for _, y in big); by1 = max(y for _, y in big)
+    area = _shoelace(big)
+    for sp in polys[1:]:
+        xs = [x for x, _ in sp]; ys = [y for _, y in sp]
+        inside = bx0 <= min(xs) and max(xs) <= bx1 and by0 <= min(ys) and max(ys) <= by1
+        area += -_shoelace(sp) if inside else _shoelace(sp)
+    return max(area, 0.0)
+
+
 def detect_background_cmyk(pdf: pikepdf.Pdf, page_index: int = 0, region=None) -> Optional[CMYK]:
     """페이지에서 '면적이 가장 큰 불투명 4채널(CMYK) 채움'의 색을 배경으로 본다.
 
@@ -73,17 +112,24 @@ def detect_background_cmyk(pdf: pikepdf.Pdf, page_index: int = 0, region=None) -
     ctm = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
     fill_color: Optional[CMYK] = None
     pts: List[Tuple[float, float]] = []
+    subs: List[list] = []
+    clip = None                 # (2026-10-21) 지금 잘라내기 상자 — 클립으로 대부분 가려진 큰 바탕 사각형이 이기지 않게
+    clip_stack: list = []
 
     def add_pt(x, y):
         pts.append(_apply(ctm, x, y))
+        if subs:
+            subs[-1].append(pts[-1])
 
     for operands, op in parse_content_stream(page):
         o = str(op)
         n = _nums(operands)
         if o == "q":
             ctm_stack.append(ctm)
+            clip_stack.append(clip)
         elif o == "Q":
             ctm = ctm_stack.pop() if ctm_stack else ctm
+            clip = clip_stack.pop() if clip_stack else None
         elif o == "cm" and n and len(n) >= 6:
             ctm = _mat_mul(tuple(n[:6]), ctm)
         elif o == "scn" and n and len(n) == 4:
@@ -91,6 +137,7 @@ def detect_background_cmyk(pdf: pikepdf.Pdf, page_index: int = 0, region=None) -
         elif o in ("k",) and n and len(n) == 4:
             fill_color = tuple(round(v, 4) for v in n)
         elif o == "m" and n and len(n) >= 2:
+            subs.append([])
             add_pt(n[0], n[1])
         elif o == "l" and n and len(n) >= 2:
             add_pt(n[0], n[1])
@@ -100,17 +147,26 @@ def detect_background_cmyk(pdf: pikepdf.Pdf, page_index: int = 0, region=None) -
             add_pt(n[2], n[3])
         elif o == "re" and n and len(n) >= 4:
             x, y, w, h = n[:4]
-            add_pt(x, y); add_pt(x + w, y + h)
+            subs.append([])
+            add_pt(x, y); add_pt(x + w, y); add_pt(x + w, y + h); add_pt(x, y + h)
         elif o in ("f", "F", "f*", "b", "b*", "B", "B*"):
             if pts and fill_color is not None:
                 xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
-                area = (max(xs) - min(xs)) * (max(ys) - min(ys))
-                cx = (max(xs) + min(xs)) / 2; cy = (max(ys) + min(ys)) / 2
-                if region is None or (region[0] <= cx <= region[2] and region[1] <= cy <= region[3]):
-                    areas[fill_color] = areas.get(fill_color, 0.0) + area
-            pts = []
-        elif o in ("n", "S", "s", "W", "W*"):
-            pts = []
+                bb = (min(xs), min(ys), max(xs), max(ys))
+                vb = _clip_box(bb, clip)
+                box = (bb[2] - bb[0]) * (bb[3] - bb[1])
+                if vb is not None and box > 0:
+                    area = _filled_area(subs) * (vb[2] - vb[0]) * (vb[3] - vb[1]) / box
+                    cx = (vb[0] + vb[2]) / 2; cy = (vb[1] + vb[3]) / 2
+                    if region is None or (region[0] <= cx <= region[2] and region[1] <= cy <= region[3]):
+                        areas[fill_color] = areas.get(fill_color, 0.0) + area
+            pts = []; subs = []
+        elif o in ("W", "W*"):
+            if pts:
+                xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+                clip = _clip_box((min(xs), min(ys), max(xs), max(ys)), clip) or (0.0, 0.0, 0.0, 0.0)
+        elif o in ("n", "S", "s"):
+            pts = []; subs = []
     if not areas:
         return None
     return max(areas.items(), key=lambda kv: kv[1])[0]
@@ -172,6 +228,97 @@ def _transparent_xobjects(pdf: pikepdf.Pdf, page_index: int = 0) -> Tuple[dict, 
     return found, warnings
 
 
+def _backdrops(pdf: pikepdf.Pdf, page_index: int = 0) -> dict:
+    """(2026-10-21) 반투명으로 그린 XObject 마다 «그 자리 바로 밑에 먼저 칠해진 불투명 색»을 찾는다.
+
+    왜: 한 장에 배경이 여럿이다(흰 상의 · 갈색 하의 · 홈/원정). 페이지 전체에서 고른 한 색과 섞으면
+    상의 무늬는 진해지고 하의 무늬는 밝아졌다(웹툰 점검). 밑에 칠한 것이 없으면 종이(흰색).
+    반환: {XObject 이름: CMYK}
+    """
+    page = pdf.pages[page_index]
+    res = page.obj.get("/Resources", {})
+    egs = res.get("/ExtGState", {})
+    xobjs = res.get("/XObject", {})
+    name_alpha = {}
+    for name, g in egs.items():
+        a = 1.0
+        for key in ("/ca", "/CA"):
+            if key in g:
+                try:
+                    a = min(a, float(g[key]))
+                except Exception:
+                    pass
+        name_alpha[str(name)] = a
+    ctm = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    stack: List[tuple] = []
+    alpha = 1.0
+    color: Optional[CMYK] = None
+    subs: List[list] = []
+    fills: List[tuple] = []      # (bbox, color) — 칠해진 순서대로
+    out: dict = {}
+    clip = None
+    for operands, op in parse_content_stream(page):
+        o = str(op)
+        n = _nums(operands)
+        if o == "q":
+            stack.append((ctm, alpha, color, clip))
+        elif o == "Q":
+            if stack:
+                ctm, alpha, color, clip = stack.pop()
+        elif o == "cm" and n and len(n) >= 6:
+            ctm = _mat_mul(tuple(n[:6]), ctm)
+        elif o == "gs" and operands:
+            alpha = name_alpha.get(str(operands[0]), alpha)
+        elif o in ("scn", "k") and n and len(n) == 4:
+            color = tuple(round(v, 4) for v in n)
+        elif o in ("sc",) and n and len(n) == 4:
+            color = tuple(round(v, 4) for v in n)
+        elif o == "m" and n and len(n) >= 2:
+            subs.append([_apply(ctm, n[0], n[1])])
+        elif o in ("l",) and n and len(n) >= 2 and subs:
+            subs[-1].append(_apply(ctm, n[0], n[1]))
+        elif o == "c" and n and len(n) >= 6 and subs:
+            subs[-1].append(_apply(ctm, n[4], n[5]))
+        elif o in ("v", "y") and n and len(n) >= 4 and subs:
+            subs[-1].append(_apply(ctm, n[2], n[3]))
+        elif o == "re" and n and len(n) >= 4:
+            x, y, w, h = n[:4]
+            subs.append([_apply(ctm, x, y), _apply(ctm, x + w, y), _apply(ctm, x + w, y + h), _apply(ctm, x, y + h)])
+        elif o in ("f", "F", "f*", "b", "b*", "B", "B*"):
+            pts = [p for sp in subs for p in sp]
+            if pts and color is not None and alpha >= 1.0:
+                xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+                bb = (min(xs), min(ys), max(xs), max(ys))
+                box = (bb[2] - bb[0]) * (bb[3] - bb[1])
+                vb = _clip_box(bb, clip)
+                if vb is not None and box > 0 and _filled_area(subs) >= 0.3 * box:     # 얇은 테·선은 «밑바탕» 이 아니다
+                    fills.append((vb, color))
+            subs = []
+        elif o in ("W", "W*"):
+            pts = [p for sp in subs for p in sp]
+            if pts:
+                xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+                clip = _clip_box((min(xs), min(ys), max(xs), max(ys)), clip) or (0.0, 0.0, 0.0, 0.0)
+        elif o in ("n", "S", "s"):
+            subs = []
+        elif o == "Do" and operands and alpha < 1.0:
+            nm = str(operands[0])
+            xo = xobjs.get(pikepdf.Name(nm if nm.startswith("/") else "/" + nm))
+            if xo is None or nm in out:
+                continue
+            try:
+                b = [float(v) for v in xo.get("/BBox", [0, 0, 0, 0])]
+                m = tuple(float(v) for v in xo.get("/Matrix", [1, 0, 0, 1, 0, 0]))
+                full = _mat_mul(m, ctm)
+                cs = [_apply(full, b[0], b[1]), _apply(full, b[2], b[3]), _apply(full, b[0], b[3]), _apply(full, b[2], b[1])]
+                cx = sum(p[0] for p in cs) / 4; cy = sum(p[1] for p in cs) / 4
+            except Exception:
+                continue
+            under = next((c for bb, c in reversed(fills) if bb[0] <= cx <= bb[2] and bb[1] <= cy <= bb[3]), None)
+            out[nm] = under if under is not None else (0.0, 0.0, 0.0, 0.0)
+    return out
+
+
 def _composite(fg: CMYK, bg: CMYK, alpha: float) -> CMYK:
     """Normal 블렌드 사전합성: c' = α·fg + (1-α)·bg (채널별)."""
     return tuple(round(alpha * f + (1.0 - alpha) * b, 4) for f, b in zip(fg, bg))
@@ -227,11 +374,19 @@ def flatten_transparency(in_path: str, out_path: str,
     xobjs = res.get("/XObject", {})
     recolored = 0
     flattened_names = []
+    # (2026-10-21) 배경을 따로 주지 않았으면 요소마다 바로 밑 색과 섞는다(못 찾으면 위 bg)
+    under = {} if bg_cmyk else _backdrops(pdf, page_index)
+    mixed = []
     for name, alpha in trans.items():
         key = pikepdf.Name(name if name.startswith("/") else "/" + name)
         if key in xobjs:
-            recolored += _recolor_xobject_fills(pdf, xobjs[key], bg, alpha)
+            b2 = under.get(name, bg)
+            recolored += _recolor_xobject_fills(pdf, xobjs[key], b2, alpha)
             flattened_names.append(name)
+            mixed.append(f"{name.lstrip('/')}({alpha:.2g}→{'흰색' if not any(b2) else b2})")
+    if mixed:
+        warnings.append("반투명 " + str(len(mixed)) + "개를 바로 밑 색과 섞어 불투명으로 바꿨습니다(색 확인 권장): "
+                        + ", ".join(mixed[:6]) + (" …" if len(mixed) > 6 else ""))
 
     # 모든 알파<1 ExtGState 를 불투명으로(페이지/XObject 리소스 전부 순회)
     fixed = 0

@@ -145,6 +145,111 @@ def _cluster_number(fills: list, x_lo: float, x_hi: float,
     }
 
 
+def _number_groups(fills: list, min_h: float = 100.0, max_h: float = 1200.0) -> list:
+    """숫자 글자 후보 채움을 «한 줄로 나란한 같은 높이 글자 1~3개» 묶음으로 만든다.
+
+    테두리 있는 번호는 바깥(테두리) 채움 안에 안쪽 면이 쏙 들어간다 — 바깥만 글자로 세고,
+    안쪽 면 중 가장 큰 것을 «글자 몸» 으로 따로 기억한다(색·테두리 두께).
+    """
+    cand = []
+    for fl in fills:
+        b = fl["bbox"]; w = b[2] - b[0]; h = b[3] - b[1]
+        if min_h <= h <= max_h and 0.2 * h <= w <= 1.05 * h:
+            cand.append({"bbox": tuple(b), "color": fl["color"]})
+    cand.sort(key=lambda f: -(f["bbox"][2] - f["bbox"][0]) * (f["bbox"][3] - f["bbox"][1]))
+    outer: list = []
+    for a in cand:
+        ab = a["bbox"]
+        host = next((o for o in outer if o["bbox"][0] - 2 <= ab[0] and o["bbox"][1] - 2 <= ab[1]
+                     and ab[2] <= o["bbox"][2] + 2 and ab[3] <= o["bbox"][3] + 2), None)
+        if host is None:
+            outer.append(dict(a))
+        elif "inner" not in host and (ab[3] - ab[1]) >= 0.8 * (host["bbox"][3] - host["bbox"][1]):
+            host["inner"] = a            # 큰 것부터 보므로 처음 들어오는 것 = 가장 큰 안쪽 면
+    outer.sort(key=lambda f: f["bbox"][0])
+    groups: list = []
+    for f in outer:
+        b = f["bbox"]; h = b[3] - b[1]
+        for g in groups:
+            lb = g[-1]["bbox"]; lh = lb[3] - lb[1]
+            if (min(h, lh) / max(h, lh) >= 0.85 and abs(b[1] - lb[1]) <= 0.08 * max(h, lh)
+                    and -0.1 * h <= b[0] - lb[2] <= 0.5 * max(h, lh)):
+                g.append(f)
+                break
+        else:
+            groups.append([f])
+    res = []
+    for g in groups:
+        if not 1 <= len(g) <= 3:
+            continue
+        x0 = min(f["bbox"][0] for f in g); y0 = min(f["bbox"][1] for f in g)
+        x1 = max(f["bbox"][2] for f in g); y1 = max(f["bbox"][3] for f in g)
+        H = y1 - y0
+        res.append({"bbox": (x0, y0, x1, y1), "n": len(g), "color": g[0]["color"], "glyphs": g,
+                    "sig": [((f["bbox"][0] - x0) / H, (f["bbox"][2] - x0) / H) for f in g]})
+    return res
+
+
+def _number_from_group(g: dict) -> dict:
+    """묶음 → {bbox(글자 몸), color, outline}. 모든 글자에 안쪽 면이 있고 색이 다르면 테두리 번호."""
+    inners = [f.get("inner") for f in g["glyphs"]]
+    if all(inners) and all(i["color"] != f["color"] for i, f in zip(inners, g["glyphs"])):
+        x0 = min(i["bbox"][0] for i in inners); y0 = min(i["bbox"][1] for i in inners)
+        x1 = max(i["bbox"][2] for i in inners); y1 = max(i["bbox"][3] for i in inners)
+        ow = ((g["bbox"][3] - g["bbox"][1]) - (y1 - y0)) / 2.0
+        return {"bbox": tuple(round(v, 1) for v in (x0, y0, x1, y1)), "color": inners[0]["color"],
+                "outline": {"color_cmyk": list(g["color"]), "width_pt": round(ow, 1)}, "count": g["n"]}
+    return {"bbox": tuple(round(v, 1) for v in g["bbox"]), "color": g["color"], "outline": None, "count": g["n"]}
+
+
+def _find_number_pair(fills: list, split_x: float) -> Optional[dict]:
+    """(2026-10-21) 앞·뒤 번호를 «같은 숫자» 라는 점으로 찾는다.
+
+    왜: 예전 방식(_cluster_number)은 크기 창에 드는 채움을 반쪽마다 통째로 합쳐서, 무늬·워드마크가 많은
+    디자인(홍해 물결·RED OCEAN)이면 번호 상자가 조각만큼 커졌다(실측 높이 2206pt → 번호가 조각을 덮음).
+    앞·뒤 번호는 크기만 다를 뿐 글자 수·글자 폭·간격 비율이 같다 → 왼쪽·오른쪽 묶음 중 비율이 맞고 색이
+    같은 짝만 번호로 본다. 한 대지에 두 벌(위·아래)이면 맨 위 벌을 고르고, 나머지 벌의 색은 sides 로 남긴다.
+    반환: {"front": {...}, "back": {...}, "sides": [{"dy", "front_color", "back_color"}...]} | None
+    """
+    gs = _number_groups(fills)
+    L = [g for g in gs if (g["bbox"][0] + g["bbox"][2]) / 2 < split_x]
+    R = [g for g in gs if (g["bbox"][0] + g["bbox"][2]) / 2 >= split_x]
+
+    def cost(a, b):
+        if a["n"] != b["n"]:
+            return 9.0
+        return max(abs(p - q) for sa, sb in zip(a["sig"], b["sig"]) for p, q in zip(sa, sb))
+
+    pairs = [(a, b) for a in L for b in R if a["color"] == b["color"] and cost(a, b) <= 0.05]
+    multi = [p for p in pairs if p[0]["n"] >= 2]
+    if multi:
+        pairs = multi
+    else:   # 한 자리 번호는 아무 덩어리나 짝이 맞기 쉽다 — 더 엄격하게, 그리고 뒤 번호가 앞보다 커야 한다
+        pairs = [p for p in pairs if cost(*p) <= 0.03
+                 and (p[1]["bbox"][3] - p[1]["bbox"][1]) >= (p[0]["bbox"][3] - p[0]["bbox"][1])]
+    if not pairs:
+        return None
+
+    def cy(g):
+        return (g["bbox"][1] + g["bbox"][3]) / 2
+
+    def best_for(front):
+        return min((p for p in pairs if p[0] is front), key=lambda p: abs(cy(p[1]) - cy(p[0])))
+
+    fronts = sorted({id(p[0]): p[0] for p in pairs}.values(), key=lambda g: -g["bbox"][3])
+    f0, b0 = best_for(fronts[0])
+    front, back = _number_from_group(f0), _number_from_group(b0)
+    sides = []
+    for fo in fronts[1:]:
+        f2, b2 = best_for(fo)
+        if b2 is b0:
+            continue
+        sides.append({"dy": round(cy(f2) - cy(f0), 1), "dy_back": round(cy(b2) - cy(b0), 1),
+                      "front_color": list(_number_from_group(f2)["color"]),
+                      "back_color": list(_number_from_group(b2)["color"])})
+    return {"front": front, "back": back, "sides": sides}
+
+
 def extract_reference(design_path: str, page_index: int = 0,
                       page_width: Optional[float] = None) -> dict:
     """완성본에서 앞번호/뒤번호/뒤이름의 위치·크기·색을 추출한다.
@@ -169,9 +274,18 @@ def extract_reference(design_path: str, page_index: int = 0,
     # 흰색 또는 단색(4채널) 채움만 번호 후보로 본다. 색 무관하게 큰 글자 덩어리를 찾되,
     # 흰색(0,0,0,0) 우선. (디자인 대부분 번호=흰색)
     # 번호는 보통 패널 중앙 하단(세로 중앙±) — y 범위를 넓게 잡고 큰 채움만 추린다.
-    y_lo, y_hi = ph * 0.45, ph * 0.95   # 상단~중앙(좌표는 아래가 0)
-    front = _cluster_number(fills, mb[0], mid, y_lo, y_hi)
-    back = _cluster_number(fills, mid, mb[2], y_lo, y_hi)
+    # (2026-10-21) 먼저 «앞·뒤가 같은 숫자» 짝으로 찾는다. 못 찾을 때만 예전 크기 창 방식 — 그것도 글자가
+    #   3개를 넘게 합쳐졌으면(무늬까지 삼킴) 버린다. 엉뚱한 상자보다 «못 찾음» 이 낫다(화면에서 박스로 지정 가능).
+    pair = _find_number_pair(fills, mid)
+    sides: list = []
+    if pair:
+        front, back, sides = pair["front"], pair["back"], pair["sides"]
+    else:
+        y_lo, y_hi = ph * 0.45, ph * 0.95   # 상단~중앙(좌표는 아래가 0)
+        front = _cluster_number(fills, mb[0], mid, y_lo, y_hi)
+        back = _cluster_number(fills, mid, mb[2], y_lo, y_hi)
+        front = front if front and front["count"] <= 3 else None
+        back = back if back and back["count"] <= 3 else None
 
     # 이름: 텍스트블록 중 뒤판(오른쪽)·상단의 것(번호보다 위)
     name_blocks = []
@@ -186,6 +300,7 @@ def extract_reference(design_path: str, page_index: int = 0,
         "name_blocks": name_blocks,
         "front_number": front,
         "back_number": back,
+        "sides": sides,
     }
 
 
@@ -198,7 +313,8 @@ def extract_reference(design_path: str, page_index: int = 0,
 # ════════════════════════════════════════════════════════════════════════════
 
 
-def _name_from_rawdict(design_path: str, page_index: int, x_lo: float, x_hi: float):
+def _name_from_rawdict(design_path: str, page_index: int, x_lo: float, x_hi: float,
+                       near: Optional[Box] = None):
     """fitz rawdict 로 '뒤판 이름'을 정밀 추출한다(완성본 단독, 템플릿 불필요).
 
     fitz 좌표는 좌상단 원점·y아래로 증가 → 우리(좌하단 원점·y위로)와 다르므로
@@ -235,6 +351,13 @@ def _name_from_rawdict(design_path: str, page_index: int, x_lo: float, x_hi: flo
                 if not (x_lo <= scx <= x_hi):
                     continue
                 size = float(span.get("size", 0.0))
+                if near is not None:
+                    # (2026-10-21) 뒤 번호(near, 좌하단 원점)가 있으면 그 위쪽 가까이(번호 높이 1.5배 안)의 글자만 —
+                    #   한 대지에 두 벌이면 아래 벌 이름을 잡던 문제 · 번호와 상관없는 문구 배제
+                    nb = page_h - sb[3]                       # span 아래변(좌하단 원점)
+                    nh = near[3] - near[1]
+                    if not (near[3] - 0.2 * nh <= nb <= near[3] + 1.5 * nh):
+                        continue
                 if best is None or size > best["size"]:
                     best = {"size": size, "font": span.get("font", ""),
                             "bbox": sb, "chars": chars}
@@ -303,7 +426,10 @@ def _number_area_from_cluster(cluster: Optional[dict]) -> Optional[dict]:
     cap_h = round(y1 - y0, 1)
     col = cluster.get("color")
     color_cmyk = list(col) if col else [0, 0, 0, 0]
-    return {"center": [cx, cy], "cap_height": cap_h, "color_cmyk": color_cmyk}
+    area = {"center": [cx, cy], "cap_height": cap_h, "color_cmyk": color_cmyk}
+    if cluster.get("outline"):          # (2026-10-21) 테두리 번호 — 글자 몸 높이 + 테두리 색·두께
+        area["outline"] = dict(cluster["outline"])
+    return area
 
 
 def build_area_preset(design_path: str, page_index: int = 0,
@@ -344,10 +470,18 @@ def build_area_preset(design_path: str, page_index: int = 0,
         front_area["font"] = font
     if back_area is not None:
         back_area["font"] = font
+    # (2026-10-21) 한 대지에 두 벌이면 다른 벌의 번호 색(흰 벌=자주 번호, 자주 벌=흰 번호) — 작업 때 면마다 바꿔 쓴다
+    for _sd in ref.get("sides") or []:
+        if front_area is not None:
+            front_area.setdefault("side_colors", []).append({"dy": _sd["dy"], "color_cmyk": _sd["front_color"]})
+        if back_area is not None:
+            back_area.setdefault("side_colors", []).append({"dy": _sd["dy_back"], "color_cmyk": _sd["back_color"]})
 
     # ── 2) 이름: fitz rawdict 정밀 추출(뒤판=오른쪽 절반). ──
     #    fitz 좌표는 좌상단 원점이라 x 는 그대로지만, 페이지 폭 절반 기준 오른쪽을 뒤판으로 본다.
-    name_detail = _name_from_rawdict(design_path, page_index, split_x, pw)
+    _bn = ref.get("back_number")
+    name_detail = _name_from_rawdict(design_path, page_index, split_x, pw,
+                                     near=tuple(_bn["bbox"]) if _bn else None)
     name_area = None
     if name_detail is not None and name_detail["text"].strip():
         col = ref["back_number"]["color"] if ref.get("back_number") else None
@@ -360,6 +494,8 @@ def build_area_preset(design_path: str, page_index: int = 0,
             "color_cmyk": color_cmyk,
             "font": font,
         }
+        if back_area is not None and back_area.get("side_colors"):
+            name_area["side_colors"] = [dict(x) for x in back_area["side_colors"]]
     else:
         warnings.append("🟡 뒤 이름(살아있는 텍스트)을 자동 추출하지 못했습니다 — preset 에 직접 넣어주세요.")
 
@@ -371,6 +507,7 @@ def build_area_preset(design_path: str, page_index: int = 0,
             "back_number_area": back_area,
             "back_name_area": name_area,
         },
+        "sides": ref.get("sides") or [],
         "name_detail": name_detail,
         "warnings": warnings,
     }

@@ -893,7 +893,8 @@ def _build_precise_layout(preset: dict, size_def: dict, *,
                 center_x=float(area["center"][0]),
                 center_y=float(area["center"][1]),
                 color=color,
-                glyph_source=glyph_set)
+                glyph_source=glyph_set,
+                outline=area.get("outline"))
         else:  # name
             ops, warns = place_name(
                 str(value), font_path,
@@ -1001,8 +1002,16 @@ def _auto_regions(pd: dict, design_pdf: str, warnings: list, label: str = "") ->
         miss = [p.get("name") or p.get("id") for p in pd["pieces"] if p.get("svg_index") not in _m]
         if _done:
             warnings.append(f"[영역] {label}디자인 속 재단 윤곽으로 조각 영역을 맞췄습니다: " + ", ".join(_done))
-            if miss:
-                warnings.append(f"🟡 [영역] {label}디자인에서 못 찾은 조각은 빼고 찍습니다: {', '.join(miss)} — "
+            big_miss = [p.get("name") or p.get("id") for p in pd["pieces"]
+                        if p.get("svg_index") not in _m and p.get("fit") == "top_height"]
+            if big_miss:
+                # (2026-10-21) 몸판이 빠지면 «노란 참고» 가 아니라 «빨간 확인» — 퍼시픽 S 는 뒤판(이름·번호)이 통째로 빠졌는데
+                #   노란 한 줄만 남고 검증은 통과로 나왔다. 디자인의 그 조각에 재단선(회색 윤곽)이 없을 때 생긴다.
+                warnings.append(f"🔴 [영역] {label}디자인에서 몸판 «{', '.join(big_miss)}» 의 재단선을 못 찾아 그 조각이 빠졌습니다 — "
+                                "디자인 파일의 그 조각에 재단선(패턴선) 윤곽이 있는지 확인해 주세요.")
+            small_miss = [m for m in miss if m not in big_miss]
+            if small_miss:
+                warnings.append(f"🟡 [영역] {label}디자인에서 못 찾은 조각은 빼고 찍습니다: {', '.join(small_miss)} — "
                                 "디자인에 있는 조각이면 재단이 빠지니 확인해 주세요.")
             if miss:
                 # 이 디자인에 없는 조각(반팔 주문의 긴팔 소매·한 장짜리 하의 디자인의 옆선판 등)은 어림값으로 그리지 않는다
@@ -1037,6 +1046,11 @@ def _auto_regions(pd: dict, design_pdf: str, warnings: list, label: str = "") ->
                         area["center_x"] = area["center_x"] + dx
                     if "baseline" in area:
                         area["baseline"] = area["baseline"] + dy
+                    # (2026-10-21) 그 벌의 번호 색(완성본에서 잰 것) — 옮긴 거리가 맞는 것을 쓴다
+                    for sc in area.get("side_colors") or []:
+                        if abs(float(sc.get("dy", 0)) - dy) <= 60 and sc.get("color_cmyk"):
+                            area["color_cmyk"] = list(sc["color_cmyk"])
+                            break
                 extra_sides.append(pd2)
             if extra_sides:
                 warnings.append(f"[양면] {label}디자인에 같은 조각이 {n_sides}벌 — {n_sides}면을 한 장에 위·아래로 함께 찍습니다.")
@@ -1046,28 +1060,35 @@ def _auto_regions(pd: dict, design_pdf: str, warnings: list, label: str = "") ->
     return extra_sides
 
 
-def _stack_layouts(name: str, layouts: list, gap: float = 60.0) -> SizeLayout:
+def _stack_layouts(name: str, layouts: list, gap: float = 60.0, margin: float = 50.0) -> SizeLayout:
     """여러 레이아웃을 한 장에 위→아래로 쌓는다(2026-10-20 — 양면 두 면·상의+하의).
 
-    PDF 좌표는 y 가 위로 크므로 마지막(아래) 레이아웃부터 0 에 두고 위로 올린다.
-    조각 윤곽·transform 은 옮기고, 이미 시트 좌표로 만든 extra_ops(글자·재단선)는 통째로 평행이동해 감싼다.
+    각 레이아웃은 먼저 조각들의 왼아래가 (margin, margin) 이 되게 옮긴다 — 축구 마스터처럼 대지가 아주 크면
+    조각 좌표가 원점에서 멀어, 그대로 쌓으면 페이지가 PDF 한도(14400pt)를 넘었다(2026-10-21 점검).
+    그다음 마지막(아래) 레이아웃부터 위로 올린다(PDF 는 y 가 위로 크다).
+    조각 윤곽·transform 은 옮기고, 시트 좌표로 만든 extra_ops(글자·재단선)는 통째로 평행이동해 감싼다.
     덮어 찍기(overlays)는 조각 transform 다음에 적용되므로 따로 옮길 필요가 없다.
     """
     pieces = []
     y = 0.0
     width = 0.0
     for lay in reversed(layouts):
-        w, h = lay.page_size
+        xs = [px for p in lay.pieces for px, _ in p.outline]
+        ys = [py for p in lay.pieces for _, py in p.outline]
+        if not xs:
+            continue
+        dx = margin - min(xs)
+        dy = y + margin - min(ys)
         for p in lay.pieces:
-            p.outline = [(px, py + y) for px, py in p.outline]
+            p.outline = [(px + dx, py + dy) for px, py in p.outline]
             a, b, c, d, e, f = p.transform
-            p.transform = (a, b, c, d, e, f + y)
+            p.transform = (a, b, c, d, e + dx, f + dy)
             if p.extra_ops:
-                p.extra_ops = f"q 1 0 0 1 0 {y:.4f} cm\n{p.extra_ops}\nQ"
+                p.extra_ops = "q 1 0 0 1 %.4f %.4f cm\n%s\nQ" % (dx, dy, p.extra_ops)
         pieces.extend(lay.pieces)
-        y += h + gap
-        width = max(width, w)
-    return SizeLayout(name=name, page_size=(width, y - gap), pieces=pieces)
+        y += (max(ys) - min(ys)) + 2 * margin + gap
+        width = max(width, (max(xs) - min(xs)) + 2 * margin)
+    return SizeLayout(name=name, page_size=(width, max(y - gap, 3.0)), pieces=pieces)
 
 
 def _sized_preset(preset: dict, size_def: dict) -> dict:
@@ -1213,7 +1234,8 @@ def run_job(preset: str,
                 warnings.append(
                     f"[패턴선] 디자인 OCG 레이어 제거: {hide_info['removed_layers']} "
                     f"({hide_info['removed_spans']}구간) — 디자인 패턴선 비표시(두 줄 방지).")
-            else:
+            elif _cutline_cfg0.get("hide_design_cutline_layer") != "if_present":
+                # (2026-10-21) 새 등록은 «있으면 지운다(if_present)» — 패턴선 레이어가 없는 게 보통이라 알리지 않는다
                 warnings.append(
                     "🟡 [패턴선] 디자인에서 '패턴선/재단선' OCG 마킹을 찾지 못해 제거를 건너뜁니다"
                     "(레이어명/구조 확인 필요). 우리 재단선만 1줄로 그려집니다.")
@@ -1430,7 +1452,9 @@ def run_job(preset: str,
     # (2026-10-20) 양면 본체색: 면마다 그 면 조각 자리에서 다시 감지(흰 면 색으로 자주 면 틈을 칠하지 않게).
     #   preset.body_fill 을 디자이너가 적었으면 모든 면에 그 색.
     side_fill: list = []
-    if extra_sides:
+    # (2026-10-21) 영역을 디자인 윤곽으로 맞춘 작업은 면이 하나여도 «찍는 조각 자리»에서 본체색을 다시 잰다 —
+    #   한 대지에 홈·원정 두 벌이 있는데 한 벌만 찍으면, 페이지 전체로 재면 원정 색(노랑)으로 홈 소매 틈을 칠했다(신탄진 점검).
+    if extra_sides or (preset_dict.get("design") or {}).get("auto_regions"):
         if preset_dict.get("body_fill") or body_fill is None:
             side_fill = [body_fill for _ in extra_sides]
         else:
@@ -1447,11 +1471,27 @@ def run_job(preset: str,
                     for pd2 in extra_sides:
                         fk = detect_background_cmyk(_bgp, 0, region=_union(pd2["pieces"]))
                         side_fill.append(tuple(float(v) for v in fk) if fk else None)
-                warnings.append(f"[본체색] 면마다 감지: 1면 {body_fill} · " + " · ".join(
-                    f"{i + 2}면 {c}" for i, c in enumerate(side_fill)))
+                warnings.append(f"[본체색] 찍는 조각 자리에서 감지: 1면 {body_fill}" + "".join(
+                    f" · {i + 2}면 {c}" for i, c in enumerate(side_fill)))
             except Exception as e:
                 side_fill = [None for _ in extra_sides]
                 warnings.append(f"🟡 [본체색] 면별 감지 실패(두 번째 면부터 채움 생략): {e}")
+    # (2026-10-21) 함께 찍는 하의도 자기 조각 자리에서 본체색을 잰다 — 예전엔 하의 틈을 아예 안 칠해서
+    #   갈색 반바지 가장자리에 흰 틈이 생겼다(웹툰 점검). 상의 본체색을 끈 작업(body_fill 없음)은 그대로 둔다.
+    if companion is not None and body_fill is not None:
+        try:
+            from .flatten import detect_background_cmyk
+            with pikepdf.open(base_design) as _bgp:
+                for cpd in [companion["preset"]] + companion["sides"]:
+                    rs = [p.get("design_region_pt") for p in cpd.get("pieces", []) if p.get("design_region_pt")]
+                    if cpd.get("body_fill") or not rs:
+                        continue
+                    fk = detect_background_cmyk(_bgp, 0, region=(min(r[0] for r in rs), min(r[1] for r in rs),
+                                                                 max(r[2] for r in rs), max(r[3] for r in rs)))
+                    if fk:
+                        cpd["body_fill"] = [float(v) for v in fk]
+        except Exception as e:
+            warnings.append(f"🟡 [본체색] 함께 찍는 패턴 본체색 감지 실패(채움 생략): {e}")
     if companion is not None:
         companion["tags"] = [_map_tags(pdx["pieces"]) if _all_tag_hits else []
                              for pdx in [companion["preset"]] + companion["sides"]]
@@ -1470,10 +1510,18 @@ def run_job(preset: str,
     single_layouts: list = []
     single_meta: list = []
 
+    _NONE = {"-", "없음", "x", "X", "×", "0", "없슴"}
     for idx, row in enumerate(order_rows):
         size = (row.get("size") or "").strip()
         name = row.get("name") or ""
         number = row.get("number") or ""
+        # (2026-10-21) 상의만·하의만: 함께 찍을 패턴이 있을 때 주문서 «하의» 칸이 «-/없음» 이면 상의만,
+        #   상의 칸이 «-/없음» 이고 하의 사이즈가 있으면 하의만 찍는다(홍해 3XL «상의만»·S «하의만» 실측).
+        _bsz = (row.get(companion["size_key"]) or "").strip() if companion is not None else ""
+        top_only = companion is not None and _bsz in _NONE and _bsz != ""
+        pants_only = companion is not None and size in _NONE and _bsz not in _NONE and _bsz != ""
+        if pants_only:
+            size = _bsz
 
         # ── 엣지: 사이즈 빈값 → skip ──
         if not size:
@@ -1493,17 +1541,19 @@ def run_job(preset: str,
                 f"(5XL 등으로 대체 출고하지 않음, 결함 사유: {reason}).")
             continue
         # ── 엣지: preset 에 없는 사이즈(아직 패턴 미확보 등) → skip + missing 집계 ──
-        if size not in size_map:
+        if size not in size_map and not pants_only:
             missing_sizes.add(size)
             skipped.append({"row": idx, "name": name,
                             "reason": f"preset 에 없는 사이즈 '{size}'"})
             continue
 
         # ── 이 선수의 사이즈만 남긴 preset 으로 레이아웃 1개 생성(배번/이름 주입). ──
-        sized = _sized_preset(preset_dict, size_map[size])
         row_warns: list = []
+        layout = None
         try:
-            if use_precise:
+            if pants_only:
+                pass                                  # 하의만 — 상의는 안 찍는다(아래 함께 찍기만)
+            elif use_precise:
                 # 정밀 경로: place_number(앞·뒤)·place_name 으로 글자를 그리고, 각 글자를
                 # 그 조각 transform 으로 감싸 디자인 위 정위치(시트좌표)에 박는다.
                 layout = _build_precise_layout(
@@ -1513,16 +1563,16 @@ def run_job(preset: str,
                     bg_cmyk=body_fill)
             else:
                 # 폴백: 기존 rel_bbox(number_area/name_area) 기반 build_layouts(방식 A).
-                layouts = build_layouts(sized, base_design,
+                layouts = build_layouts(_sized_preset(preset_dict, size_map[size]), base_design,
                                         number=number, name=name, warnings=row_warns)
                 layout = layouts[0]  # 사이즈 1개를 줬으니 layout 도 1개.
         except Exception as e:  # 렌더 단계 행 실패는 흘린다(부분 성공).
             skipped.append({"row": idx, "name": name,
                             "reason": f"레이아웃 생성 실패: {e}"})
             continue
-        if tag_hits:
+        if tag_hits and layout is not None:
             _apply_size_tags(layout, size, row_warns)
-        if extra_sides:
+        if extra_sides and layout is not None:
             stack = [layout]
             try:
                 for si, pd2 in enumerate(extra_sides):
@@ -1540,10 +1590,10 @@ def run_job(preset: str,
                 layout = _stack_layouts(layout.name, stack)
             except Exception as e:
                 row_warns.append(f"🟡 [양면] 두 번째 면을 못 만들어 첫 면만 찍습니다: {e}")
-        if companion is not None:
+        if companion is not None and not top_only:
             if not (row.get(companion["size_key"]) or "").strip():
                 companion["no_bottom"] = companion.get("no_bottom", 0) + 1
-            csize = (row.get(companion["size_key"]) or size or "").strip()
+            csize = (_bsz if pants_only else (row.get(companion["size_key"]) or size or "")).strip()
             if csize not in companion["size_map"]:
                 row_warns.append(f"🟡 [함께 찍기] 함께 찍을 패턴에 «{csize}» 사이즈가 없어 빼고 찍습니다.")
             else:
@@ -1560,11 +1610,20 @@ def run_job(preset: str,
                         if companion["tags"][ci]:
                             _apply_size_tags(cl, csize, row_warns, companion["tags"][ci])
                         clays.append(cl)
-                    layout = _stack_layouts(layout.name, [layout] + clays)
+                    layout = _stack_layouts(layout.name if layout is not None else size,
+                                            ([layout] if layout is not None else []) + clays)
                 except Exception as e:
                     row_warns.append(f"🟡 [함께 찍기] 함께 찍을 패턴을 못 만들어 빼고 찍습니다: {e}")
 
+        if layout is None:
+            skipped.append({"row": idx, "name": name, "reason": "하의만 행인데 하의를 만들지 못함"})
+            continue
+        if top_only:
+            row_warns.append("[함께 찍기] 하의 칸이 비어 있음 표시(-) — 상의만 찍었습니다.")
+        if pants_only:
+            row_warns.append("[함께 찍기] 상의 칸이 «-» — 하의만 찍었습니다.")
         # 글리프 누락 등 행 경고는 선수 식별과 함께 전체 warnings 에 누적(사람 검수용).
+        row_warns = list(dict.fromkeys(row_warns))   # 양면이면 면마다 같은 경고가 두 번 나온다 — 한 번만
         for w in row_warns:
             warnings.append(f"[행{idx} {name or '(무명)'} {size}] {w}")
 

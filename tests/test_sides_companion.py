@@ -50,16 +50,21 @@ class SidesCompanion(unittest.TestCase):
         return res, (o["pdf"] if os.path.isabs(o["pdf"]) else os.path.join(self.tmp, "job", o["pdf"]))
 
     def test_stack_layouts(self):
-        """쌓기: 위 레이아웃이 위쪽에, 페이지 높이 = 두 높이 + 간격"""
+        """쌓기: 각 면을 원점 근처로 옮긴 뒤 위→아래로 — 위 레이아웃이 위쪽, 큰 대지 좌표여도 페이지가 작다"""
         from engine.compose import Piece, SizeLayout
         from engine.job import _stack_layouts
-        a = SizeLayout("a", (100, 200), [Piece(outline=[(0, 0), (10, 0), (10, 10)], transform=(1, 0, 0, 1, 0, 0), extra_ops="0 0 m")])
-        b = SizeLayout("b", (120, 300), [Piece(outline=[(0, 0), (10, 0), (10, 10)], transform=(1, 0, 0, 1, 0, 0))])
-        st = _stack_layouts("x", [a, b], gap=50)
-        self.assertEqual(st.page_size, (120, 550))
-        self.assertEqual(st.pieces[1].outline[0], (0, 350))       # a(위)는 b 높이 300 + 간격 50 위로
-        self.assertEqual(st.pieces[0].outline[0], (0, 0))
-        self.assertIn("1 0 0 1 0 350", st.pieces[1].extra_ops)
+        far = 9000.0   # 축구 마스터처럼 원점에서 먼 조각
+        a = SizeLayout("a", (far + 200, far + 200), [Piece(outline=[(far, far), (far + 100, far), (far + 100, far + 80)],
+                                                           transform=(1, 0, 0, 1, 0, 0), extra_ops="0 0 m")])
+        b = SizeLayout("b", (far + 200, far + 200), [Piece(outline=[(far, far), (far + 120, far), (far + 120, far + 60)],
+                                                           transform=(1, 0, 0, 1, 0, 0))])
+        st = _stack_layouts("x", [a, b], gap=40, margin=50)
+        self.assertEqual(st.page_size, (220.0, (60 + 100) + 40 + (80 + 100)))
+        pa, pb = st.pieces[1], st.pieces[0]                       # 아래(b)부터 쌓인다
+        self.assertEqual(pb.outline[0], (50.0, 50.0))
+        self.assertGreater(min(y for _, y in pa.outline), max(y for _, y in pb.outline) + 40)
+        self.assertEqual(pa.transform[4], 50.0 - far)
+        self.assertIn("cm", pa.extra_ops)
 
     def test_two_sides_one_sheet(self):
         """디자인에 같은 조각 두 벌(위·아래) → 한 장에 두 면(조각 4개), 검증 통과"""
@@ -92,6 +97,21 @@ class SidesCompanion(unittest.TestCase):
         self.assertEqual(res["summary"]["verify_pass"], 1, res["summary"])
         self.assertTrue(any(w.startswith("[함께 찍기]") for w in res["summary"]["warnings"]), res["summary"]["warnings"])
         self.assertEqual(_clips(pdf), 3)
+
+    def test_top_only_and_pants_only(self):
+        """주문서 하의 칸 «-» = 상의만(조각 2) · 상의 칸 «-» + 하의 사이즈 = 하의만(조각 1)"""
+        top = _preset(self.tmp, "top", [_shift(BODY, 100, 100), _shift(BACK, 700, 100)], {"companion": {"pattern": "pants"}})
+        _preset(self.tmp, "pants", [_shift(LEG, 100, 100)])
+        design = os.path.join(self.tmp, "d.pdf")
+        _design(design, [_shift(BODY, 100, 850), _shift(BACK, 700, 850), _shift(LEG, 1400, 100)])
+        from engine.job import run_job
+        res = run_job(top, design, [{"size": "M", "name": "A", "number": "1", "qty": 1, "bottom_size": "-"},
+                                    {"size": "-", "name": "B", "number": "2", "qty": 1, "bottom_size": "L"}],
+                      os.path.join(self.tmp, "job"), make_preview=False, out_format="pdf")
+        self.assertEqual(res["summary"]["verify_pass"], 2, res["summary"])
+        outs = {o["name"]: (o["pdf"] if os.path.isabs(o["pdf"]) else os.path.join(self.tmp, "job", o["pdf"])) for o in res["outputs"]}
+        self.assertEqual(_clips(outs["A"]), 2, "상의만")
+        self.assertEqual(_clips(outs["B"]), 1, "하의만")
 
     def test_unmatched_piece_dropped(self):
         """디자인에 없는 조각(반팔 주문의 긴팔 소매 등)은 어림값으로 그리지 않고 뺀다"""

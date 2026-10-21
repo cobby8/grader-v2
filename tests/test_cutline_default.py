@@ -54,7 +54,7 @@ class CutlineDefault(unittest.TestCase):
         with open(os.path.join(pdir, "preset.json"), encoding="utf-8") as f:
             pr = json.load(f)
         self.assertEqual((pr.get("cutline") or {}).get("draw_from"), "svg_polygon")
-        self.assertTrue(pr["cutline"].get("hide_design_cutline_layer"))
+        self.assertEqual(pr["cutline"].get("hide_design_cutline_layer"), "if_present")
         self.assertNotIn("notches", pr)
         d = fitz.open(); pg = d.new_page(width=pr["design"]["page_size_pt"][0], height=pr["design"]["page_size_pt"][1])
         pg.draw_rect(pg.rect, color=None, fill=(0.2, 0.1, 0, 0)); pg.clean_contents()

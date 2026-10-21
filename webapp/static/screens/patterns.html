@@ -858,7 +858,7 @@ function fillCompanionOptions() {
 // ---- size chips (실제 파일 선택과 연결) ----
 //   각 칩을 클릭하면 그 사이즈의 패턴 파일(.ai/.svg)을 고른다. 고른 사이즈는
 //   초록 체크로 표시한다. REG.sizeFiles 에 사이즈→File 로 저장한다.
-const SIZES = ["5XS","4XS","3XS","2XS","XS","S","M","L","XL","2XL","3XL","4XL","5XL","6XL","7XL"];   // 6XL·7XL — 농구 하의 한 장짜리(2026-10-20)
+const SIZES = ["2호","4호","6호","8호","10호","12호","14호","16호","5XS","4XS","3XS","2XS","XS","S","M","L","XL","2XL","3XL","4XL","5XL","6XL","7XL"];   // 6XL·7XL — 농구 하의 한 장짜리(2026-10-20) · 호수 — 유소년(2026-10-21)
 function renderSizeChips() {
   $("#sizeChips").innerHTML = SIZES.map((s) => {
     const done = !!REG.sizeFiles[s];   // 이 사이즈 파일을 골랐는가
@@ -1818,6 +1818,7 @@ function selectDriveFolder(item, row) {
 //   왜? "10XL" 같은 것 때문에 문자열 정렬(localeCompare)은 순서가 뒤틀린다("2XL"이 "XL"보다 앞으로 감).
 //   그래서 사람이 정한 이 순서표의 '인덱스'로 작은→큰 정렬한다(백엔드 정렬 규칙과 1:1로 맞춤).
 const DRIVE_SIZE_ORDER = [
+  "2호", "4호", "6호", "8호", "10호", "12호", "14호", "16호",
   "5XS", "4XS", "3XS", "2XS", "XS", "S", "M", "L",
   "XL", "2XL", "3XL", "4XL", "5XL", "6XL", "7XL",
 ];
