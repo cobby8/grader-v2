@@ -7,7 +7,7 @@
    · 껍데기도 «네트워크 먼저» — 연결되면 늘 새 화면을 받고, 끊겼을 때만 보관본을 쓴다.
    · 화면을 고쳐 배포할 때 VERSION 을 올리면 옛 보관함을 지운다.
    ============================================================ */
-const VERSION = "intake-shell-v1";
+const VERSION = "intake-shell-v2";   // v2(2026-10-22): 패턴 자동 제작 화면 · 브라우저 HTTP 보관본을 건너뛴다
 
 // 보관할 껍데기 — 주소의 경로(pathname)로 맞춘다. ?v=… 꼬리는 무시한다
 const SHELL = [
@@ -68,7 +68,7 @@ self.addEventListener("fetch", (event) => {
 async function networkFirst(req, key, isNav) {
   const cache = await caches.open(VERSION);
   try {
-    const res = await fetch(req);
+    const res = await fetch(req, { cache: "no-cache" });  // 브라우저 HTTP 보관본에 옛 화면이 남아 새 배포가 안 보이던 일(10-22) — 서버에 꼭 물어본다
     if (res.ok && res.type === "basic") cache.put(key, res.clone()).catch(() => {});
     return res;
   } catch (e) {

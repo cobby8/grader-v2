@@ -1,0 +1,29 @@
+{
+ "name": "럭비(긴팔 하키) 저지 사이즈 증분 — M 기준",
+ "base": "M",
+ "sizes": ["XS", "S", "M", "L", "XL", "2XL", "3XL"],
+ "default_sizes": ["S", "M", "L", "XL", "2XL", "3XL"],
+ "unit": "mm",
+ "source": "하키티 = «럭비티 패턴» XS~XL (G:/공유 드라이브/디자인/00_템플릿·폼/커스텀패턴/2026 커스텀용 패턴/3. 럭비티 확정 정리본, 생산 기준) 조각 실측 2026-10-22. 2XL·3XL 은 하키티에 없어 L→XL 간격으로 늘림.",
+ "decided": "사장님 2026-10-22: 증분은 하키티 기준 · 사이즈 S~3XL · 하키티에 없는 증분은 가정값 그대로 두고 확인표에 표시",
+ "delta": {
+  "length_cb":       {"from": "하키티", "by_size": {"XS": -60, "S": -30, "M": 0, "L": 20, "XL": 40, "2XL": 60, "3XL": 80},
+                      "note": "뒤판 높이 XS→S→M +30, M→L→XL +20 · 2XL·3XL 은 +20 씩 연장"},
+  "chest":           {"from": "하키티", "step": 50, "note": "몸판 폭 +25(앞·뒤 각각) → 둘레 +50"},
+  "hem":             {"from": "하키티", "step": 50, "note": "몸판이 일자라 가슴과 같은 증분"},
+  "shoulder_width":  {"from": "하키티", "step": 20, "note": "어깨끝~어깨끝 +20"},
+  "neck_width":      {"from": "하키티", "step": 5, "note": "옆목점 사이 +5"},
+  "armhole_depth":   {"from": "하키티", "by_size": {"XS": -20, "S": -8, "M": 0, "L": 12, "XL": 20, "2XL": 30, "3XL": 40},
+                      "note": "어깨선~겨드랑이 깊이 실측 · 2XL·3XL 은 +10 씩 연장"},
+  "sleeve_width_25": {"from": "하키티", "step": 11.5, "note": "반팔 소매 폭 +23(펼친 폭) → 단면 +11.5"},
+  "sleeve_length":   {"from": "가정", "step": 10, "note": "하키티는 반팔이라 긴소매 길이 증분을 잴 수 없음 — 표준 +10"},
+  "cuff":            {"from": "가정", "step": 10, "note": "하키티에 커프스 없음 — 둘레 +10"},
+  "sleeve_hem":      {"from": "가정", "step": 10, "note": "하키티에 커프스 없음 — 소매 끝 둘레 +10"},
+  "v_depth":         {"from": "가정", "step": 5, "note": "하키티는 다른 목 모양 — V 깊이 +5"},
+  "yoke_back":       {"from": "가정", "step": 5, "note": "하키티에 요크 없음 — 뒷목~요크 +5"},
+  "back_neck_depth": {"from": "가정", "step": 0, "note": "고정"},
+  "shoulder_drop":   {"from": "하키티", "step": 0, "note": "하키티도 어깨 처짐이 사이즈마다 같음 — 값은 의뢰 실측에서 계산"},
+  "cuff_height":     {"from": "가정", "step": 0, "note": "고정(완성 높이)"},
+  "rib_width":       {"from": "가정", "step": 0, "note": "고정(완성 폭)"}
+ }
+}

@@ -37,6 +37,7 @@ import threading
 import time
 import traceback
 import zipfile
+from urllib.parse import quote
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -86,7 +87,8 @@ FILE_KINDS = {                                                       # 내려받
     "source": ("application/postscript", "원본 OptiCad .ai"),
 }
 META_EXTRA_KEYS = ("rebuilt_from", "engine_run", "regraded_from", "rule_changes", "mesh",
-                   "imported", "renamed_from", "name_changes")       # (F10 6단계 들여오기·이름 확인)   # store_version(extra=…) 로 더할 수 있는 칸
+                   "imported", "renamed_from", "name_changes",       # (F10 6단계 들여오기·이름 확인)
+                   "intake")                                         # 패턴 의뢰에서 자동으로 만든 판(2026-10-22) — 의뢰 번호·검토 대기   # store_version(extra=…) 로 더할 수 있는 칸
 _HTTP_TIMEOUT = 30.0
 _RESTORE_EVERY = 600.0                                               # 복원 확인 간격(초)
 
@@ -727,7 +729,7 @@ TOKEN_MIN_LEFT_S = 600                                               # 줄에 �
 RELOGIN_MSG = "로그인이 끝났거나 곧 끝납니다. 다시 로그인한 뒤 눌러 주세요."
 HEAVY_WAIT_S_DEFAULT = 600                                           # 엔진이 «돌던 합성이 끝나기» 를 기다리는 상한(초) — 넘으면 엔진 작업 실패
 JOB_KINDS = ("cad-rebuild", "cad-regrade", "cad-version", "cad-marker",
-             "cad-import", "cad-names")                              # 들여오기·이름 확인(F10 6단계)   # GET /jobs 로 볼 수 있는 재단 패턴 작업(마커 = F10 4단계)
+             "cad-import", "cad-names", "cad-intake")                              # 들여오기·이름 확인(F10 6단계)   # GET /jobs 로 볼 수 있는 재단 패턴 작업(마커 = F10 4단계)
 PREVIEW_KEEP = 20                                                    # 미리보기 결과 폴더를 최근 몇 개까지 남길지(디스크 절약)
 MAX_RULE_CHANGES_META = 300                                          # meta 에 적는 «바뀐 칸» 목록 상한
 
@@ -2099,6 +2101,144 @@ async def import_new_style(request: Request, source: UploadFile = File(...), bas
         raise
     return JSONResponse(status_code=202, content={"job_id": job_id, "total": len(svc.IMPORT_STEPS), "ahead": ahead, "style_id": sid,
                                                   "base_size": base, "sizes": sizes, "estimate": est})
+
+
+# ── 패턴 의뢰 → 패턴 자동 제작 + S~3XL 그레이딩(2026-10-22) ─────────────────────
+#   의뢰 화면이 제출 직후 부른다. 누가 눌러도 패턴을 만들어 확인표를 의뢰(data.build)에 붙인다.
+#   재단 패턴 창고 저장은 관리자 토큰일 때만 — 창고(pattern-cad) 쓰기는 관리자만이라는 규칙을 그대로 둔다.
+#   관리자가 누르면 같은 의뢰로 다시 만들어 «검토 대기» 판으로 저장한다(엔진이 7~9초라 다시 만드는 편이 결과를 들고 있는 것보다 단순).
+INTAKE_ID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+INTAKE_COLS = "id,code,product_name,size_label,base_type,parts,catalog_version,status,data,note,created_by_email,updated_at,deleted_at"
+INTAKE_CONFIRM_MAX = 20000                                           # 의뢰에 붙이는 확인표 글자 상한
+_INTAKE_LOCK = threading.Lock()
+_INTAKE_BUILDING: set = set()                                        # 지금 만드는 의뢰 — 같은 의뢰 두 번 동시에 못 하게(409)
+
+
+def _intake_rest(method: str, query: str, jwt: Optional[str], body: Any = None, prefer: Optional[str] = None) -> httpx.Response:
+    """의뢰 표(pattern_intakes) — 요청자 토큰 그대로(읽기는 모든 직원 · 고치기는 RLS 가 정한 사람만)"""
+    base, pub = _sb_config()
+    if not base or not jwt:
+        raise HTTPException(status_code=503, detail="의뢰 자료를 읽을 수 없습니다(로그인 또는 서버 설정).")
+    h = _sb_headers(pub, jwt, "application/json" if body is not None else None)
+    if prefer:
+        h["Prefer"] = prefer
+    return httpx.request(method, f"{base}/rest/v1/pattern_intakes?{query}", headers=h, json=body, timeout=_HTTP_TIMEOUT)
+
+
+def _intake_read(intake_id: str, jwt: Optional[str]) -> Dict[str, Any]:
+    try:
+        r = _intake_rest("GET", f"id=eq.{intake_id}&select={INTAKE_COLS}", jwt)
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="의뢰 자료를 읽지 못했습니다. 잠시 후 다시 눌러 주세요.")
+    if r.status_code in (401, 403):
+        raise HTTPException(status_code=401, detail=RELOGIN_MSG)
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail="의뢰 자료를 읽지 못했습니다. 잠시 후 다시 눌러 주세요.")
+    rows = r.json()
+    if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
+        raise HTTPException(status_code=404, detail="의뢰를 찾을 수 없습니다.")
+    return rows[0]
+
+
+def _intake_save_build(intake_id: str, build: Dict[str, Any], jwt: Optional[str]) -> bool:
+    """의뢰 data.build 한 칸만 바꿔 되돌려 보낸다 — 읽은 뒤 누가 고쳤으면(updated_at 다름) 다시 읽어 한 번 더. 성공 여부만(실패해도 작업은 끝)"""
+    for _ in range(2):
+        try:
+            row = _intake_read(intake_id, jwt)
+            data = row.get("data") if isinstance(row.get("data"), dict) else {}
+            r = _intake_rest("PATCH", f"id=eq.{intake_id}&updated_at=eq.{quote(str(row.get('updated_at')), safe='')}&select=id", jwt,
+                             body={"data": {**data, "build": build}}, prefer="return=representation")
+        except Exception:
+            return False
+        if r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) == 1:
+            return True
+        if r.status_code != 200:                                       # 권한 없음(남의 의뢰·검토 끝난 의뢰) 등 — 다시 해도 같다
+            return False
+    return False
+
+
+def _intake_thread(job_id: str, intake_id: str, code: str, work: str, admin: bool, jwt: Optional[str], email: Optional[str]) -> None:
+    try:
+        svc = load_service()
+        state.update_job(job_id, out_dir=work)
+        res = _run_engine(job_id, svc, lambda on_step, timeout: svc.build_intake(
+            work, os.path.join(work, "intake.json"), timeout=min(timeout, 600), on_step=on_step, env=_engine_env()))
+        sid = next(iter(res.get("styles") or {}), "")
+        _check_style_id(sid)
+        s = _result_style(res, sid)
+        sm = res.get("summary") or {}
+        try:
+            with open(s["confirm"], encoding="utf-8") as f:
+                confirm = f.read()[:INTAKE_CONFIRM_MAX]
+        except (OSError, KeyError, TypeError):
+            confirm = ""
+        build = {"status": "built", "style_id": sid, "sizes": res.get("sizes"), "pieces": len(res.get("pieces") or []),
+                 "assumed": sm.get("assumed") or [], "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "by": email,
+                 "engine": (res.get("engine") or {}).get("commit"), "confirm_md": confirm}
+        ver = None
+        if admin:                                                      # 관리자만 재단 패턴 창고에 «검토 대기» 판으로
+            run = _engine_run_info(res)
+            restore_missing_with_token(jwt)                            # 재배포 뒤 창고에만 있는 옛 판을 먼저 디스크로(번호가 겹치지 않게)
+            have = _versions_on_disk(sid)
+            content = _store_from_engine(job_id, s, sid, jwt, email, f"패턴 의뢰 {code} 자동 제작 · 하키티 증분 · 검토 대기",
+                                         extra={"intake": {"id": intake_id, "code": code, "review": "pending", "sizes": res.get("sizes"),
+                                                           "assumed": build["assumed"]}, "engine_run": run},
+                                         expect_version=(max(have) + 1) if have else 1)
+            ver = content["version"]
+            build.update(status="stored", ver=ver)
+        saved = _intake_save_build(intake_id, build, jwt)
+        state.update_job(job_id, status="done", done=len(svc.INTAKE_STEPS), stage="done", stage_ko="끝",
+                         result={"style_id": sid, "version": ver, "stored": ver is not None, "saved_to_intake": saved,
+                                 "sizes": res.get("sizes"), "pieces": build["pieces"], "assumed": build["assumed"], "confirm_md": confirm})
+        _log(f"[cad] 의뢰 패턴 끝: {code} → {sid} {'v' + str(ver) if ver else '(저장 안 함 · 관리자 아님)'} · 의뢰 기록 {saved}"
+             f" · 일꾼 최고 {res.get('peak_rss_mb')} MB · {res.get('wall_s')}초")
+        shutil.rmtree(work, ignore_errors=True)
+    except Exception as e:
+        _fail_job(job_id, work, "의뢰 패턴 만들기", e)
+        err = (state.get_job(job_id) or {}).get("error") or "의뢰 패턴 만들기에 실패했습니다."
+        _intake_save_build(intake_id, {"status": "error", "error": err, "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "by": email}, jwt)
+    finally:
+        _queue_done()
+        with _INTAKE_LOCK:
+            _INTAKE_BUILDING.discard(intake_id)
+
+
+@router.post("/intake/{intake_id}/build")
+def build_from_intake(intake_id: str, request: Request) -> JSONResponse:
+    """🔒 제출한 패턴 의뢰 → 패턴 + S~3XL 그레이딩. 작업 번호(202) → GET /api/cad/jobs/{job}.
+    관리자 토큰이면 재단 패턴에 «검토 대기» 새 판으로 저장, 아니면 만들기만 하고 확인표를 의뢰에 붙인다."""
+    if not INTAKE_ID_RE.fullmatch(intake_id or ""):
+        raise HTTPException(status_code=400, detail="의뢰 번호 형식이 아닙니다.")
+    svc = load_service()
+    if not hasattr(svc, "build_intake"):
+        raise HTTPException(status_code=503, detail="서버 엔진 사본이 의뢰 패턴 만들기를 아직 모릅니다(엔진 사본을 맞춰 주세요).")
+    jwt = _bearer(request)
+    row = _intake_read(intake_id, jwt)
+    if row.get("deleted_at"):
+        raise HTTPException(status_code=409, detail="휴지통에 있는 의뢰입니다.")
+    if row.get("status") not in ("submitted", "reviewed"):
+        raise HTTPException(status_code=409, detail="제출한 의뢰만 패턴을 만들 수 있습니다.")
+    admin = (not auth_required()) or getattr(request.state, "role", None) == "admin"
+    code = str(row.get("code") or "")[:40]
+    with _INTAKE_LOCK:
+        if intake_id in _INTAKE_BUILDING:
+            raise HTTPException(status_code=409, detail="이 의뢰 패턴을 지금 만드는 중입니다.")
+        _INTAKE_BUILDING.add(intake_id)
+    work = os.path.join(state.get_jobs_dir(), f"web_cadintake_{time.strftime('%y%m%d_%H%M%S')}_{hashlib.sha256(os.urandom(8)).hexdigest()[:6]}")
+    try:
+        os.makedirs(work)
+        with open(os.path.join(work, "intake.json"), "w", encoding="utf-8") as f:
+            json.dump(row, f, ensure_ascii=False)
+        job_id, ahead = _start_engine_job(request, "cad-intake", len(svc.INTAKE_STEPS), {"intake_id": intake_id, "intake_code": code},
+                                          _intake_thread, (intake_id, code, work, admin, jwt, getattr(request.state, "email", None)),
+                                          need_token=admin)
+    except BaseException:
+        with _INTAKE_LOCK:
+            _INTAKE_BUILDING.discard(intake_id)
+        shutil.rmtree(work, ignore_errors=True)
+        raise
+    return JSONResponse(status_code=202, content={"job_id": job_id, "total": len(svc.INTAKE_STEPS), "ahead": ahead, "code": code,
+                                                  "store": admin})
 
 
 @router.get("/styles/{style_id}/v/{ver}/confirm")

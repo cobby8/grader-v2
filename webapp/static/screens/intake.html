@@ -89,6 +89,11 @@
   .ik-status--draft { background: var(--ink-100); color: var(--ink-700); }
   .ik-status--submitted { background: var(--blue-bg); color: var(--blue-700); }
   .ik-status--reviewed { background: var(--green-bg); color: var(--green-700); }
+  .ik-pat { margin-left: 6px; background: var(--green-bg); color: var(--green-700); }
+  .ik-pat--error { background: var(--ink-100); color: var(--red-700); }
+  .ik-build { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--ink-100); }
+  .ik-build__err { color: var(--red-700); font: var(--text-sm); margin: 4px 0 8px; }
+  .ik-build__md { white-space: pre-wrap; font: var(--text-sm); background: var(--ink-100); border-radius: 8px; padding: 10px; margin: 8px 0 0; max-height: 60vh; overflow: auto; }
 
   /* 단계 띠 */
   .ik-steps { position: sticky; top: calc(56px + env(safe-area-inset-top, 0px)); z-index: 20; display: flex; gap: 6px; overflow-x: auto;
@@ -330,7 +335,7 @@ function RealStore(supa, user) {
     isAdmin: ((user.app_metadata || {}).role) === "admin",
     // tab: mine = 내 것(휴지통 빼고) · all = 모든 직원 것(휴지통 빼고) · trash = 휴지통
     async list(tab) {
-      let q = T().select("id,code,product_name,size_label,status,updated_at,created_by,created_by_email,deleted_at");
+      let q = T().select("id,code,product_name,size_label,status,updated_at,created_by,created_by_email,deleted_at,bstat:data->build->>status,bver:data->build->>ver");
       if (tab === "trash") q = q.not("deleted_at", "is", null).order("deleted_at", { ascending: false });
       else {
         q = q.is("deleted_at", null).order("updated_at", { ascending: false });
@@ -655,11 +660,16 @@ function renderCards() {
       '<button class="ik-card__open" type="button" data-id="' + esc(r.id) + '"' + (selMode && !can ? " disabled" : "") + (can ? ' aria-pressed="' + on + '"' : "") + ">" +
       (can ? '<span class="material-symbols-outlined ik-card__box">' + (on ? "check_box" : "check_box_outline_blank") + "</span>" : "") +
       '<span class="ik-card__body">' +
-      '<span class="ik-card__top"><span class="ik-card__code">' + esc(r.code) + '</span><span class="ik-status ik-status--' + esc(r.status) + '">' + esc(STATUS[r.status] || r.status) + "</span></span>" +
+      '<span class="ik-card__top"><span class="ik-card__code">' + esc(r.code) + '</span><span><span class="ik-status ik-status--' + esc(r.status) + '">' + esc(STATUS[r.status] || r.status) + "</span>" + patBadge(r) + "</span></span>" +
       '<span class="ik-card__name">' + esc(r.product_name || "(제품 이름 없음)") + (r.size_label ? " · " + esc(r.size_label) : "") + "</span>" +
       '<span class="ik-card__meta">' + esc(meta) + "</span></span></button>" + acts + "</div>";
   }).join("") : '<p class="ik-empty">' + (trashTab ? "휴지통이 비어 있어요." : listTab === "all" ? "의뢰가 없어요." : "아직 의뢰가 없어요.") + "</p>";
   renderSelBar();
+}
+// 카드의 패턴 표시 — 자동 제작 결과(data.build) 상태
+function patBadge(r) {
+  const t = { built: "패턴 완성", stored: "재단 패턴 v" + (r.bver || ""), error: "패턴 실패" }[r.bstat];
+  return t ? '<span class="ik-status ik-pat' + (r.bstat === "error" ? " ik-pat--error" : "") + '">' + esc(t) + "</span>" : "";
 }
 // 아래 막대 — 고르는 중에만. «N개 휴지통으로» → 한 번 더 묻고 → 옮긴다
 function renderSelBar() {
@@ -777,6 +787,7 @@ async function openIntake(id, s) {
   catch (e) { toast("의뢰를 열지 못했어요 — " + errText(e)); showList(); history.replaceState(null, "", "intake.html"); return; }
   BASE = CAT.bases.find((b) => b.key === (cur.base_type || "sleeve_top")) || CAT.bases[0];
   D = cur.data = normData(cur.data);
+  showConfirm = false;
   cur.product_name = cur.product_name || ""; cur.size_label = cur.size_label || "";
   readOnly = !canEdit(cur);
   showRo();
@@ -932,6 +943,7 @@ async function flush() {
       const fresh = await store.get(cur.id);
       if (!canEdit(fresh)) { lockReadOnly(fresh); throw new Error("NOEDIT"); }
       mergePhotos(fresh.data);
+      if (fresh.data && fresh.data.build) D.build = fresh.data.build;   // 서버가 적은 패턴 결과(data.build)는 화면 쪽 옛 값으로 덮지 않는다
       cur.updated_at = fresh.updated_at;
       if (patch.data) patch.data = D;
       return await store.update(cur.id, patch, cur.updated_at);
@@ -1113,6 +1125,7 @@ function stepFinish() {
     h += '<div class="ik-ok">제출했어요 · ' + esc(when(cur.submitted_at)) + '</div><div class="ik-muted">검토 완료 전까지는 고칠 수 있어요.</div>';
     if (miss.length) h += '<div class="ik-q__title">제출한 뒤 빈 칸이 생겼어요 · ' + miss.length + "개</div><ul class=\"ik-missing\">" + miss.map((m, k) => '<li><button type="button" data-miss="' + k + '">' + esc(m.label) + "</button></li>").join("") + "</ul>";
   } else if (cur.status === "reviewed") h += '<div class="ik-ok">검토 완료</div>';
+  if (cur.status !== "draft") h += buildBox();
   if (cur.status === "draft") {
     if (miss.length) {
       h += '<div class="ik-q__title">아직 빈 칸 ' + miss.length + "개</div><ul class=\"ik-missing\">" + miss.map((m, k) => '<li><button type="button" data-miss="' + k + '">' + esc(m.label) + "</button></li>").join("") + "</ul>";
@@ -1121,6 +1134,77 @@ function stepFinish() {
   }
   h += "</div>";
   return h;
+}
+
+/* ---------- 패턴 자동 제작(2026-10-22) ----------
+   제출하면 그레이더가 치수로 패턴을 그리고 S~3XL 로 그레이딩한다(POST /api/cad/intake/{id}/build → 작업 번호를 1초마다 본다).
+   관리자가 누르면 재단 패턴에 «검토 대기» 판으로 저장, 직원은 만들기만 하고 확인표가 의뢰에 붙는다(창고 쓰기는 관리자만). */
+let BUILD = null;                                       // 지금 화면 의뢰의 진행 중 작업 { id, job, stage, done, total, err }
+let showConfirm = false;
+function buildBox() {
+  const b = D.build || null, live = BUILD && BUILD.id === cur.id ? BUILD : null;
+  let h = '<div class="ik-build" id="buildBox"><div class="ik-q__title">패턴</div>';
+  if (live && !live.err) {
+    h += '<div class="ik-muted">패턴 만드는 중 · ' + esc(live.stage || "차례 기다림") + (live.total ? " (" + live.done + "/" + live.total + ")" : "") + "</div>";
+    return h + "</div>";
+  }
+  const err = (live && live.err) || (b && b.status === "error" && b.error);
+  if (err) h += '<div class="ik-build__err">패턴을 만들지 못했어요 — ' + esc(err) + "</div>";
+  if (b && (b.status === "built" || b.status === "stored")) {
+    const as = (b.assumed || []).length;
+    h += '<div class="ik-ok">' + (b.status === "stored" ? "재단 패턴 v" + esc(b.ver) + " 저장 · 검토 대기" : "패턴 완성") + "</div>" +
+      '<div class="ik-muted">' + esc((b.sizes || []).join("·")) + " · 조각 " + esc(b.pieces) + (as ? " · 가정한 증분 " + as + "칸(확인표 ※)" : "") + "</div>";
+    if (b.status === "stored") h += '<a class="btn btn--secondary btn--block" style="margin-top:8px" href="cad.html#' + encodeURIComponent(b.style_id) + "/v" + encodeURIComponent(b.ver) + '"><span class="material-symbols-outlined">straighten</span>재단 패턴 보기</a>';
+    else if (!store.isAdmin) h += '<div class="ik-muted">재단 패턴 저장은 관리자가 확인표를 보고 해요.</div>';
+    if (b.confirm_md) h += '<button class="btn btn--ghost btn--block" style="margin-top:8px" type="button" id="patConfirm">' + (showConfirm ? "확인표 접기" : "확인표 보기") + "</button>" +
+      (showConfirm ? '<pre class="ik-build__md">' + esc(b.confirm_md) + "</pre>" : "");
+  }
+  if (store.mode === "real") {
+    const label = store.isAdmin ? (b && b.status === "stored" ? "다시 만들어 새 판으로 저장" : "재단 패턴에 저장") : (b ? "패턴 다시 만들기" : "패턴 만들기");
+    h += '<button class="btn btn--' + (b && b.status !== "error" ? "secondary" : "primary") + ' btn--block" style="margin-top:8px" type="button" id="patBuild">' + label + "</button>";
+  }
+  return h + "</div>";
+}
+function refreshBuild() {
+  const box = $("#buildBox");
+  if (!box || !cur) return;
+  const tmp = document.createElement("div"); tmp.innerHTML = buildBox();
+  box.replaceWith(tmp.firstElementChild);
+}
+async function startBuild() {
+  if (!cur || store.mode !== "real" || (BUILD && BUILD.id === cur.id && !BUILD.err)) return;
+  const id = cur.id, code = cur.code;
+  BUILD = { id, job: "", stage: "", done: 0, total: 0, err: "" }; refreshBuild();
+  const auth = async () => { const t = await store.token(); return t ? { Authorization: "Bearer " + t } : {}; };
+  try {
+    const res = await fetch("/api/cad/intake/" + encodeURIComponent(id) + "/build", { method: "POST", headers: await auth() });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.detail || (res.status === 401 ? "로그인이 끝났어요. 다시 로그인해 주세요." : "서버가 받지 않았어요"));
+    BUILD.job = body.job_id; BUILD.total = body.total || 0;
+    for (let i = 0; i < 900; i++) {                     // 길어야 15분 — 보통 10초 안팎
+      await new Promise((ok) => setTimeout(ok, 1000));
+      const r = await fetch("/api/cad/jobs/" + encodeURIComponent(BUILD.job), { headers: await auth(), cache: "no-store" });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.detail || "진행 상황을 읽지 못했어요");
+      if (j.status === "error") throw new Error(j.error || "패턴을 만들지 못했어요");
+      if (j.status === "done") {
+        const x = j.result || {};
+        const b = { status: x.stored ? "stored" : "built", style_id: x.style_id, ver: x.version, sizes: x.sizes, pieces: x.pieces,
+          assumed: x.assumed || [], confirm_md: x.confirm_md || "", at: new Date().toISOString() };
+        BUILD = null;
+        if (cur && cur.id === id) { D.build = b; refreshBuild(); }   // 의뢰 기록은 서버가 적었다 — 여기서는 보여주기만(다음 저장 때 다시 읽어 합친다)
+        toast(x.stored ? "재단 패턴 v" + x.version + " 에 저장했어요 · " + code : "패턴을 만들었어요 · " + code);
+        if (!cur) loadList();
+        return;
+      }
+      BUILD.stage = j.stage_ko || ""; BUILD.done = j.done || 0; BUILD.total = j.total || BUILD.total;
+      if (cur && cur.id === id) refreshBuild();
+    }
+    throw new Error("너무 오래 걸려요. 잠시 뒤 다시 열어 보세요");
+  } catch (e) {
+    if (BUILD && BUILD.id === id) BUILD.err = (e && e.message) || "패턴을 만들지 못했어요";
+    if (cur && cur.id === id) refreshBuild();
+  }
 }
 
 /* ---------- 단계 화면 동작 ---------- */
@@ -1136,6 +1220,8 @@ $("#main").addEventListener("click", async (e) => {
     else go(m.step);
     return;
   }
+  if (b.id === "patBuild") { startBuild(); return; }
+  if (b.id === "patConfirm") { showConfirm = !showConfirm; refreshBuild(); return; }
   if (readOnly) return;
   if (b.dataset.base) {                                // 지금은 소매 상의만 열려 있다 — 누르면 «기본 형태 확인» 만 끝난다
     if (confirmGroup("base")) { change(); renderSteps(); renderStep(); }
@@ -1174,7 +1260,7 @@ $("#main").addEventListener("click", async (e) => {
     if (missing().length) return;
     b.disabled = true;
     change({ status: "submitted" }, true);
-    if (await flush()) toast("제출했어요 · " + cur.code);
+    if (await flush()) { toast("제출했어요 · " + cur.code); setTimeout(startBuild, 0); }
     else { delete pending.status; if (Object.keys(pending).length) backup(); }   // 실패한 제출이 다음 저장 때 몰래 들어가지 않게
     renderBar(); renderSteps(); renderStep();
     return;

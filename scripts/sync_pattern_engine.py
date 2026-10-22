@@ -37,9 +37,11 @@ DEST = os.path.join(ROOT, "vendor", "pattern_engine")
 DEFAULT_SRC = os.environ.get("STIZSHOP_ENGINE_DIR") or os.path.join(os.path.dirname(ROOT), "stizshop", "tools", "pattern-engine")
 ROOTS = ["service.py", "gas_warmup_build.py", "gas_warmup_grade.py",   # 창구 + 창구가 runpy 로 돌리는 스크립트(import 로는 안 잡힌다)
          "preset_export.py"]    # 노치 일꾼(webapp/notch_child.py)이 쓰는 입구 — notch_rules·illustrator·notching 이 import 로 따라온다(2026-10-20)
-EXTRA = ["requirements.txt"]
+EXTRA = ["requirements.txt",
+         "styles/rugby_jersey.json", "styles/rugby_jersey_grade.json"]   # 패턴 의뢰 → 패턴(intake_build, 2026-10-22) 이 읽는 스타일 공식·사이즈 증분
 FIXTURES = ["fixtures/gas-warmup-2026/gas_top_2xl.ai", "fixtures/gas-warmup-2026/gas_bottom_2xl.ai",
-            "fixtures/gas-warmup-2026/std_warmup_top.ai", "fixtures/gas-warmup-2026/std_warmup_pants.ai"]
+            "fixtures/gas-warmup-2026/std_warmup_top.ai", "fixtures/gas-warmup-2026/std_warmup_pants.ai",
+            "tests/fixtures/intake/PI-261022-001.json"]   # 패턴 의뢰 표본(긴팔 하키저지) — tests/test_cad_intake.py 가 쓴다
 TEXT_EXT = (".py", ".json", ".txt", ".md")
 KEEP = {"ENGINE_VERSION.json", ".gitattributes"}                     # 사본 폴더에서 지우지 않는 «이 저장소 것»
 GITATTR = "# 엔진 사본은 바이트 그대로 둔다 — 줄바꿈 변환이 끼면 지문 시험이 헛 실패한다\n* -text\n"

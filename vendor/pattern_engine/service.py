@@ -154,11 +154,14 @@ _SIZE_ALIAS = {"XXL": "2XL", "XXXL": "3XL", "XXXXL": "4XL", "XXXXXL": "5XL", "2X
 
 # ════════ 새 스타일 들여오기(F10 6단계) — OptiCad .ai → 들여온 스타일(style_import) ════════
 IMPORT_STEPS = ["read", "pieces", "verify", "bundle"]       # 원본 읽기 · 조각마다 규칙 읽기(대부분의 시간) · 원본 대조 · 묶음
+INTAKE_STEPS = ["intake_read", "intake_draft", "intake_grade", "intake_export", "intake_bundle"]   # 패턴 의뢰 → 패턴(2026-10-22) — 들여오기 «read» 와 겹치지 않게 intake_ 를 붙인다
 RESTYLE_STEPS = ["load", "apply", "verify", "bundle"]       # 이름 고치기·규칙 바꾸기 — 묶음 열기 · 바꾸기 · 원본 대조 · 묶음
 IMARKER_STEPS = ["specs", "marker"]                        # 들여온 스타일 마커 — 명세 꺼내기·지문 확인 · 배치
 STEP_KO.update({"read": "원본 .ai 읽기", "pieces": "조각마다 그레이딩 규칙 읽기", "bundle": "명세·화면 자료·묶음 쓰기",
                 "load": "묶음 열기", "apply": "이름·규칙 바꾸기", "verify": "원본 대조·재생성 검산",
                 "specs": "사이즈별 명세 꺼내기·지문 확인"})
+STEP_KO.update({"intake_read": "의뢰 치수 읽기", "intake_draft": "기준 사이즈 패턴 그리기", "intake_grade": "S~3XL 그레이딩",
+                "intake_export": "사이즈별 .ai·DXF·PDF 쓰기", "intake_bundle": "확인표·화면 자료·묶음"})
 IMPORT_MAX_BYTES = 50 * 1024 * 1024                         # 원본 .ai 업로드 상한(설계 §7)
 IMPORT_MAX_SIZES = 30                                       # 사이즈 레이어 상한(어림 밖 — 이상한 파일)
 IMPORT_MAX_SECONDS = 600.0                                  # 일꾼 안 시계 — 원본 읽기·규칙 읽기 전체 상한(초)
@@ -1283,6 +1286,51 @@ def regrade(work, group, rules, full=False, sources=None, timeout=900, python=No
     return _spawn(cmd, work, res_path, timeout, on_step, env)
 
 
+def intake_all(work, intake_path, style_id=None, sizes=None, emit=False):
+    """패턴 의뢰 → 패턴 자동 제작 + 그레이딩(2026-10-22). 일꾼 프로세스 안에서 부른다 — 글꼴은 font_shim 으로 맞춘다.
+    돌려주는 것은 들여오기와 같은 꼴 {"styles": {style_id: {view, zip, …}}, …} — 그레이더가 같은 저장 길(_store_from_engine)을 탄다"""
+    if HERE not in sys.path: sys.path.insert(0, HERE)
+    import intake_build as IB
+    try:
+        with open(intake_path, encoding="utf-8") as f: row = json.load(f)
+    except (OSError, ValueError):
+        raise ServiceError("의뢰 자료를 읽지 못했습니다.")
+    n = len(INTAKE_STEPS); idx = {k: i + 1 for i, k in enumerate(INTAKE_STEPS)}
+    step = lambda k: _step(idx.get("intake_" + k, 1), "intake_" + k, emit, n)
+    t0 = time.time()
+    out = os.path.join(os.path.abspath(work), "out")
+    fnt = resolve_font()
+    try:
+        with font_shim(fnt["path"]):
+            res = IB.build(row, out, sizes, style_id, progress=step)
+    except IB.IntakeBuildError as e:
+        raise ServiceError(str(e))
+    P = res["paths"]; ev = engine_version()
+    with open(P["view"], encoding="utf-8") as f: view = json.load(f)
+    view["source"].update(commit=ev.get("commit"), engine_source=ev.get("source"), built_by="service.py")
+    with open(P["view"], "w", encoding="utf-8") as f: json.dump(view, f, ensure_ascii=False, separators=(",", ":"))
+    sid = res["style_id"]
+    ent = {"group": "intake", "view": P["view"], "zip": P["zip"], "view_bytes": os.path.getsize(P["view"]),
+           "zip_bytes": os.path.getsize(P["zip"]), "checks_bad": [], "check_ok": True, "confirm": P["confirm"]}
+    return {"ok": True, "mode": "intake", "work": os.path.abspath(work), "styles": {sid: ent}, "summary": res["summary"],
+            "sizes": res["sizes"], "pieces": res["pieces"], "name": res["name"], "engine": ev, "font": fnt,
+            "timings_s": {"total": round(time.time() - t0, 1)}, "peak_rss_mb": peak_rss_mb()}
+
+
+def build_intake(work, intake_path, style_id=None, sizes=None, timeout=600, python=None, on_step=None, env=None):
+    """서버가 부르는 함수 — 패턴 의뢰 → 패턴(따로 띄운 일꾼). 반환: intake_all 의 결과 + wall_s"""
+    work = os.path.abspath(work); os.makedirs(work, exist_ok=True)
+    res_path = os.path.join(work, "result.json")
+    cmd = [python or sys.executable, os.path.abspath(__file__), "intake", "--work", work, "--intake", os.path.abspath(intake_path),
+           "--result", res_path, "--emit-steps"]
+    if style_id: cmd += ["--style-id", style_id]
+    if sizes: cmd += ["--sizes", *sizes]
+    try:
+        return _spawn(cmd, work, res_path, timeout, on_step, env)
+    except ServiceError as e:
+        raise ServiceError(_worker_reason(os.path.join(work, "engine.log")) or str(e))
+
+
 def import_style(work, src, base, style_id, name=None, source_name=None, timeout=900, max_seconds=IMPORT_MAX_SECONDS, python=None,
                  on_step=None, env=None):
     """서버가 부르는 함수(F10 6단계) — 원본 .ai 를 «따로 띄운 일꾼» 에서 들여온다. 머리·스타일 번호는 부모에서 먼저 본다.
@@ -1589,6 +1637,9 @@ def main(argv=None):
     sp = sub.add_parser("specs", help="들여온 스타일 묶음 → 마커용 graded·펼침표 (지문 확인)")
     sp.add_argument("--work", required=True); sp.add_argument("--zip", required=True); sp.add_argument("--files-file", required=True)
     sp.add_argument("--result"); sp.add_argument("--emit-steps", action="store_true")
+    ik = sub.add_parser("intake", help="패턴 의뢰 JSON → 패턴 자동 제작 + 그레이딩 (2026-10-22)")
+    ik.add_argument("--work", required=True); ik.add_argument("--intake", required=True); ik.add_argument("--style-id")
+    ik.add_argument("--sizes", nargs="*"); ik.add_argument("--result"); ik.add_argument("--emit-steps", action="store_true")
     sub.add_parser("font", help="쓰게 될 글꼴")
     a = ap.parse_args(argv)
     if a.cmd == "font":
@@ -1602,6 +1653,8 @@ def main(argv=None):
         elif a.cmd == "marker":
             with open(a.request_file, encoding="utf-8") as f: req = json.load(f)
             r = marker_all(a.work, a.graded, req, emit=a.emit_steps, spec_file=a.spec_file, title=a.title)
+        elif a.cmd == "intake":
+            r = intake_all(a.work, a.intake, a.style_id, a.sizes or None, emit=a.emit_steps)
         elif a.cmd == "import":
             r = import_all(a.work, a.src, a.base, a.style_id, a.name, a.source_name, emit=a.emit_steps, max_seconds=a.max_seconds)
         elif a.cmd == "restyle":
