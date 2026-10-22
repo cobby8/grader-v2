@@ -25,7 +25,7 @@ import copy
 import os
 import tempfile
 from dataclasses import asdict
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import pikepdf
 from pikepdf import parse_content_stream
@@ -35,7 +35,7 @@ from .flatten import flatten_transparency  # 디자인 투명도 벡터 평탄�
 # grade.py 는 무수정(불변 제약). 공개 build_layouts/load_preset 과 함께, 폰트경로 해석
 # 내부 함수 _resolve_font_path 는 '호출만' 한다(복제 대신 재사용 — 동작 일치 보장).
 from .grade import _resolve_font_path, build_layouts, load_preset
-from .pattern import parse_svg  # 사이즈별 패턴 SVG → 조각 윤곽(정밀배치 경로에서 사용)
+from .pattern import Polyline, parse_svg  # 사이즈별 패턴 SVG → 조각 윤곽(정밀배치 경로에서 사용)
 from .pdfutil import cm_matrix, scale_translate, fit_matrix, with_mirror  # 글자 ops 를 시트좌표로 감쌀 cm 행렬 생성
 from .text import place_name, place_number  # Phase B 정밀 배치기(완성본 실측 수치 재현)
 from .verify import all_passed, verify_output
@@ -839,13 +839,35 @@ def _build_precise_layout(preset: dict, size_def: dict, *,
     # ── 2) 조각별 윤곽 + 방식 A transform 으로 Piece 생성(글자 없이 먼저). ──
     layout_pieces: List[Piece] = []
     piece_transforms: List[tuple] = []  # 같은 인덱스로 글자 감싸기에 재사용
-    for pdef in pieces_def:
+    # (2026-10-21) 복제 조각(dup_of — 한 장뿐인 유소년 소매의 반대쪽)은 시트 오른쪽 옆에, 필요하면 뒤집어 놓는다
+    dup_dx: Dict[int, float] = {}
+    _base = [x for p in pieces_def if not p.get("dup_of") and 0 <= p["svg_index"] < len(polys)
+             for x, _ in polys[p["svg_index"]].points]
+    _cur = (max(_base) + 60.0) if _base else 0.0
+    for li, p in enumerate(pieces_def):
+        if p.get("dup_of") and 0 <= p["svg_index"] < len(polys):
+            _xs = [x for x, _ in polys[p["svg_index"]].points]
+            dup_dx[li] = _cur - min(_xs)
+            _cur += (max(_xs) - min(_xs)) + 60.0
+
+    def _placed(points, li):
+        pts = list(points)
+        if pieces_def[li].get("outline_mirror"):
+            x0 = min(x for x, _ in pts); x1 = max(x for x, _ in pts)
+            pts = [(x0 + x1 - x, y) for x, y in reversed(pts)]
+        if li in dup_dx:
+            pts = [(x + dup_dx[li], y) for x, y in pts]
+        return pts
+
+    for li, pdef in enumerate(pieces_def):
         idx = pdef["svg_index"]
         if idx < 0 or idx >= len(polys):
             raise ValueError(
                 f"조각 '{pdef.get('id','?')}' svg_index={idx} 가 SVG 조각 수({len(polys)})를 벗어남"
                 f" (사이즈 {size_def['name']}, 파일 {size_def['pattern_file']})")
         poly = polys[idx]
+        if pdef.get("dup_of"):
+            poly = Polyline(points=_placed(poly.points, li))
         # cover_bleed 가 지정되면(작업2) cover+블리드, 아니면 기존 contain(bleed=None→contain).
         if pdef.get("fit"):
             # 조각별 «디자이너 방식»(2026-10-20 등록분부터) — 블리드 없이 그 방식대로. 없으면 예전 그대로.
@@ -956,7 +978,7 @@ def _build_precise_layout(preset: dict, size_def: dict, *,
                 warnings.append(f"🟡 [노치] {os.path.basename(npath)} 없음 — 노치 없이 재단선을 그립니다")
         for li, pdef in enumerate(pieces_def):
             poly = cut_polys[pdef["svg_index"]]
-            ops = _polygon_cutline_ops(poly.points, color, sw)
+            ops = _polygon_cutline_ops(_placed(poly.points, li) if pdef.get("dup_of") else poly.points, color, sw)
             if not ops:
                 continue
             tp = layout_pieces[li]
@@ -972,8 +994,8 @@ def _build_precise_layout(preset: dict, size_def: dict, *,
                 tp.extra_ops = (tp.extra_ops + "\n" + wrapped) if tp.extra_ops else wrapped
 
     # ── 페이지 크기 = 모든 조각 윤곽 전체 bbox + 여백 50pt(build_layouts 와 동일). ──
-    all_x = [x for p in pieces_def for (x, _) in polys[p["svg_index"]].points]
-    all_y = [y for p in pieces_def for (_, y) in polys[p["svg_index"]].points]
+    all_x = [x for tp in layout_pieces for (x, _) in tp.outline]
+    all_y = [y for tp in layout_pieces for (_, y) in tp.outline]
     page = (max(all_x) + 50.0, max(all_y) + 50.0)
 
     return SizeLayout(name=size_def["name"], page_size=page, pieces=layout_pieces)
@@ -999,6 +1021,18 @@ def _auto_regions(pd: dict, design_pdf: str, warnings: list, label: str = "") ->
                 pdef["mirror"] = True
             _done.append(f"{pdef.get('name') or pdef.get('id')}{'(뒤집음)' if hit['mirrored'] else ''}")
         _sides = _m.pop("_sides", [])
+        for ex in _m.pop("_extra", []):
+            base = next((p for p in pd["pieces"] if p.get("svg_index") == ex["svg_index"]), None)
+            if base is None:
+                continue
+            p2 = copy.deepcopy(base)
+            p2.pop("mirror", None)
+            p2.update({"id": f"{base.get('id')}_2", "name": f"{base.get('name') or base.get('id')}(반대쪽)",
+                       "design_region_pt": list(ex["region_pt"]), "dup_of": base.get("id"),
+                       "outline_mirror": bool(ex["mirrored"])})
+            pd["pieces"].append(p2)
+            warnings.append(f"[영역] {label}패턴에 한 장뿐인 «{base.get('name') or base.get('id')}» 를 디자인의 반대쪽 조각에도 찍습니다"
+                            + ("(모양을 뒤집어 재단)." if ex["mirrored"] else "."))
         miss = [p.get("name") or p.get("id") for p in pd["pieces"] if p.get("svg_index") not in _m]
         if _done:
             warnings.append(f"[영역] {label}디자인 속 재단 윤곽으로 조각 영역을 맞췄습니다: " + ", ".join(_done))

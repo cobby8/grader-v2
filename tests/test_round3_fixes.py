@@ -169,5 +169,64 @@ class KidsSizesAndNames(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class MasterChainAndKidsSleeve(unittest.TestCase):
+    """(2026-10-21 김현서 답 16·20번) 반쪽 열린 선으로 그린 마스터 조각 · 한 장뿐인 유소년 소매."""
+
+    def test_chain_open_halves(self):
+        from engine.svg_normalize import _chain_open_paths, _bbox
+        import math
+        # 둥근 윗변 조각을 «왼쪽 반 + 오른쪽 반» 열린 선 둘로
+        top = [(500 + 300 * math.cos(math.pi * k / 20), 1000 + 200 * math.sin(math.pi * k / 20)) for k in range(21)]
+        left = [(800, 0), (800, 1000)] + top[:11]                  # (800,0)→오른쪽 위→꼭대기
+        right = top[10:] + [(200, 1000), (200, 0), (800, 0)]       # 꼭대기→왼쪽→아래→처음
+        box = [[(0, 0), (300, 0)], [(300, 0), (300, 300)], [(300, 300), (0, 300)], [(0, 300), (0, 0)]]   # 라벨 칸
+        cands = [(left, _bbox(left), False), (right, _bbox(right), False)] + [(b, _bbox(b), False) for b in box]
+        got, n = _chain_open_paths(cands)
+        self.assertEqual(n, 1)
+        closed = [c for c in got if c[2]]
+        self.assertEqual(len(closed), 1)
+        self.assertEqual([round(v) for v in closed[0][1]], [200, 0, 800, 1200])
+
+    def test_inner_seam_loop_dropped(self):
+        from engine.svg_normalize import _chain_open_paths, _bbox
+        outer = [(0, 0), (200, 0), (400, 0), (400, 400), (400, 800), (200, 820), (0, 800), (0, 400)]   # 조각 바깥선(점 여럿)
+        a = [(20, 20), (380, 20), (380, 400), (370, 500), (360, 600), (350, 780)]
+        b = [(350, 780), (20, 780), (20, 20)]
+        cands = [(outer, _bbox(outer), True), (a, _bbox(a), False), (b, _bbox(b), False)]
+        got, n = _chain_open_paths(cands)
+        self.assertEqual(n, 0)                                     # 바깥선 안의 봉제선 고리는 조각이 아니다
+
+    def test_single_sleeve_duplicated_mirrored(self):
+        import json
+        from engine.job import _build_precise_layout
+        tmp = tempfile.mkdtemp(prefix="kids_")
+        try:
+            body = [(100, 100), (700, 100), (700, 900), (100, 900)]
+            sleeve = [(900, 100), (1300, 100), (1250, 500), (900, 600)]   # 비대칭(거울이면 모양이 다르다)
+            with open(os.path.join(tmp, "14호.svg"), "w", encoding="utf-8") as f:
+                f.write('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 1000">' + "".join(
+                    '<polyline points="' + " ".join(f"{x} {1000 - y}" for x, y in pts + pts[:1]) + '"/>' for pts in (body, sleeve))
+                    + "</svg>")
+            preset = {"_dir": tmp, "design": {"page_size_pt": [3000, 1500]},
+                      "pieces": [{"id": "front", "svg_index": 0, "design_region_pt": [0, 0, 600, 800], "fit": "top_height"},
+                                 {"id": "piece_1", "svg_index": 1, "design_region_pt": [1000, 0, 1400, 500]},
+                                 {"id": "piece_1_2", "svg_index": 1, "design_region_pt": [1500, 0, 1900, 500],
+                                  "dup_of": "piece_1", "outline_mirror": True}]}
+            lay = _build_precise_layout(preset, {"name": "14호", "pattern_file": "14호.svg"}, warnings=[])
+            self.assertEqual(len(lay.pieces), 3)
+            s1, s2 = lay.pieces[1].outline, lay.pieces[2].outline
+            self.assertGreater(min(x for x, _ in s2), max(x for x, _ in s1))      # 시트 오른쪽 옆에 따로
+            w1 = max(x for x, _ in s1) - min(x for x, _ in s1)
+            w2 = max(x for x, _ in s2) - min(x for x, _ in s2)
+            self.assertAlmostEqual(w1, w2, places=3)
+            # 뒤집힌 모양: 원래 조각의 «가장 높은 점» 이 왼쪽이면 복제본은 오른쪽
+            lo1 = max(s1, key=lambda p: p[1])[0] - min(x for x, _ in s1)
+            lo2 = max(s2, key=lambda p: p[1])[0] - min(x for x, _ in s2)
+            self.assertAlmostEqual(lo1 + lo2, w1, places=3)
+            self.assertGreaterEqual(lay.page_size[0], max(x for x, _ in s2))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

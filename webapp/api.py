@@ -1764,8 +1764,13 @@ def _shape_desc(pts) -> Dict[str, float]:
         c = x0 * y1 - x1 * y0
         a2 += c; gx += (x0 + x1) * c
     skx = ((gx / (3 * a2)) - (min(xs) + max(xs)) / 2) / w if a2 else 0.0
+    # (2026-10-21) 목 파임 깊이(높이 대비) — 앞판(깊다)·뒤판(얕다)을 가른다. SVG 는 y 가 아래로 커진다.
+    #   슈팅셔츠 L 마스터에 뒤판이 새로 읽히자, 앞판만 있는 XL 기준과 짝지을 때 뒤판을 골랐다(구미혜당 L 13.6%).
+    cxm = (min(xs) + max(xs)) / 2
+    col = [y for x, y in pts if abs(x - cxm) <= 0.15 * w and y <= min(ys) + 0.35 * h]
+    neck = ((max(col) - min(ys)) / h) if col else 0.0
     return {"w": w, "h": h, "area": area, "aspect": w / h, "comp": per * per / area, "fill": area / (w * h),
-            "skx": skx, "cx": (min(xs) + max(xs)) / 2, "cy": (min(ys) + max(ys)) / 2}
+            "skx": skx, "neck": neck, "cx": (min(xs) + max(xs)) / 2, "cy": (min(ys) + max(ys)) / 2}
 
 
 def _rel_positions(descs: List[Dict[str, float]]) -> None:
@@ -1785,6 +1790,7 @@ def _match_cost(a: Dict[str, float], b: Dict[str, float]) -> float:
             + 2.0 * abs(b["fill"] - a["fill"])
             + 0.8 * abs(math.log(math.sqrt(b["area"] / a["area"])))
             + 4.0 * abs(b["skx"] - a["skx"])
+            + 3.0 * abs(b.get("neck", 0.0) - a.get("neck", 0.0))
             + 0.3 * abs(b["rx"] - a["rx"]) + 0.3 * abs(b["ry"] - a["ry"]))
 
 

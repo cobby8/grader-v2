@@ -261,6 +261,69 @@ def _get_viewbox(root: ET.Element) -> Tuple[str, float, float]:
 # ─────────────────────────────────────────────────────────────────────────────
 # 4) 메인 변환 함수
 # ─────────────────────────────────────────────────────────────────────────────
+def _shoelace_abs(pts) -> float:
+    a = 0.0
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:] + pts[:1]):
+        a += x0 * y1 - x1 * y0
+    return abs(a) / 2.0
+
+
+def _chain_open_paths(cands: list, tol: float = 1.5) -> Tuple[list, int]:
+    """(2026-10-21) 끝점이 맞닿는 열린 선들을 이어 닫힌 조각으로 만든다.
+
+    왜: 슈팅셔츠 마스터는 조각 윤곽을 «반쪽 열린 선 두 개» 로 그렸다(3XL 소매·XL 앞판 — 시작·끝이 bbox 대각선
+    양 끝). 열린 선은 조각이 아니라고 버려서 «소매 없음·앞판 없음» 으로 보였다(디자이너: 조각은 다 들어 있다).
+    같은 선을 겹쳐 그린 사본끼리 이으면 넓이 0 고리가 되니, 이은 결과가 bbox 의 5% 이상 넓이일 때만 인정한다.
+    cands: [(pts, bbox, closed)] → (새 목록, 이어 만든 조각 수). 못 이은 열린 선은 그대로 남긴다.
+    """
+    opens = [i for i, c in enumerate(cands) if not c[2] and len(c[0]) >= 2]
+    used = set()
+    made = []
+    for i in opens:
+        if i in used:
+            continue
+        chain = list(cands[i][0])
+        members = [i]
+        grew = True
+        while grew and math.dist(chain[0], chain[-1]) > tol:
+            grew = False
+            for j in opens:
+                if j in used or j in members:
+                    continue
+                q = cands[j][0]
+                if sorted(q) == sorted(chain):        # 같은 선의 사본
+                    continue
+                if math.dist(chain[-1], q[0]) <= tol:
+                    chain += list(q[1:])
+                elif math.dist(chain[-1], q[-1]) <= tol:
+                    chain += list(reversed(q[:-1]))
+                else:
+                    continue
+                members.append(j)
+                grew = True
+                break
+        if len(members) < 2 or math.dist(chain[0], chain[-1]) > tol:
+            continue
+        if not any(len(cands[m][0]) >= 5 for m in members):
+            continue                                  # 짧은 직선 넷으로 된 상자(라벨 칸)는 조각이 아니다
+        bb = _bbox(chain)
+        if _shoelace_abs(chain[:-1]) < 0.05 * (bb[2] - bb[0]) * (bb[3] - bb[1]):
+            continue
+        used.update(members)
+        made.append((chain[:-1], bb, True))
+    # 다른 조각 안에 쏙 들어가는 고리 = 그 조각의 봉제선·보조선(소매 안쪽 선 등) → 버린다
+    #   (점 4개 이하 사각형 = 대지 테·라벨 칸은 «바깥 조각» 으로 치지 않는다)
+    boxes = [c[1] for c in cands if c[2] and len(c[0]) > 5] + [m[1] for m in made]
+
+    def _inside(bb):
+        return any(o is not bb and o[0] - 2 <= bb[0] and o[1] - 2 <= bb[1] and bb[2] <= o[2] + 2 and bb[3] <= o[3] + 2
+                   and (bb[2] - bb[0]) * (bb[3] - bb[1]) < (o[2] - o[0]) * (o[3] - o[1]) for o in boxes)
+    made = [m for m in made if not _inside(m[1])]
+    if not made:
+        return cands, 0
+    return [c for k, c in enumerate(cands) if k not in used] + made, len(made)
+
+
 def normalize_svg(in_path: str, out_path: str, *,
                   min_points: int = 3,
                   drop_open: bool = True,
@@ -365,6 +428,9 @@ def normalize_svg(in_path: str, out_path: str, *,
     if any_curves:
         warnings.append(
             "🟡 곡선(호)을 끝점만 이어 직선으로 근사했습니다. 형태가 어긋날 수 있어 확인이 필요합니다.")
+    candidates, n_chained = _chain_open_paths(candidates)
+    for pts, bb, closed in candidates[len(candidates) - n_chained:]:
+        stroked[id(pts)] = True             # 이어 만든 조각은 윤곽선에서 왔다(잘린 채움 사본 아님)
 
     # ── 보조선·작은 표식 필터 (이슈3에서 정정) ──
     #   [수정 이유] 종전 "한 축이라도 5%보다 작으면 버림"은 목 '밴드' 조각(폭 1380~1992,

@@ -170,4 +170,21 @@ def match_regions(design_pdf: str, svg_polys, max_cost_mm: float = 6.0,
                        "mirrored": True, "alts": 1}
     if sides:
         got["_sides"] = sides      # [ {svg_index: region} ] — 두 번째 면부터
+    else:
+        # (2026-10-21) 패턴엔 한 장뿐인데(유소년 소매) 디자인엔 같은 모양이 하나 더 있으면(왼·오른 소매) 그것도 찍는다.
+        #   김현서: «유소년은 소매가 패턴마다 하나씩 들어 있는 것이 있다. 반전해서 사용해도 무방».
+        #   패턴에 비슷한 크기 조각이 둘 이상이면(이미 왼·오른이 있음) 하지 않는다.
+        def _single(si):
+            sw, sh = svg_polys[si].width, svg_polys[si].height
+            return sum(1 for q in svg_polys if abs(q.width - sw) <= 0.05 * sw and abs(q.height - sh) <= 0.05 * sh) == 1
+        extra = []
+        for cost, si, oi, mir, other in sorted(cand, key=key):
+            if oi in used or si not in got or not _single(si) or any(e["svg_index"] == si for e in extra):
+                continue
+            c_norm, c_mir = (cost, other) if not mir else (other, cost - 0.5)
+            extra.append({"svg_index": si, "region_pt": tuple(round(v, 2) for v in outs[oi]["bbox"]),
+                          "mirrored": c_mir < c_norm})     # 디자인 윤곽에 더 잘 맞는 쪽(왼·오른 소매는 거울)
+            used.add(oi)
+        if extra:
+            got["_extra"] = extra   # [{svg_index, region_pt, mirrored: 패턴 모양을 뒤집어 재단}]
     return got
