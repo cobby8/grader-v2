@@ -1133,6 +1133,49 @@ def _sized_preset(preset: dict, size_def: dict) -> dict:
     return {**preset, "sizes": [size_def]}
 
 
+def _apply_job_reference(preset_dict: dict, reference_pdf: str, warnings: list) -> None:
+    """(2026-10-22) 이 작업만의 완성본(번호·이름 박힌 샘플)으로 번호·이름 자리를 읽어 preset 사본에 얹는다.
+
+    왜: 번호 자리는 패턴(마스터)이 아니라 «팀 디자인» 마다 다르다. 패턴 등록 때 완성본으로만 받으면
+    번호 있는 주문마다 패턴을 새로 등록해야 했다(운영 패턴 10개 중 8개가 번호 자리 없음 경고).
+    → 작업 화면에서 빈 본체와 함께 완성본 1장을 올리면 그 작업에서만 쓴다. 패턴 파일은 바꾸지 않는다.
+    완성본과 빈 본체는 같은 대지(같은 좌표)여야 한다 — 디자이너 기준 파일에서 번호·이름만 지운 것이 빈 본체.
+    패턴에 팀 번호 글리프셋(glyph_source)이 있으면 그대로 이어 쓴다.
+    """
+    try:
+        from .reference import build_area_preset
+        rep = build_area_preset(reference_pdf)
+    except Exception as e:
+        warnings.append(f"🟡 [완성본] 번호·이름 자리를 읽지 못해 패턴에 등록된 자리를 씁니다: {e}")
+        return
+    areas = rep.get("areas") or {}
+    pieces = preset_dict.get("pieces") or []
+    ids = [p.get("id") for p in pieces]
+    named = {p.get("name"): p.get("id") for p in pieces}
+    front = named.get("앞판") or next((x for x in ("front", "split_front") if x in ids), ids[0] if ids else "front")
+    back = named.get("뒤판") or next((x for x in ("back", "split_back") if x in ids), ids[1] if len(ids) > 1 else front)
+    got = []
+    for key, pid, label in (("front_number_area", front, "앞번호"), ("back_number_area", back, "뒤번호"),
+                            ("back_name_area", back, "뒤이름")):
+        area = areas.get(key)
+        if not area:
+            continue
+        old = preset_dict.get(key) or {}
+        area = dict(area, piece_id=pid)
+        if old.get("glyph_source") and "number" in key:
+            area["glyph_source"] = old["glyph_source"]
+        preset_dict[key] = area
+        got.append(label)
+    if got:
+        warnings.append("[완성본] 이 주문의 완성본에서 번호·이름 자리를 읽었습니다: " + "·".join(got)
+                        + " (패턴에 등록된 자리 대신 씁니다)")
+    missing = [lab for k, lab in (("front_number_area", "앞번호"), ("back_number_area", "뒤번호"),
+                                  ("back_name_area", "뒤이름")) if not areas.get(k)]
+    if missing:
+        warnings.append(f"🟡 [완성본] 완성본에서 {'·'.join(missing)} 자리를 찾지 못했습니다 — "
+                        "번호는 앞·뒤에 같은 숫자로, 이름은 글자(윤곽선 아님)로 넣은 완성본인지 확인해 주세요.")
+
+
 def run_job(preset: str,
             design_pdf: str,
             order_rows: List[dict],
@@ -1140,7 +1183,8 @@ def run_job(preset: str,
             font_path: Optional[str] = None,
             split: str = "per_player",
             make_preview: bool = True,
-            out_format: Optional[str] = None) -> dict:
+            out_format: Optional[str] = None,
+            reference_pdf: Optional[str] = None) -> dict:
     """주문 행(선수)마다 그 선수 사이즈 1페이지에 배번/이름을 얹어 PDF 한 벌을 만든다.
 
     매개변수
@@ -1170,6 +1214,9 @@ def run_job(preset: str,
     preset_dict = load_preset(preset)  # FileNotFoundError/ValueError 친절 메시지
     if not os.path.exists(design_pdf):
         raise FileNotFoundError(f"디자인 파일 없음: {design_pdf}")
+    ref_warnings: list = []
+    if reference_pdf:
+        _apply_job_reference(preset_dict, reference_pdf, ref_warnings)
 
     # ── (§5) 출력 형식 결정: run_job 인자 > preset.output.format > 기본 "pdf". ──
     #    왜 이 우선순위: CLI/호출자가 명시한 형식이 preset 기본값을 덮어쓰는 게 직관적.
@@ -1224,6 +1271,7 @@ def run_job(preset: str,
     outputs: list = []
     skipped: list = []
     warnings: list = []
+    warnings.extend(ref_warnings)   # (2026-10-22) 작업 완성본 안내
     missing_sizes: set = set()
     used_filenames: set = set()  # 파일명 충돌 회피용
 

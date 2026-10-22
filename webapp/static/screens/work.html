@@ -145,6 +145,7 @@
           <!-- Panel 1 · 디자인 업로드 -->
           <section id="panel-1" class="hidden stack-4">
             <div id="designSlot"></div>
+            <div id="refSlot" style="margin-top:16px;"></div>
             <div class="note">
               <span class="material-symbols-outlined">info</span>
               업로드 즉시 색공간·투명도를 자동 점검합니다. 투명도가 있으면 출력 시 래스터화되므로 평탄화가 필요합니다.
@@ -360,6 +361,8 @@ let design = "idle";      // idle | warn | pass | (데모 케이스 키)
 // 서버 디자인 점검 결과(실 업로드). { status, checks[], message, flattened, file }
 // 이 값이 있으면 renderDesign 이 데모(DESIGN_CASES) 대신 이걸 우선 표시한다.
 let designServer = null;
+// (2026-10-22) 이 주문의 완성본(번호·이름 샘플이 든 기준 파일) — 선수별 번호·이름 자리를 이 작업에서만 읽는다. 선택.
+let refServer = null, refLoading = false;
 let designLoading = false;   // 업로드/점검 진행 중 표시용
 // 서버 주문서 파싱 결과 보관(경고 표시용).
 let orderServer = null;
@@ -481,6 +484,52 @@ async function uploadDesign(file) {
   }
 }
 
+// 완성본 업로드 — 디자인과 같은 점검 창구로 올려 영수증(design_token)만 받아 둔다.
+async function uploadRef(file) {
+  refLoading = true; renderRef();
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await apiFetch("/api/design/check", { method: "POST", body: fd });
+    const data = await res.json();
+    refServer = data.design_token ? { file: file.name, token: data.design_token } : { file: file.name, error: data.message || "올리지 못했습니다" };
+  } catch (e) {
+    refServer = { file: file.name, error: "서버에 연결하지 못했습니다: " + e };
+  } finally {
+    refLoading = false; renderRef();
+  }
+}
+
+function renderRef() {
+  const slot = $("#refSlot");
+  if (!slot) return;
+  if (refLoading) {
+    slot.innerHTML = `<div class="note"><span class="material-symbols-outlined">hourglass_top</span>완성본을 올리는 중…</div>`;
+    return;
+  }
+  if (!refServer) {
+    slot.innerHTML = `
+      <button class="dropzone" id="refDrop" style="padding:16px;">
+        <span class="material-symbols-outlined dropzone__icon">pin</span>
+        <span class="dropzone__title">완성본 (선수별 번호·이름이 있을 때)</span>
+        <span class="dropzone__hint">샘플 번호·이름이 든 같은 기준 파일 1개 · 번호·이름 자리를 여기서 읽습니다</span>
+      </button>`;
+    $("#refDrop").addEventListener("click", () => pickFile(".ai,.pdf,application/pdf", (f) => uploadRef(f)));
+    wireDropzone($("#refDrop"), (f) => uploadRef(f));
+    return;
+  }
+  slot.innerHTML = `
+    <div class="filecard filecard--${refServer.token ? "pass" : "fail"}">
+      <span class="material-symbols-outlined filecard__chip">${refServer.token ? "pin" : "error"}</span>
+      <div class="filecard__body">
+        <div class="filecard__name">${esc(refServer.file)}</div>
+        <div class="filecard__meta">${esc(refServer.token ? "완성본 · 이 주문의 번호·이름 자리" : refServer.error)}</div>
+      </div>
+      <button class="icon-btn icon-btn--sm" aria-label="제거" id="refRemove"><span class="material-symbols-outlined">close</span></button>
+    </div>`;
+  $("#refRemove").addEventListener("click", () => { refServer = null; renderRef(); });
+}
+
 // 주문서(xlsx)를 서버에 보내 행 데이터를 받아 표를 채운다.
 async function uploadOrder(file) {
   orderLoading = true; orderUploaded = true; oPage = 1; renderOrder();
@@ -554,7 +603,7 @@ function renderPatterns() {
     const numberWarn = noNumberArea ? `
         <div style="border-top:1px solid var(--status-warn-border); background:var(--status-warn-bg); padding:9px 16px; display:flex; align-items:flex-start; gap:7px;">
           <span class="material-symbols-outlined" style="font-size:16px; flex:none; color:var(--amber-600); font-variation-settings:'FILL' 1;">warning</span>
-          <span style="font:var(--text-caption); line-height:1.45; color:var(--amber-700);">이 패턴은 번호·이름 위치가 등록되지 않아 번호·이름이 안 찍힙니다. 완성본을 등록하세요.</span>
+          <span style="font:var(--text-caption); line-height:1.45; color:var(--amber-700);">선수별 번호·이름이 있으면 2단계에서 완성본을 함께 올리세요.</span>
         </div>` : "";
     return `
       <div class="card card--interactive ${active ? "is-selected" : ""}" data-pattern="${p.id}" style="padding:0;">
@@ -596,6 +645,7 @@ const DESIGN_CASES = {
 const DEMO_LABELS = { pass:"정상", transparency:"투명도", nobody:"본체 누락", postscript:"PostScript", baked:"베이크됨" };
 
 function renderDesign() {
+  renderRef();
   const slot = $("#designSlot");
   // 업로드/점검 진행 중: 드롭존 자리에 로딩 안내(마크업 토큰 재사용).
   if (designLoading) {
@@ -616,7 +666,7 @@ function renderDesign() {
         <span class="dropzone__hint">번호·이름 없는 기준 사이즈 1개 · 끌어다 놓거나 클릭</span>
         <span class="dropzone__accept">PDF 호환 AI / PDF · 본체 포함 필수</span>
       </button>
-      <div class="note" style="margin-top:10px;"><span class="material-symbols-outlined">info</span>완성본(번호·이름 샘플)은 패턴 등록의 ‘기준’으로만 쓰입니다. 작업에는 빈 본체를 올려주세요.</div>`;
+      <div class="note" style="margin-top:10px;"><span class="material-symbols-outlined">info</span>여기엔 번호·이름 없는 빈 본체를, 아래 칸엔 번호·이름 샘플이 든 완성본을 올리세요.</div>`;
     $("#designDrop").addEventListener("click", () =>
       pickFile(".ai,.pdf,application/pdf", (f) => uploadDesign(f)));
     // 끌어다 놓기로도 첨부되게(클릭과 동일 경로). 의뢰 5.
@@ -909,6 +959,7 @@ async function startGenerate() {
       patternId: patternId,
       // 디자인 점검 때 받은 영수증(토큰). 없으면 서버가 명시 경로/기본을 쓴다.
       design_token: (designServer && designServer.design_token) || null,
+      reference_token: (refServer && refServer.token) || null,
       rows: ORDER.map((r) => ({ name: r.name, number: r.number, size: r.size, qty: r.qty, bottom_size: r.bottom_size || "",
                                 design: r.design || "", design_hex: r.design_hex || "" })),
       out_format: apiFmt(),

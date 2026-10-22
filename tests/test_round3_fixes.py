@@ -296,5 +296,46 @@ class FactoryOrderSheetAndDesignPick(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class JobReferenceAndHidden(unittest.TestCase):
+    """(2026-10-22) 작업마다 올리는 완성본으로 번호·이름 자리 · 개발 시험 패턴 숨기기."""
+
+    def test_job_reference_sets_areas(self):
+        from engine.job import _apply_job_reference
+        ref = os.path.join(ROOT, "design_source", "연세대_V넥_완성본_본체포함_XL.ai")
+        if not os.path.exists(ref):
+            self.skipTest("연세대 완성본 없음")
+        pd = {"pieces": [{"id": "piece_0", "name": "소매1"}, {"id": "front", "name": "앞판"}, {"id": "back", "name": "뒤판"}],
+              "back_number_area": {"glyph_source": "number_glyphs.json", "center": [0, 0], "cap_height": 1}}
+        w = []
+        _apply_job_reference(pd, ref, w)
+        self.assertEqual(pd["front_number_area"]["piece_id"], "front")
+        self.assertEqual(pd["back_number_area"]["piece_id"], "back")
+        self.assertEqual(pd["back_name_area"]["piece_id"], "back")
+        self.assertAlmostEqual(pd["back_number_area"]["cap_height"], 538.6, places=0)
+        self.assertEqual(pd["back_number_area"]["glyph_source"], "number_glyphs.json")   # 팀 글리프셋은 이어 쓴다
+        self.assertTrue(any("완성본" in x for x in w))
+
+    def test_hidden_pattern_not_listed(self):
+        import json
+        from webapp.api import _scan_one_pattern
+        tmp = tempfile.mkdtemp(prefix="hid_")
+        try:
+            src = os.path.join(ROOT, "data", "patterns", "농구_V넥_양면")
+            for name, hidden in (("보임", False), ("숨김", True)):
+                d = os.path.join(tmp, name)
+                shutil.copytree(src, d)
+                with open(os.path.join(d, "preset.json"), encoding="utf-8") as f:
+                    pr = json.load(f)
+                pr.pop("hidden", None)
+                if hidden:
+                    pr["hidden"] = True
+                with open(os.path.join(d, "preset.json"), "w", encoding="utf-8") as f:
+                    json.dump(pr, f, ensure_ascii=False)
+            self.assertIsNotNone(_scan_one_pattern(os.path.join(tmp, "보임")))
+            self.assertIsNone(_scan_one_pattern(os.path.join(tmp, "숨김")))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -131,6 +131,12 @@ def _scan_one_pattern(folder: str) -> Dict[str, Any] | None:
     preset_path = os.path.join(folder, "preset.json")
     if not os.path.exists(preset_path):
         return None  # preset.json 없는 폴더는 패턴이 아니므로 건너뛴다.
+    try:
+        with open(preset_path, encoding="utf-8") as _f:
+            if (json.load(_f) or {}).get("hidden"):
+                return None   # (2026-10-22) 개발 시험용 패턴(hidden:true)은 목록에 안 보인다 — 파일은 그대로
+    except Exception:
+        pass
 
     # 엔진의 load_preset 으로 읽으면 필수 키 검증까지 같은 규약으로 처리된다.
     preset = load_preset(preset_path)
@@ -952,7 +958,8 @@ def _normalize_rows(rows: Any) -> List[dict]:
 
 
 def _run_job_thread(job_id: str, preset_path: str, design_path: str,
-                    rows: List[dict], out_dir: str, out_format: str) -> None:
+                    rows: List[dict], out_dir: str, out_format: str,
+                    reference_path: Optional[str] = None) -> None:
     """백그라운드 스레드 본체: run_job 을 돌리고 진행상태를 갱신한다.
 
     run_job 은 내부에서 한 번에 다 돌고 결과를 돌려주는 구조라(행별 콜백 훅이 없다),
@@ -978,6 +985,7 @@ def _run_job_thread(job_id: str, preset_path: str, design_path: str,
                 split="per_player",
                 make_preview=True,        # 검수 그리드용 미리보기 PNG 생성
                 out_format=out_format,    # pdf | eps | both
+                reference_pdf=reference_path,   # (2026-10-22) 이 주문의 완성본 — 번호·이름 자리
             )
         produced = result.get("summary", {}).get("produced", 0)
         # 완료: 진행바를 가득 채우고(=total) done 상태로 전이.
@@ -1033,6 +1041,9 @@ async def create_job_endpoint(payload: Dict[str, Any] = Body(...)) -> Dict[str, 
         preset_path = _preset_path_for(pattern_id)
         design_path = _resolve_design_path(
             payload.get("design_token"), payload.get("design"))
+        # (2026-10-22) 이 주문의 완성본(선택) — 디자인과 같은 업로드 영수증 방식
+        reference_path = (_resolve_design_path(payload.get("reference_token"), None)
+                          if payload.get("reference_token") else None)
     except (FileNotFoundError, ValueError) as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
 
@@ -1089,7 +1100,7 @@ async def create_job_endpoint(payload: Dict[str, Any] = Body(...)) -> Dict[str, 
     # 백그라운드 스레드로 run_job 실행(daemon: 서버 종료 시 함께 정리).
     t = threading.Thread(
         target=_run_job_thread,
-        args=(job_id, preset_path, design_path, rows, out_dir, out_format),
+        args=(job_id, preset_path, design_path, rows, out_dir, out_format, reference_path),
         daemon=True,
     )
     t.start()
