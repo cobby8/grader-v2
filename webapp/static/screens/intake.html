@@ -1154,7 +1154,7 @@ function buildBox() {
     const as = (b.assumed || []).length;
     h += '<div class="ik-ok">' + (b.status === "stored" ? "재단 패턴 v" + esc(b.ver) + " 저장 · 검토 대기" : "패턴 완성") + "</div>" +
       '<div class="ik-muted">' + esc((b.sizes || []).join("·")) + " · 조각 " + esc(b.pieces) + (as ? " · 가정한 증분 " + as + "칸(확인표 ※)" : "") + "</div>";
-    if (b.status === "stored") h += '<a class="btn btn--secondary btn--block" style="margin-top:8px" href="cad.html#' + encodeURIComponent(b.style_id) + "/v" + encodeURIComponent(b.ver) + '"><span class="material-symbols-outlined">straighten</span>재단 패턴 보기</a>';
+    if (b.status === "stored") h += '<button class="btn btn--secondary btn--block" style="margin-top:8px" type="button" id="patOpen" data-cad="' + esc(encodeURIComponent(b.style_id) + "/v" + encodeURIComponent(b.ver)) + '"><span class="material-symbols-outlined">straighten</span>재단 패턴 보기</button>';
     else if (!store.isAdmin) h += '<div class="ik-muted">재단 패턴 저장은 관리자가 확인표를 보고 해요.</div>';
     if (b.confirm_md) h += '<button class="btn btn--ghost btn--block" style="margin-top:8px" type="button" id="patConfirm">' + (showConfirm ? "확인표 접기" : "확인표 보기") + "</button>" +
       (showConfirm ? '<pre class="ik-build__md">' + esc(b.confirm_md) + "</pre>" : "");
@@ -1222,6 +1222,12 @@ $("#main").addEventListener("click", async (e) => {
   }
   if (b.id === "patBuild") { startBuild(); return; }
   if (b.id === "patConfirm") { showConfirm = !showConfirm; refreshBuild(); return; }
+  if (b.id === "patOpen") {                            // 재단 패턴 화면은 탭마다 따로 둔 출입증(sessionStorage)을 본다 — 없으면 로그인→작업 화면으로 튕긴다
+    const t = await store.token();
+    try { if (t) sessionStorage.setItem("grader_access_token", t); } catch (e) {}
+    location.assign("cad.html#" + b.dataset.cad);
+    return;
+  }
   if (readOnly) return;
   if (b.dataset.base) {                                // 지금은 소매 상의만 열려 있다 — 누르면 «기본 형태 확인» 만 끝난다
     if (confirmGroup("base")) { change(); renderSteps(); renderStep(); }
