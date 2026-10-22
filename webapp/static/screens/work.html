@@ -728,7 +728,7 @@ function renderOrder() {
         <td><input class="cell-input" data-f="size" value="${esc(r.size)}" style="font-weight:600; color:var(--text-strong);"></td>
         <td><input class="cell-input num" data-f="qty" value="${r.qty}" inputmode="numeric"></td>
         <td>
-          <input class="cell-input ${warn ? "is-error" : ""}" data-f="name" value="${esc(r.name)}" placeholder="추출 실패 — 입력 필요">
+          <input class="cell-input ${warn ? "is-error" : ""}" data-f="name" value="${esc(r.name)}" placeholder="${warn ? "추출 실패 — 입력 필요" : ""}">
           ${warn ? '<div class="cell-error" style="margin-top:3px; padding-left:7px;"><span class="material-symbols-outlined">error</span>추출 실패 — 입력 필요</div>' : ""}
         </td>
         <td><input class="cell-input num mono" data-f="number" value="${esc(r.number)}" inputmode="numeric"></td>
