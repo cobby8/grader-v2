@@ -1140,6 +1140,7 @@ function stepFinish() {
    제출하면 그레이더가 치수로 패턴을 그리고 S~3XL 로 그레이딩한다(POST /api/cad/intake/{id}/build → 작업 번호를 1초마다 본다).
    관리자가 누르면 재단 패턴에 «검토 대기» 판으로 저장, 직원은 만들기만 하고 확인표가 의뢰에 붙는다(창고 쓰기는 관리자만). */
 let BUILD = null;                                       // 지금 화면 의뢰의 진행 중 작업 { id, job, stage, done, total, err }
+let PICK = null;                                        // 사이즈 추가 그레이딩에서 고른 사이즈 { id, set }
 let showConfirm = false;
 function buildBox() {
   const b = D.build || null, live = BUILD && BUILD.id === cur.id ? BUILD : null;
@@ -1148,21 +1149,36 @@ function buildBox() {
     h += '<div class="ik-muted">패턴 만드는 중 · ' + esc(live.stage || "차례 기다림") + (live.total ? " (" + live.done + "/" + live.total + ")" : "") + "</div>";
     return h + "</div>";
   }
-  const err = (live && live.err) || (b && b.status === "error" && b.error);
+  const done = !!(b && (b.status === "built" || b.status === "stored"));
+  const err = (live && live.err) || (b && (b.status === "error" || b.error) && b.error);
   if (err) h += '<div class="ik-build__err">패턴을 만들지 못했어요 — ' + esc(err) + "</div>";
-  if (b && (b.status === "built" || b.status === "stored")) {
-    const as = (b.assumed || []).length;
-    h += '<div class="ik-ok">' + (b.status === "stored" ? "재단 패턴 v" + esc(b.ver) + " 저장 · 검토 대기" : "패턴 완성") + "</div>" +
+  if (done) {
+    const as = (b.assumed || []).length, only = (b.sizes || []).length === 1;
+    h += '<div class="ik-ok">' + (b.status === "stored" ? "재단 패턴 v" + esc(b.ver) + " 저장 · 검토 대기" : only ? "기준 사이즈 " + esc(b.base_size || b.sizes[0]) + " 패턴 완성" : "패턴 완성") + "</div>" +
       '<div class="ik-muted">' + esc((b.sizes || []).join("·")) + " · 조각 " + esc(b.pieces) + (as ? " · 가정한 증분 " + as + "칸(확인표 ※)" : "") + "</div>";
-    if (b.status === "stored") h += '<button class="btn btn--secondary btn--block" style="margin-top:8px" type="button" id="patOpen" data-cad="' + esc(encodeURIComponent(b.style_id) + "/v" + encodeURIComponent(b.ver)) + '"><span class="material-symbols-outlined">straighten</span>재단 패턴 보기</button>';
-    else if (!store.isAdmin) h += '<div class="ik-muted">재단 패턴 저장은 관리자가 확인표를 보고 해요.</div>';
+    const st = b.status === "stored" ? b : b.last_stored;   // 직원이 다시 만들어도 관리자가 저장한 판은 남는다
+    if (st && st.ver) h += (b.status === "stored" ? "" : '<div class="ik-muted">저장된 판: 재단 패턴 v' + esc(st.ver) + " · " + esc((st.sizes || []).join("·")) + "</div>") +
+      '<button class="btn btn--secondary btn--block" style="margin-top:8px" type="button" id="patOpen" data-cad="' + esc(encodeURIComponent(st.style_id) + "/v" + encodeURIComponent(st.ver)) + '"><span class="material-symbols-outlined">straighten</span>재단 패턴 보기</button>';
+    if (b.status !== "stored" && !store.isAdmin) h += '<div class="ik-muted">재단 패턴 저장은 관리자가 확인표를 보고 해요.</div>';
     if (b.confirm_md) h += '<button class="btn btn--ghost btn--block" style="margin-top:8px" type="button" id="patConfirm">' + (showConfirm ? "확인표 접기" : "확인표 보기") + "</button>" +
       (showConfirm ? '<pre class="ik-build__md">' + esc(b.confirm_md) + "</pre>" : "");
   }
-  if (store.mode === "real") {
-    const label = store.isAdmin ? (b && b.status === "stored" ? "다시 만들어 새 판으로 저장" : "재단 패턴에 저장") : (b ? "패턴 다시 만들기" : "패턴 만들기");
-    h += '<button class="btn btn--' + (b && b.status !== "error" ? "secondary" : "primary") + ' btn--block" style="margin-top:8px" type="button" id="patBuild">' + label + "</button>";
+  if (store.mode !== "real") return h + "</div>";
+  const avail = (done && b.available) || [], base = done ? (b.base_size || (b.sizes || [])[0]) : "";
+  if (avail.length) {                                   // 사이즈 추가 그레이딩 — 기준은 늘 들어가고, 고른 사이즈로 새로 만든다
+    if (!PICK || PICK.id !== cur.id) PICK = { id: cur.id, set: new Set(b.sizes || []) };
+    const chosen = avail.filter((s) => s !== base && PICK.set.has(s));
+    const same = chosen.join() === (b.sizes || []).filter((s) => s !== base).join();
+    h += '<div class="ik-q__title" style="margin-top:16px">사이즈 추가 그레이딩</div><div class="ik-muted" style="margin:-2px 0 8px">기준 ' + esc(base) + " 에서 고른 사이즈를 만들어요.</div>" +
+      '<div class="ik-chips">' + avail.map((s) => '<button class="ik-chip" type="button" data-gsize="' + esc(s) + '" aria-pressed="' + (s === base || PICK.set.has(s)) + '">' +
+        esc(s) + (s === base ? "<small>기준</small>" : "") + "</button>").join("") + "</div>" +
+      '<button class="btn btn--primary btn--block" style="margin-top:10px" type="button" id="patGrade"' + (chosen.length && !same ? "" : " disabled") + ">" +
+      (!chosen.length ? "사이즈를 골라 주세요" : same ? "지금 만든 사이즈예요" : esc(chosen.join("·")) + " 그레이딩" + (store.isAdmin ? " · 새 판 저장" : "")) + "</button>";
   }
+  const again = done ? (b.sizes || []).filter((s) => s !== base) : [];   // 다시 만들기는 지금 보이는 사이즈 그대로
+  const label = store.isAdmin ? (b && b.status === "stored" ? "같은 사이즈로 다시 만들어 새 판 저장" : "재단 패턴에 저장")
+    : (b && b.status === "stored" ? "" : done ? "같은 사이즈로 다시 만들기" : "패턴 만들기");
+  if (label) h += '<button class="btn btn--' + (done ? "secondary" : "primary") + ' btn--block" style="margin-top:8px" type="button" id="patBuild" data-sizes="' + esc(again.join(" ")) + '">' + label + "</button>";
   return h + "</div>";
 }
 function refreshBuild() {
@@ -1171,13 +1187,15 @@ function refreshBuild() {
   const tmp = document.createElement("div"); tmp.innerHTML = buildBox();
   box.replaceWith(tmp.firstElementChild);
 }
-async function startBuild() {
+async function startBuild(sizes) {                     // sizes 없으면 기준 사이즈만 — 있으면 기준 + 그 사이즈들
   if (!cur || store.mode !== "real" || (BUILD && BUILD.id === cur.id && !BUILD.err)) return;
   const id = cur.id, code = cur.code;
   BUILD = { id, job: "", stage: "", done: 0, total: 0, err: "" }; refreshBuild();
   const auth = async () => { const t = await store.token(); return t ? { Authorization: "Bearer " + t } : {}; };
   try {
-    const res = await fetch("/api/cad/intake/" + encodeURIComponent(id) + "/build", { method: "POST", headers: await auth() });
+    const res = await fetch("/api/cad/intake/" + encodeURIComponent(id) + "/build", sizes && sizes.length
+      ? { method: "POST", headers: Object.assign({ "Content-Type": "application/json" }, await auth()), body: JSON.stringify({ sizes }) }
+      : { method: "POST", headers: await auth() });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.detail || (res.status === 401 ? "로그인이 끝났어요. 다시 로그인해 주세요." : "서버가 받지 않았어요"));
     BUILD.job = body.job_id; BUILD.total = body.total || 0;
@@ -1190,9 +1208,14 @@ async function startBuild() {
       if (j.status === "done") {
         const x = j.result || {};
         const b = { status: x.stored ? "stored" : "built", style_id: x.style_id, ver: x.version, sizes: x.sizes, pieces: x.pieces,
-          assumed: x.assumed || [], confirm_md: x.confirm_md || "", at: new Date().toISOString() };
+          base_size: x.base_size, available: x.available || [], assumed: x.assumed || [], confirm_md: x.confirm_md || "", at: new Date().toISOString() };
         BUILD = null;
-        if (cur && cur.id === id) { D.build = b; refreshBuild(); }   // 의뢰 기록은 서버가 적었다 — 여기서는 보여주기만(다음 저장 때 다시 읽어 합친다)
+        if (cur && cur.id === id) {
+          const old = D.build || {};                       // 서버의 _merge_build 와 같은 규칙 — 관리자가 저장한 판은 남긴다
+          const last = old.status === "stored" ? { style_id: old.style_id, ver: old.ver, sizes: old.sizes } : old.last_stored;
+          if (b.status === "built" && last && last.ver) b.last_stored = last;
+          D.build = b; PICK = null; refreshBuild();
+        }   // 의뢰 기록은 서버가 적었다 — 여기서는 보여주기만(다음 저장 때 다시 읽어 합친다)
         toast(x.stored ? "재단 패턴 v" + x.version + " 에 저장했어요 · " + code : "패턴을 만들었어요 · " + code);
         if (!cur) loadList();
         return;
@@ -1220,7 +1243,13 @@ $("#main").addEventListener("click", async (e) => {
     else go(m.step);
     return;
   }
-  if (b.id === "patBuild") { startBuild(); return; }
+  if (b.id === "patBuild") { startBuild((b.dataset.sizes || "").split(" ").filter(Boolean)); return; }
+  if (b.id === "patGrade") { startBuild(PICK && PICK.id === cur.id ? [...PICK.set].filter((s) => s !== ((D.build || {}).base_size)) : []); return; }
+  if (b.dataset.gsize) {                               // 사이즈 칩 — 기준 사이즈는 늘 들어가 끌 수 없다
+    const s = b.dataset.gsize, base = (D.build || {}).base_size;
+    if (s !== base && PICK) { PICK.set.has(s) ? PICK.set.delete(s) : PICK.set.add(s); refreshBuild(); }
+    return;
+  }
   if (b.id === "patConfirm") { showConfirm = !showConfirm; refreshBuild(); return; }
   if (b.id === "patOpen") {                            // 재단 패턴 화면은 탭마다 따로 둔 출입증(sessionStorage)을 본다 — 없으면 로그인→작업 화면으로 튕긴다
     const t = await store.token();

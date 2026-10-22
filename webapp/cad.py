@@ -2140,6 +2140,21 @@ def _intake_read(intake_id: str, jwt: Optional[str]) -> Dict[str, Any]:
     return rows[0]
 
 
+def _merge_build(old: Any, new: Dict[str, Any]) -> Dict[str, Any]:
+    """의뢰 data.build 를 바꿀 때 앞 결과를 잃지 않게 —
+    · 실패: 앞에 만든 결과가 있으면 그대로 두고 오류만 붙인다(보이던 패턴이 사라지지 않게)
+    · 직원이 다시 만듦(built): 앞서 관리자가 저장한 판은 last_stored 로 남긴다(«재단 패턴 보기» 가 사라지지 않게)"""
+    old = old if isinstance(old, dict) else {}
+    ok = old.get("status") in ("built", "stored")
+    if new.get("status") == "error":
+        return {**{k: v for k, v in old.items() if k not in ("error", "error_at")}, "error": new.get("error"), "error_at": new.get("at")} if ok else new
+    if new.get("status") == "built":
+        last = {k: old.get(k) for k in ("style_id", "ver", "sizes")} if old.get("status") == "stored" else old.get("last_stored")
+        if isinstance(last, dict) and last.get("ver"):
+            return {**new, "last_stored": last}
+    return new
+
+
 def _intake_save_build(intake_id: str, build: Dict[str, Any], jwt: Optional[str]) -> bool:
     """의뢰 data.build 한 칸만 바꿔 되돌려 보낸다 — 읽은 뒤 누가 고쳤으면(updated_at 다름) 다시 읽어 한 번 더. 성공 여부만(실패해도 작업은 끝)"""
     for _ in range(2):
@@ -2147,7 +2162,7 @@ def _intake_save_build(intake_id: str, build: Dict[str, Any], jwt: Optional[str]
             row = _intake_read(intake_id, jwt)
             data = row.get("data") if isinstance(row.get("data"), dict) else {}
             r = _intake_rest("PATCH", f"id=eq.{intake_id}&updated_at=eq.{quote(str(row.get('updated_at')), safe='')}&select=id", jwt,
-                             body={"data": {**data, "build": build}}, prefer="return=representation")
+                             body={"data": {**data, "build": _merge_build(data.get("build"), build)}}, prefer="return=representation")
         except Exception:
             return False
         if r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) == 1:
@@ -2157,12 +2172,13 @@ def _intake_save_build(intake_id: str, build: Dict[str, Any], jwt: Optional[str]
     return False
 
 
-def _intake_thread(job_id: str, intake_id: str, code: str, work: str, admin: bool, jwt: Optional[str], email: Optional[str]) -> None:
+def _intake_thread(job_id: str, intake_id: str, code: str, work: str, admin: bool, jwt: Optional[str], email: Optional[str],
+                   sizes: Optional[List[str]] = None) -> None:
     try:
         svc = load_service()
         state.update_job(job_id, out_dir=work)
         res = _run_engine(job_id, svc, lambda on_step, timeout: svc.build_intake(
-            work, os.path.join(work, "intake.json"), timeout=min(timeout, 600), on_step=on_step, env=_engine_env()))
+            work, os.path.join(work, "intake.json"), sizes=sizes or None, timeout=min(timeout, 600), on_step=on_step, env=_engine_env()))
         sid = next(iter(res.get("styles") or {}), "")
         _check_style_id(sid)
         s = _result_style(res, sid)
@@ -2172,7 +2188,8 @@ def _intake_thread(job_id: str, intake_id: str, code: str, work: str, admin: boo
                 confirm = f.read()[:INTAKE_CONFIRM_MAX]
         except (OSError, KeyError, TypeError):
             confirm = ""
-        build = {"status": "built", "style_id": sid, "sizes": res.get("sizes"), "pieces": len(res.get("pieces") or []),
+        build = {"status": "built", "style_id": sid, "sizes": res.get("sizes"), "base_size": sm.get("base_size"),
+                 "available": sm.get("available") or [], "pieces": len(res.get("pieces") or []),
                  "assumed": sm.get("assumed") or [], "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "by": email,
                  "engine": (res.get("engine") or {}).get("commit"), "confirm_md": confirm}
         ver = None
@@ -2182,18 +2199,24 @@ def _intake_thread(job_id: str, intake_id: str, code: str, work: str, admin: boo
             have = _versions_on_disk(sid)
             content = _store_from_engine(job_id, s, sid, jwt, email, f"패턴 의뢰 {code} 자동 제작 · 하키티 증분 · 검토 대기",
                                          extra={"intake": {"id": intake_id, "code": code, "review": "pending", "sizes": res.get("sizes"),
+                                                           "base_size": sm.get("base_size"),
                                                            "assumed": build["assumed"]}, "engine_run": run},
                                          expect_version=(max(have) + 1) if have else 1)
             ver = content["version"]
             build.update(status="stored", ver=ver)
         saved = _intake_save_build(intake_id, build, jwt)
+        with _INTAKE_LOCK:                                             # «끝» 을 보자마자 다시 눌러도 409 가 나지 않게 — 끝 표시보다 먼저 푼다
+            _INTAKE_BUILDING.discard(intake_id)
         state.update_job(job_id, status="done", done=len(svc.INTAKE_STEPS), stage="done", stage_ko="끝",
                          result={"style_id": sid, "version": ver, "stored": ver is not None, "saved_to_intake": saved,
-                                 "sizes": res.get("sizes"), "pieces": build["pieces"], "assumed": build["assumed"], "confirm_md": confirm})
+                                 "sizes": res.get("sizes"), "base_size": build["base_size"], "available": build["available"],
+                                 "pieces": build["pieces"], "assumed": build["assumed"], "confirm_md": confirm})
         _log(f"[cad] 의뢰 패턴 끝: {code} → {sid} {'v' + str(ver) if ver else '(저장 안 함 · 관리자 아님)'} · 의뢰 기록 {saved}"
              f" · 일꾼 최고 {res.get('peak_rss_mb')} MB · {res.get('wall_s')}초")
         shutil.rmtree(work, ignore_errors=True)
     except Exception as e:
+        with _INTAKE_LOCK:                                             # 실패를 보자마자 «다시 만들기» 를 눌러도 되게 — 실패 표시보다 먼저 푼다
+            _INTAKE_BUILDING.discard(intake_id)
         _fail_job(job_id, work, "의뢰 패턴 만들기", e)
         err = (state.get_job(job_id) or {}).get("error") or "의뢰 패턴 만들기에 실패했습니다."
         _intake_save_build(intake_id, {"status": "error", "error": err, "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "by": email}, jwt)
@@ -2204,11 +2227,16 @@ def _intake_thread(job_id: str, intake_id: str, code: str, work: str, admin: boo
 
 
 @router.post("/intake/{intake_id}/build")
-def build_from_intake(intake_id: str, request: Request) -> JSONResponse:
-    """🔒 제출한 패턴 의뢰 → 패턴 + S~3XL 그레이딩. 작업 번호(202) → GET /api/cad/jobs/{job}.
+def build_from_intake(intake_id: str, request: Request, body: Optional[Dict[str, Any]] = Body(None)) -> JSONResponse:
+    """🔒 제출한 패턴 의뢰 → 패턴. 작업 번호(202) → GET /api/cad/jobs/{job}.
+    body {"sizes": [...]} 없으면 기준 사이즈(의뢰 «사이즈» 칸)만, 있으면 기준 + 고른 사이즈로 그레이딩(2026-10-22).
     관리자 토큰이면 재단 패턴에 «검토 대기» 새 판으로 저장, 아니면 만들기만 하고 확인표를 의뢰에 붙인다."""
     if not INTAKE_ID_RE.fullmatch(intake_id or ""):
         raise HTTPException(status_code=400, detail="의뢰 번호 형식이 아닙니다.")
+    sizes = (body or {}).get("sizes") if isinstance(body, dict) else None
+    if sizes is not None and (not isinstance(sizes, list) or len(sizes) > 13
+                              or not all(isinstance(x, str) and re.fullmatch(r"[0-9]?X{0,4}[SML]", x) for x in sizes)):
+        raise HTTPException(status_code=400, detail="사이즈는 S·M·L·XL·2XL 같은 이름으로 13개까지 골라 주세요.")
     svc = load_service()
     if not hasattr(svc, "build_intake"):
         raise HTTPException(status_code=503, detail="서버 엔진 사본이 의뢰 패턴 만들기를 아직 모릅니다(엔진 사본을 맞춰 주세요).")
@@ -2229,8 +2257,9 @@ def build_from_intake(intake_id: str, request: Request) -> JSONResponse:
         os.makedirs(work)
         with open(os.path.join(work, "intake.json"), "w", encoding="utf-8") as f:
             json.dump(row, f, ensure_ascii=False)
-        job_id, ahead = _start_engine_job(request, "cad-intake", len(svc.INTAKE_STEPS), {"intake_id": intake_id, "intake_code": code},
-                                          _intake_thread, (intake_id, code, work, admin, jwt, getattr(request.state, "email", None)),
+        job_id, ahead = _start_engine_job(request, "cad-intake", len(svc.INTAKE_STEPS), {"intake_id": intake_id, "intake_code": code,
+                                                                                          "sizes": sizes},
+                                          _intake_thread, (intake_id, code, work, admin, jwt, getattr(request.state, "email", None), sizes),
                                           need_token=admin)
     except BaseException:
         with _INTAKE_LOCK:

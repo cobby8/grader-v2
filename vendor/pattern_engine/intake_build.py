@@ -30,6 +30,7 @@ SA_SIDE = 7.0; SA_HEM = 20.0                  # 디자이너 규칙(김현서 10
 STYLE_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{1,62}[a-z0-9]")
 SIZE_ORDER = ["5XS", "4XS", "3XS", "2XS", "XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL"]
 STEPS = ["read", "draft", "grade", "export", "bundle"]
+SIZE_ALIAS = {"XXS": "2XS", "XXL": "2XL", "XXXL": "3XL", "XXXXL": "4XL"}   # 의뢰 «사이즈» 칸의 옛 표기
 
 # 의뢰 옷 구성 → 설계도. need = 반드시 있어야 하는 부품 · 하나라도 빠지면 그 설계도가 아니다
 STYLES = [
@@ -136,21 +137,35 @@ def to_values(row):
     return v, conv, notes
 
 
-def grade_values(base, table, sizes):
-    """M 값 + 증분표 → {사이즈: 값}. 표에 없는 사이즈는 IntakeBuildError"""
+def base_size_of(row, table):
+    """의뢰 «사이즈» 칸(실물을 잰 사이즈) → 증분표의 사이즈 이름. 돌려주는 값 (사이즈, 메모 목록)
+    «M(95)»·«L 100» 처럼 뒤에 붙은 글자는 버리고, XXL → 2XL 처럼 옛 표기를 맞춘다. 비어 있으면 표의 기준(M)"""
+    raw = str(row.get("size_label") or "").strip()
+    if not raw:
+        return table["base"], [f"의뢰에 사이즈가 비어 있어 {table['base']} 로 보고 만들었다 — 실물 사이즈를 확인"]
+    m = re.match(r"[0-9]*X*[SML]", raw.upper().replace(" ", ""))
+    s = SIZE_ALIAS.get(m.group(0), m.group(0)) if m else ""
+    if s not in table["sizes"]:
+        raise IntakeBuildError(f"의뢰 사이즈 «{raw}» 를 증분표에서 찾지 못했습니다(가능: {' '.join(table['sizes'])}) — 사이즈 칸을 고쳐 주세요.")
+    return s, []
+
+
+def grade_values(base, table, sizes, base_size=None):
+    """기준 사이즈 값 + 증분표 → {사이즈: 값}. 증분표는 M 기준이라 기준 사이즈만큼 빼서 다시 잰다(2026-10-22 — L 실물도 맞게).
+    표에 없는 사이즈는 IntakeBuildError"""
     known = table["sizes"]
-    bad = [s for s in sizes if s not in known]
+    bs = base_size or table["base"]
+    bad = [s for s in list(sizes) + [bs] if s not in known]
     if bad:
-        raise IntakeBuildError("증분표에 없는 사이즈: " + ", ".join(bad) + f" (가능: {' '.join(known)})")
+        raise IntakeBuildError("증분표에 없는 사이즈: " + ", ".join(dict.fromkeys(bad)) + f" (가능: {' '.join(known)})")
     bi = known.index(table["base"])
+    inc = lambda d, s: d["by_size"][s] if "by_size" in d else d.get("step", 0) * (known.index(s) - bi)
     out = {}
     for s in sizes:
-        k = known.index(s) - bi
         v = dict(base)
         for key, d in table["delta"].items():
             if key not in v: continue
-            inc = d["by_size"][s] if "by_size" in d else d.get("step", 0) * k
-            v[key] = round(base[key] + inc, 1)
+            v[key] = round(base[key] + inc(d, s) - inc(d, bs), 1)
         out[s] = v
     return out
 
@@ -179,14 +194,14 @@ def _md_table(rows, head):
     return "\n".join(lines)
 
 
-def confirm_md(row, st, conv, notes, table, sizes, values, measured, made_at):
+def confirm_md(row, st, conv, notes, table, sizes, values, measured, made_at, base_size):
     d = table["delta"]
     keys = list(values[sizes[0]].keys())
     label = {"length_cb": "총장", "shoulder_width": "어깨너비", "chest": "가슴둘레", "hem": "밑단둘레", "sleeve_length": "소매 길이",
              "cuff": "소매 입구 둘레", "armhole_depth": "진동 깊이", "sleeve_width_25": "소매통(단면)", "v_depth": "V 깊이(직선)",
              "yoke_back": "뒤 요크(뒷목~)", "sleeve_hem": "소매 끝 둘레", "neck_width": "목너비", "back_neck_depth": "뒷목 깊이",
              "shoulder_drop": "어깨 처짐", "cuff_height": "커프스 높이", "rib_width": "목 립 폭"}
-    assumed = [k for k in keys if (d.get(k) or {}).get("from") == "가정" and any(values[s][k] != values[table["base"]][k] for s in sizes)]
+    assumed = assumed_changed(table, sizes, values, base_size)
     size_rows = []
     for k in keys:
         mark = "※ " if (d.get(k) or {}).get("from") == "가정" else ""
@@ -195,9 +210,9 @@ def confirm_md(row, st, conv, notes, table, sizes, values, measured, made_at):
     meas_rows = [[mk] + [f"{measured[s][mk]:.1f}" for s in sizes] for mk in meas_keys]
     parts = []
     parts.append(f"# 확인표 — {row.get('product_name') or st['ko']} ({row.get('code') or '의뢰'})\n")
-    parts.append(f"만든 때 {made_at} · 설계도 «{st['ko']}» · 기준 사이즈 M(실물 {row.get('size_label') or 'M'} 실측) · 사이즈 {' '.join(sizes)}\n")
+    parts.append(f"만든 때 {made_at} · 설계도 «{st['ko']}» · 기준 사이즈 {base_size}(실물 {row.get('size_label') or base_size} 실측) · 사이즈 {' '.join(sizes)}\n")
     parts.append("**상태: 검토 대기** — 패턴사·디자이너가 확인한 뒤 «검토 완료» 를 해야 공장·합성에 쓴다.\n")
-    parts.append("## 1. 의뢰 치수 → 설계도 값 (M, mm)\n")
+    parts.append(f"## 1. 의뢰 치수 → 설계도 값 ({base_size}, mm)\n")
     parts.append(_md_table([[a, b, f"{c:g}", e] for a, b, c, e in conv], ["항목", "의뢰 값(cm)", "설계도 값(mm)", "환산"]))
     parts.append(f"\n시접: 옆·어깨·소매 {SA_SIDE:g}mm · 밑단 {SA_HEM:g}mm (디자이너 규칙 — 실물 오버록 0.5cm)\n")
     parts.append("## 2. 사이즈별 설계도 값 (mm) — ※ = 가정한 증분\n")
@@ -209,30 +224,42 @@ def confirm_md(row, st, conv, notes, table, sizes, values, measured, made_at):
     items = []
     if assumed:
         items.append("※ 가정한 증분(하키티에 없는 항목): " + ", ".join(label.get(k, k) for k in assumed) + " — 실제 사이즈 샘플로 확인")
-    items.append("2XL·3XL 은 하키티(XS~XL)에 없어 L→XL 간격으로 늘렸다")
+    far = [s for s in sizes if s in ("2XL", "3XL") and s != base_size]
+    if far:
+        items.append("·".join(far) + " 는 하키티(XS~XL)에 없어 L→XL 간격으로 늘렸다")
+    if sizes == [base_size]:
+        items.append(f"기준 사이즈 {base_size} 만 만들었다 — 다른 사이즈는 의뢰 화면에서 골라 그레이딩")
     items.append("V 인서트 조각은 아직 설계도에 없다(10/18 결정 «V 인서트 넣는다» — 다음 설계도 판)")
     items += notes
     parts.append("\n".join(f"- [ ] {t}" for t in items))
     return "\n".join(parts) + "\n"
 
 
+def assumed_changed(table, sizes, values, base_size):
+    """이번에 만든 사이즈에서 실제로 값이 바뀐 «가정» 증분 칸 — 기준 사이즈만 만들면 없다"""
+    d = table["delta"]
+    return [k for k in values[sizes[0]] if (d.get(k) or {}).get("from") == "가정" and any(values[s][k] != values[base_size][k] for s in sizes)]
+
+
 def build(row, out, sizes=None, style_id=None, export=True, progress=None):
-    """의뢰 행 → 묶음 쓰기. 돌려주는 값 {style_id, sizes, paths, summary}"""
+    """의뢰 행 → 묶음 쓰기. sizes 를 안 주면 기준 사이즈(의뢰 «사이즈» 칸)만, 주면 기준 + 그 사이즈들(2026-10-22).
+    돌려주는 값 {style_id, sizes, base_size, paths, summary}"""
     step = progress or (lambda _s: None)
     step("read")
     st = select_style(row)
     style = parametric.load_json(os.path.join(HERE, st["style"]))
     style = json.loads(json.dumps(style)); style["params"]["sa"] = SA_SIDE; style["params"]["hem_sa"] = SA_HEM
     table = parametric.load_json(os.path.join(HERE, st["grade"]))
-    sizes = list(sizes or table["default_sizes"])
-    sizes = sorted(dict.fromkeys(sizes), key=lambda s: SIZE_ORDER.index(s) if s in SIZE_ORDER else 99)
+    bs, bnotes = base_size_of(row, table)
+    sizes = sorted(dict.fromkeys(list(sizes or []) + [bs]), key=lambda s: SIZE_ORDER.index(s) if s in SIZE_ORDER else 99)
     code = str(row.get("code") or "intake")
     sid = style_id or re.sub(r"[^a-z0-9-]+", "-", f"{st['key'].replace('_', '-')}-{code.lower()}").strip("-")
     if not STYLE_ID_RE.fullmatch(sid):
         raise IntakeBuildError(f"스타일 번호가 이상합니다: {sid!r}")
     base, conv, notes = to_values(row)
+    notes = bnotes + notes
     step("draft")
-    vals = grade_values(base, table, sizes)
+    vals = grade_values(base, table, sizes, bs)
     step("grade")
     os.makedirs(os.path.join(out, "specs"), exist_ok=True)
     specs, measured, extra = {}, {}, []
@@ -261,11 +288,12 @@ def build(row, out, sizes=None, style_id=None, export=True, progress=None):
         json.dump({"code": code, "product_name": row.get("product_name"), "size_label": row.get("size_label"),
                    "base_type": row.get("base_type"), "parts": _parts(row), "measures": _data(row).get("measures"),
                    "answers": _data(row).get("answers")}, f, ensure_ascii=False, indent=1)
-    check = {"format": FORMAT, "version": FORMAT_VERSION, "style": st["key"], "base_values": base, "values": vals,
+    assumed = assumed_changed(table, sizes, vals, bs)
+    check = {"format": FORMAT, "version": FORMAT_VERSION, "style": st["key"], "base_size": bs, "base_values": base, "values": vals,
              "measured": measured, "grade_source": table["source"],
-             "assumed": sorted(k for k, d in table["delta"].items() if d.get("from") == "가정"), "made_at": made_at}
+             "assumed": sorted(assumed), "made_at": made_at}
     with open(P["check"], "w", encoding="utf-8") as f: json.dump(check, f, ensure_ascii=False, indent=1)
-    with open(P["confirm"], "w", encoding="utf-8") as f: f.write(confirm_md(row, st, conv, notes, table, sizes, vals, measured, made_at))
+    with open(P["confirm"], "w", encoding="utf-8") as f: f.write(confirm_md(row, st, conv, notes, table, sizes, vals, measured, made_at, bs))
     entries = [(P["check"], "check.json"), (P["confirm"], "confirm.md")]
     entries += [(os.path.join(out, "specs", f"spec_{s}.json"), f"specs/spec_{s}.json") for s in sizes] + extra
     files = []
@@ -289,15 +317,15 @@ def build(row, out, sizes=None, style_id=None, export=True, progress=None):
     smeta = {"id": sid, "name": name, "sizes": sizes, "pieces": pieces, "made_at": made_at, "source_file": f"{code}.json",
              "garment": st["ko"], "group": "intake"}
     flipped = {s: {n: _flip_spec(sp) for n, sp in specs[s].items()} for s in sizes}
-    view = SI.build_view(smeta, flipped, "M" if "M" in sizes else sizes[0], {"sizes": {}}, files, zinfo)
+    view = SI.build_view(smeta, flipped, bs, {"sizes": {}}, files, zinfo)
     view["style"]["imported"] = False
     view["style"]["intake"] = code
     view["source"].update(engine="stizshop tools/pattern-engine (intake_build)", inputs=[f"패턴 의뢰 {code}"],
                           note=f"패턴 의뢰 {code} 치수로 자동 제작 · 하키티 증분 · 검토 대기")
     with open(P["view"], "w", encoding="utf-8") as f: json.dump(view, f, ensure_ascii=False, separators=(",", ":"))
-    summary = {"style_id": sid, "style": st["key"], "sizes": sizes, "pieces": len(pieces), "intake": code,
-               "assumed": check["assumed"], "made_at": made_at}
-    return {"style_id": sid, "sizes": sizes, "pieces": pieces, "name": name, "paths": P, "summary": summary}
+    summary = {"style_id": sid, "style": st["key"], "sizes": sizes, "base_size": bs, "available": list(table["sizes"]),
+               "pieces": len(pieces), "intake": code, "assumed": check["assumed"], "made_at": made_at}
+    return {"style_id": sid, "sizes": sizes, "base_size": bs, "pieces": pieces, "name": name, "paths": P, "summary": summary}
 
 
 def main(argv=None):
