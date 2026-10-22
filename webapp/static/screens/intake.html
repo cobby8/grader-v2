@@ -597,7 +597,7 @@ async function showList() {
   $("#barEdit").classList.add("hidden");
   $("#barTitleBox").classList.remove("is-link");
   setSave("");
-  if (listTab === "trash" && !store.isAdmin) listTab = "mine";   // 휴지통은 관리자만
+  if (listTab === "trash" && !store.isAdmin) listTab = "all";    // 휴지통은 관리자만
   const tabs = [["mine", "내 의뢰"], ["all", "전체"]].concat(store.isAdmin ? [["trash", "휴지통"]] : []);
   $("#main").innerHTML = '<div id="newBox">' + NEW_BTN + '</div><div id="installSlot"></div>' +
     '<div class="ik-tabs" role="tablist">' + tabs.map(([k, name]) =>
@@ -624,7 +624,8 @@ async function loadList() {
 }
 
 // 탭 — mine: 내 의뢰 · all: 모든 직원 의뢰 · trash: 휴지통(관리자만). 고른 탭은 이 탭(창)에 기억한다
-let listTab = (() => { try { return sessionStorage.getItem("grader-intake-tab") || "mine"; } catch (e) { return "mine"; } })();
+//   처음엔 «전체» — 직원끼리 누가 어떤 옷을 진행 중인지 바로 보이게(2026-10-22 사장님). 남의 의뢰는 읽기 전용으로 열린다
+let listTab = (() => { try { return sessionStorage.getItem("grader-intake-tab") || "all"; } catch (e) { return "all"; } })();
 // 고르기 상태(관리자만) — selMode: 고르는 중 · picked: 고른 의뢰 id · selAsk: «정말 옮길까» 묻는 중
 // purgeAsk: 휴지통에서 완전 삭제를 묻는 중인 카드 {id, n} — n=1 첫 확인, n=2 마지막 확인
 let listRows = [], selMode = false, selAsk = false, purgeAsk = null;
