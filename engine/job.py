@@ -1512,6 +1512,14 @@ def run_job(preset: str,
                 warnings.append(f"🟡 [본체색] 면별 감지 실패(두 번째 면부터 채움 생략): {e}")
     # (2026-10-21) 함께 찍는 하의도 자기 조각 자리에서 본체색을 잰다 — 예전엔 하의 틈을 아예 안 칠해서
     #   갈색 반바지 가장자리에 흰 틈이 생겼다(웹툰 점검). 상의 본체색을 끈 작업(body_fill 없음)은 그대로 둔다.
+    # (2026-10-22) 주문서 «디자인(컬러)» 으로 선수마다 찍을 벌을 고른다 — 홈·원정이 따로인 유니폼(김현서: 주문서대로).
+    #   양면 패턴(이름에 «양면»)은 한 벌이 두 면이라 늘 다 찍는다. 디자인이 하나뿐이거나 색으로 못 가리면 모든 벌.
+    side_pick: dict = {}
+    if extra_sides:
+        from .design_color import pick_sides
+        side_pick, _dn = pick_sides(order_rows, [body_fill] + list(side_fill),
+                                    reversible="양면" in str(preset_dict.get("preset_name") or ""))
+        warnings.extend(_dn)
     if companion is not None and body_fill is not None:
         try:
             from .flatten import detect_background_cmyk
@@ -1621,7 +1629,10 @@ def run_job(preset: str,
                     if side_tag_hits[si]:
                         _apply_size_tags(lay2, size, row_warns, side_tag_hits[si])
                     stack.append(lay2)
-                layout = _stack_layouts(layout.name, stack)
+                if idx in side_pick and side_pick[idx] < len(stack):
+                    layout = stack[side_pick[idx]]          # 주문서 디자인의 벌 하나만
+                else:
+                    layout = _stack_layouts(layout.name, stack)
             except Exception as e:
                 row_warns.append(f"🟡 [양면] 두 번째 면을 못 만들어 첫 면만 찍습니다: {e}")
         if companion is not None and not top_only:

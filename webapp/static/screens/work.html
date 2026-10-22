@@ -494,6 +494,7 @@ async function uploadOrder(file) {
       size: r.size || "", qty: Number(r.qty) || 1,
       name: r.name || "", number: r.number || "",
       bottom_size: r.bottom_size || "",   // 하의 사이즈(주문서 «하의» 칸) — 상의+하의 함께 찍기에 쓴다
+      design: r.design || "", design_hex: r.design_hex || "",   // 디자인(컬러) — 한 대지 여러 벌 중 그 선수의 벌(2026-10-22)
     }));
     orderServer = Object.assign({ fileName: file.name }, data);
   } catch (e) {
@@ -678,7 +679,7 @@ function orderView() {
     const q = oQuery.trim().toLowerCase();
     rows = rows.filter((r) => (r.name || "").toLowerCase().includes(q) || String(r.number).includes(q));
   }
-  if (oFailOnly) rows = rows.filter((r) => !r.name);
+  if (oFailOnly) rows = rows.filter((r) => !r.name && !r.number);
   if (oSort === "size") rows.sort((a, b) => sizeRank(a.size) - sizeRank(b.size));
   else if (oSort === "name") rows.sort((a, b) => (a.name || "힣").localeCompare(b.name || "힣", "ko"));
   else if (oSort === "number") rows.sort((a, b) => (+a.number) - (+b.number));
@@ -710,7 +711,9 @@ function renderOrder() {
     wireDropzone($("#orderDrop"), (f) => uploadOrder(f));
     return;
   }
-  const failTotal = ORDER.filter((r) => !r.name).length;
+  // 관리자 주문서는 이름 없이 배번만 찍는 줄이 많다 — 이름·배번이 둘 다 비었을 때만 «확인 필요»(2026-10-22)
+  const failTotal = ORDER.filter((r) => !r.name && !r.number).length;
+  const hasDesign = ORDER.some((r) => r.design);
   const view = orderView();
   const totalPages = Math.max(1, Math.ceil(view.length / O_PAGE));
   if (oPage > totalPages) oPage = totalPages;
@@ -718,7 +721,7 @@ function renderOrder() {
   const sortIcon = (k) => oSort === k ? "is-sorted" : "";
 
   const rowsHtml = pageRows.map((r) => {
-    const warn = !r.name;
+    const warn = !r.name && !r.number;
     const i = r._i;
     return `
       <tr class="${warn ? "is-warn" : ""}" data-row="${i}">
@@ -729,6 +732,7 @@ function renderOrder() {
           ${warn ? '<div class="cell-error" style="margin-top:3px; padding-left:7px;"><span class="material-symbols-outlined">error</span>추출 실패 — 입력 필요</div>' : ""}
         </td>
         <td><input class="cell-input num mono" data-f="number" value="${esc(r.number)}" inputmode="numeric"></td>
+        ${hasDesign ? `<td><input class="cell-input" data-f="design" value="${esc(r.design || "")}"></td>` : ""}
         <td style="text-align:center;"><button class="icon-btn icon-btn--sm icon-btn--danger" data-del="${i}" aria-label="행 삭제"><span class="material-symbols-outlined">close</span></button></td>
       </tr>`;
   }).join("");
@@ -765,9 +769,10 @@ function renderOrder() {
             <th class="num">수량</th>
             <th class="sortable ${sortIcon("name")}" data-sort="name">이름 <span class="material-symbols-outlined">unfold_more</span></th>
             <th class="num sortable ${sortIcon("number")}" data-sort="number">배번 <span class="material-symbols-outlined">unfold_more</span></th>
+            ${hasDesign ? "<th>디자인</th>" : ""}
             <th style="width:40px;"></th>
           </tr></thead>
-          <tbody>${pageRows.length ? rowsHtml : `<tr><td colspan="5" style="padding:0;"><div class="empty" style="padding:36px;"><div class="empty__icon"><span class="material-symbols-outlined">filter_alt_off</span></div><div class="empty__title">조건에 맞는 행이 없습니다</div><div class="empty__desc">검색어나 필터를 바꿔보세요.</div></div></td></tr>`}</tbody>
+          <tbody>${pageRows.length ? rowsHtml : `<tr><td colspan="${hasDesign ? 6 : 5}" style="padding:0;"><div class="empty" style="padding:36px;"><div class="empty__icon"><span class="material-symbols-outlined">filter_alt_off</span></div><div class="empty__title">조건에 맞는 행이 없습니다</div><div class="empty__desc">검색어나 필터를 바꿔보세요.</div></div></td></tr>`}</tbody>
         </table>
       </div>
       <div id="orderPager"></div>
@@ -790,6 +795,7 @@ function renderOrder() {
     inp.addEventListener("input", (e) => {
       const i = +e.target.closest("[data-row]").dataset.row;
       ORDER[i][e.target.dataset.f] = e.target.value;
+      if (e.target.dataset.f === "design") ORDER[i].design_hex = "";   // 손으로 바꾼 디자인은 범례 색 코드와 끊는다(이름 속 색으로)
       if (e.target.dataset.f === "name") { renderOrder(); update(); }
     });
   });
@@ -903,7 +909,8 @@ async function startGenerate() {
       patternId: patternId,
       // 디자인 점검 때 받은 영수증(토큰). 없으면 서버가 명시 경로/기본을 쓴다.
       design_token: (designServer && designServer.design_token) || null,
-      rows: ORDER.map((r) => ({ name: r.name, number: r.number, size: r.size, qty: r.qty, bottom_size: r.bottom_size || "" })),
+      rows: ORDER.map((r) => ({ name: r.name, number: r.number, size: r.size, qty: r.qty, bottom_size: r.bottom_size || "",
+                                design: r.design || "", design_hex: r.design_hex || "" })),
       out_format: apiFmt(),
       // 주문서 파일명 — 작업 기록 화면의 '주문' 칸에 폴더명(web_…) 대신 보이게 한다(표시용, 선택).
       order_name: (orderServer && orderServer.fileName) || null,

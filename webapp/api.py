@@ -943,6 +943,10 @@ def _normalize_rows(rows: Any) -> List[dict]:
         bs = (r.get("bottom_size") or "").strip() if isinstance(r.get("bottom_size"), str) else ""
         if bs:
             item["bottom_size"] = bs     # (2026-10-20) 하의 사이즈 — 상의+하의 함께 찍기
+        for k in ("design", "design_hex"):   # (2026-10-22) 주문서 디자인(컬러) — 한 대지 여러 벌 중 그 선수의 벌
+            v = r.get(k)
+            if isinstance(v, str) and v.strip():
+                item[k] = v.strip()[:40]
         out.append(item)
     return out
 

@@ -228,5 +228,73 @@ class MasterChainAndKidsSleeve(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class FactoryOrderSheetAndDesignPick(unittest.TestCase):
+    """(2026-10-22) 관리자 «생산 작업지시서» 읽기 · 디자인(컬러)으로 벌 고르기."""
+
+    def _sheet(self, path):
+        import openpyxl
+        wb = openpyxl.Workbook(); ws = wb.active; ws.title = "생산 작업지시서"
+        for r in (["STIZ 생산 작업지시서", "ORD-20261014-03"], ["주문번호", "ORD-20261014-03", "희망납기", "정상납기"],
+                  ["디자인 범례 — 디자인 = 컬러 이름입니다 (홈·어웨이 아님)"], ["색", "디자인", "상의 합계", "하의 합계"],
+                  ["#02218D", "블루", "2pc", "0pc"], ["#F8E202", "옐로우", "1pc", "1pc"], [],
+                  ["디자인", "핏 · 구분", "S", "M", "합계"], ["블루", "상의", 1, 1, 2], [],
+                  ["배번", "인쇄용 이름", "디자인", "상의 사이즈", "상의 수량", "하의 사이즈", "하의 수량", "비고"],
+                  ["■ 블루 — 상의 2pc · 하의 0pc"],
+                  ["5", "KIM", "블루", "M", "1pc", "-", "0pc", "-"],
+                  ["7", None, "블루", "S", "1pc", "-", "0pc", "-"],
+                  ["■ 옐로우 — 상의 1pc · 하의 1pc"],
+                  ["1", "GK", "옐로우", "L", "1pc", "M", "1pc", "주장"],
+                  ["12", None, "옐로우", "-", "0pc", "L", "1pc", "-"],
+                  [], ["공정 체크리스트"], ["☐", "재단", "메모"]):
+            ws.append(r)
+        wb.save(path)
+
+    def test_parse_factory_sheet(self):
+        from engine.order import parse_order
+        tmp = tempfile.mkdtemp(prefix="ord_")
+        try:
+            p = os.path.join(tmp, "o.xlsx"); self._sheet(p)
+            w = []
+            rows = parse_order(p, w)
+            self.assertEqual([r["number"] for r in rows], ["5", "7", "1", "12"])
+            self.assertEqual(rows[0]["name"], "KIM")
+            self.assertEqual(rows[0]["design"], "블루"); self.assertEqual(rows[0]["design_hex"], "#02218D")
+            self.assertEqual(rows[0]["bottom_size"], "-")                       # 하의 0pc = 상의만
+            self.assertEqual((rows[2]["size"], rows[2]["bottom_size"]), ("L", "M"))
+            self.assertEqual((rows[3]["size"], rows[3]["bottom_size"]), ("-", "L"))   # 상의 0pc = 하의만
+            self.assertEqual(rows[2]["design_hex"], "#F8E202")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_pick_sides(self):
+        from engine.design_color import pick_sides
+        blue, yellow = (1.0, 0.8, 0.0, 0.05), (0.0, 0.1, 1.0, 0.0)
+        rows = [{"design": "블루", "design_hex": "#02218D"}, {"design": "블루"}, {"design": "옐로우"}]
+        got, notes = pick_sides(rows, [blue, yellow])
+        self.assertEqual(got, {0: 0, 1: 0, 2: 1})
+        got, _ = pick_sides(rows, [yellow, blue])                               # 위·아래가 바뀌어도 색으로
+        self.assertEqual(got, {0: 1, 1: 1, 2: 0})
+        self.assertEqual(pick_sides([{"design": "블루"}, {"design": "블루"}], [blue, yellow])[0], {})   # 디자인 하나뿐
+        self.assertEqual(pick_sides(rows, [blue, yellow], reversible=True)[0], {})                   # 양면은 늘 두 면
+        got, notes = pick_sides([{"design": "홈"}, {"design": "어웨이"}], [blue, yellow])
+        self.assertEqual(got, {}); self.assertTrue(any("🟡" in n for n in notes))                    # 색 없는 이름
+
+    def test_note_design_in_old_form(self):
+        import openpyxl
+        from engine.order import parse_order
+        tmp = tempfile.mkdtemp(prefix="ord1_")
+        try:
+            p = os.path.join(tmp, "o.xlsx")
+            wb = openpyxl.Workbook(); ws = wb.active
+            for r in (["이니셜", "배번", "사이즈", None, "비고"], [None, None, "상의", "하의", None],
+                      ["KIM", "5", "L", "L", "홈"], ["LEE", "7", "M", "M", "네이비"], ["PARK", "9", "S", "S", "택 확인"]):
+                ws.append(r)
+            wb.save(p)
+            rows = parse_order(p)
+            self.assertEqual([r.get("design", "") for r in rows], ["홈", "네이비", ""])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

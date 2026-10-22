@@ -240,6 +240,111 @@ def _norm_header(value) -> str:
     return str(value).replace("\xa0", " ").replace(" ", "").strip()
 
 
+# ── 관리자 «생산 작업지시서» 파서 (2026-10-22) ──────────────────────────────────
+#   쇼핑몰 커스텀 주문상세의 명단(orderSheet.members)을 관리자·공장 화면에서 엑셀로 받으면 이 양식이다
+#   (stizshop shared/factory-order-sheet.js). 김현서: «지금은 관리자 페이지 주문서 형태로 작업하는 게 대다수».
+#   머리글: 배번 · 인쇄용 이름 · (디자인) · (핏) · 상의 사이즈 · 상의 수량 · 하의 사이즈 · 하의 수량 · 비고
+#   «■ 블루 — …» 묶음 제목 줄 · 사이즈 집계표 · 공정 체크리스트는 건너뛴다.
+#   맨 위 «디자인 범례»(색 #RRGGBB · 디자인 이름)를 읽어 행마다 design_hex 를 단다 — 디자인 = 컬러 이름(홈·어웨이 아님).
+#   예전에는 이 양식을 양식②(사이즈 집계)로 읽어 «M 9장 · L 4장» 세 줄이 되고 배번·이름이 통째로 빠졌다.
+_FACTORY_COLS = {"배번": "number", "인쇄용이름": "name", "이름": "name", "디자인": "design", "핏": "fit",
+                 "상의사이즈": "size", "상의수량": "top_qty", "하의사이즈": "bottom_size", "하의수량": "bottom_qty",
+                 "비고": "note"}
+_HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+
+def _pc_count(value) -> int | None:
+    """«1pc» · «0pc» · 2 → 숫자. 비었거나 «-» 면 None."""
+    m = re.search(r"\d+", _to_str(value))
+    return int(m.group(0)) if m else None
+
+
+def _parse_form_factory(rows: list) -> tuple[list[dict], dict]:
+    """반환: (행 목록, {디자인 이름: '#RRGGBB'}). 이 양식이 아니면 ([], {})."""
+    header_r = None
+    for r in range(min(120, len(rows))):
+        hs = {_norm_header(v) for v in rows[r][:12]}
+        if "배번" in hs and "인쇄용이름" in hs:
+            header_r = r
+            break
+    if header_r is None:
+        return [], {}
+    cols: dict = {}
+    for c, v in enumerate(rows[header_r][:14]):
+        key = _FACTORY_COLS.get(_norm_header(v))
+        if key and key not in cols:
+            cols[key] = c
+    if "number" not in cols or "size" not in cols:
+        return [], {}
+
+    # 디자인 범례: «색 | 디자인 | 상의 합계 …» 머리글 아래로 (#hex, 이름) 줄
+    legend: dict = {}
+    for r in range(header_r):
+        row = rows[r]
+        if _norm_header(row[0] if row else None) == "색" and len(row) > 1 and _norm_header(row[1]) == "디자인":
+            for rr in range(r + 1, header_r):
+                a = _to_str(rows[rr][0]) if rows[rr] else ""
+                b = next((_to_str(v) for v in rows[rr][1:5] if _to_str(v)), "")
+                if not _HEX_RE.match(a) or not b:
+                    break
+                legend[b] = a.upper()
+            break
+
+    def cell(row, key):
+        c = cols.get(key)
+        return row[c] if c is not None and c < len(row) else None
+
+    out: list[dict] = []
+    for r in range(header_r + 1, len(rows)):
+        row = rows[r]
+        first = _to_str(row[0] if row else None)
+        if first.startswith("■"):
+            continue                                   # 디자인 묶음 제목 줄
+        if any(k in first.replace(" ", "") for k in ("공정체크리스트", "체크리스트")):
+            break
+        number = _to_str(cell(row, "number"))
+        top_raw = _to_str(cell(row, "size"))
+        top = _normalize_size(top_raw)
+        bot_raw = _to_str(cell(row, "bottom_size"))
+        bot = _normalize_size(bot_raw)
+        tq, bq = _pc_count(cell(row, "top_qty")), _pc_count(cell(row, "bottom_qty"))
+        if not number and not top and not bot:
+            if not any(_to_str(v) for v in row[:10]):
+                continue                               # 빈 줄
+            break                                      # 명단이 끝났다
+        item = {"name": _to_str(cell(row, "name")), "number": number,
+                "size": top if (top and tq != 0) else ("-" if (bot and bq) else top),
+                "qty": str(tq if tq else 1)}
+        if "bottom_size" in cols:
+            item["bottom_size"] = bot if (bot and bq != 0) else "-"   # 하의 없음 = «-» (함께 찍기에서 상의만)
+        design = _to_str(cell(row, "design"))
+        if design:
+            item["design"] = design
+            if design in legend:
+                item["design_hex"] = legend[design]
+        note = _to_str(cell(row, "note"))
+        if note and note != "-":
+            item["note"] = note
+        out.append(item)
+    return out, legend
+
+
+# ── 옛 양식 «비고» 칸의 홈·어웨이·컬러 → 디자인 (2026-10-22 김현서: «기존 주문서는 대부분 비고 칸에 홈·어웨이나 컬러») ──
+_DESIGN_WORDS = ("홈", "어웨이", "원정", "HOME", "AWAY")
+
+
+def _note_design(note: str) -> str:
+    """비고 글자가 홈·어웨이·컬러를 말하면 그 글자(디자인), 아니면 ""."""
+    t = (note or "").strip()
+    if not t:
+        return ""
+    from .design_color import color_words      # 늦은 import — 색 이름표는 작업 쪽과 같은 한 곳
+    up = t.upper()
+    if any(w in up for w in _DESIGN_WORDS) or color_words(t):
+        return t
+    return ""
+
+
 # ── 양식① 「선수별 행」 파서 ──────────────────────────────────────────────────
 def _parse_form1(rows: list) -> list[dict]:
     """행 2차원 리스트에서 양식①(선수별 행)을 추출한다.
@@ -266,12 +371,15 @@ def _parse_form1(rows: list) -> list[dict]:
     number_col = header_c + 1
     size_col = header_c + 2
     hrow = rows[header_r]
+    note_col = None
     for c in range(len(hrow)):
         h = _norm_header(hrow[c])
         if h in _HEADER_NUMBER:
             number_col = c
         elif h in _HEADER_SIZE:
             size_col = c  # 사이즈 헤더(C). 부제행에서 상의가 이 열에 옴.
+        elif h in _HEADER_NOTE or h in ("참고사항", "참고"):
+            note_col = c  # (2026-10-22) 비고·참고사항 — 홈·어웨이·컬러가 적혀 있으면 디자인
 
     # 3) 데이터 시작행: 헤더 바로 아래가 부제행(상의/하의)이면 건너뛴다.
     #    부제행 판정: 사이즈 열 또는 그 옆에 '상의'/'하의' 텍스트가 있으면 부제행.
@@ -329,6 +437,10 @@ def _parse_form1(rows: list) -> list[dict]:
             bsz = _normalize_size(cell(bottom_col))
             if bsz:
                 item["bottom_size"] = bsz   # 하의 사이즈(있을 때만 — 없으면 상의 사이즈로 찍는다)
+        if note_col is not None:
+            dz = _note_design(_to_str(cell(note_col)))
+            if dz:
+                item["design"] = dz
         result.append(item)
 
     return result
@@ -567,7 +679,9 @@ def parse_order(xlsx_path: str, warnings: list | None = None) -> list[dict]:
             # 양식① 우선 → 비면 신양식③ → 비면 양식②.
             #   ①(이름=A열, 순번 없음)이 0행이면 ③(순번+이니셜 헤더)을 시도한다.
             #   ③은 '순번' 컬럼 유무로 ①과 구분되므로 충돌하지 않는다.
-            parsed = _parse_form1(rows)
+            parsed, _legend = _parse_form_factory(rows)
+            if not parsed:
+                parsed = _parse_form1(rows)
             if not parsed:
                 parsed = _parse_form_stiz(rows)
             if not parsed:
