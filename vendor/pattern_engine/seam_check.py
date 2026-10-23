@@ -128,7 +128,7 @@ def check_size(specs, sewing, model=None):
             # 노치끼리 맞춰 꿰매면 여유가 노치 아래(끝~노치)·위(노치~시작)로 나뉜다 — 어느 쪽이 모자라면(음수) 소매가 당긴다
             below = max(n["diff"] for n in notes); above = round(r["ease"] - below, 1)
             r["ease_below"], r["ease_above"] = round(below, 1), above
-            if min(below, above) < -tol:
+            if min(below, above) < -float(sd.get("notch_tol", tol)):
                 if r["status"] == "ok": r["status"] = "warn"
                 short = "위" if above < below else "아래"
                 r["say"] += f" · 노치로 나누면 아래 {below:+.1f} / 위 {above:+.1f}mm — 노치 {short}쪽 소매가 모자람"

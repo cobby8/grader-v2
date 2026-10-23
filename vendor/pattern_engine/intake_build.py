@@ -133,9 +133,28 @@ def to_values(row):
         ("목 립 폭", f"{got['neck_rib_width']:g}", v["rib_width"], ""),
     ]
     notes = []
+    off = front_yoke_offset(row)
+    if got["yoke_front"] is not None and abs(got["yoke_front"] - got["front_neck_drop"]) > 0.3:
+        notes.append(f"V 꼭짓점은 앞 요크 이음선({got['yoke_front']:g}cm)에 둔다(결정 ④) — 의뢰 V 깊이 {got['front_neck_drop']:g}cm 와 "
+                     f"{abs(got['yoke_front'] - got['front_neck_drop']):g}cm 차, 실물에서 립 안쪽 끝이 어디서 만나는지 확인")
     if got["yoke_front"] is not None:
-        notes.append(f"앞 요크 위치 {got['yoke_front']:g}cm 는 아직 설계도에 쓰지 않는다 — 앞 요크 이음선은 V 꼭짓점 높이를 따른다")
+        conv.insert(10, ("앞 요크", f"옆목점 선에서 {got['yoke_front']:g}", mm(got["yoke_front"]),
+                         f"뒤 이음선보다 {abs(off):g}mm {'위' if off < 0 else '아래'} — 앞 요크·앞판만" if off else "뒤 이음선과 같은 높이"))
+    else:
+        notes.append("앞 요크 위치가 없어 앞 이음선을 뒤와 같은 높이로 그렸다")
     return v, conv, notes
+
+
+def front_yoke_offset(row):
+    """앞 요크 이음선 − 뒤 요크 이음선(mm, 둘 다 옆목점 선에서 잰 값). 앞 실측이 없으면 0(뒤와 같은 높이).
+    앞 이음선이 V 꼭짓점보다 위면 앞 요크가 둘로 끊기므로 거절한다"""
+    meas = _data(row).get("measures") or {}
+    f, b, v = _num(meas, "yoke_pos", "front"), _num(meas, "yoke_pos", "back"), _num(meas, "front_neck_drop")
+    if f is None or b is None:
+        return 0.0
+    if v is not None and f <= v:
+        raise IntakeBuildError(f"앞 요크 위치({f:g}cm)가 V 깊이({v:g}cm)보다 위입니다 — 다시 재 주세요.")
+    return round((f - b) * 10.0, 1)
 
 
 def base_size_of(row, table):
@@ -238,7 +257,7 @@ def confirm_md(row, st, conv, notes, table, sizes, values, measured, made_at, ba
         items.append("·".join(far) + " 는 하키티(XS~XL)에 없어 L→XL 간격으로 늘렸다")
     if sizes == [base_size]:
         items.append(f"기준 사이즈 {base_size} 만 만들었다 — 다른 사이즈는 의뢰 화면에서 골라 그레이딩")
-    items.append("V 인서트 조각은 아직 설계도에 없다(10/18 결정 «V 인서트 넣는다» — 다음 설계도 판)")
+    items.append("V 인서트 조각(결정 ①)은 아직 없다 — 인서트 높이·윗변 폭을 디자이너에게 받는 중(2026-10-23)")
     items += notes
     parts.append("\n".join(f"- [ ] {t}" for t in items))
     return "\n".join(parts) + "\n"
@@ -258,6 +277,8 @@ def build(row, out, sizes=None, style_id=None, export=True, progress=None):
     st = select_style(row)
     style = parametric.load_json(os.path.join(HERE, st["style"]))
     style = json.loads(json.dumps(style)); style["params"]["sa"] = SA_SIDE; style["params"]["hem_sa"] = SA_HEM
+    if "yoke_front_offset" in style["params"]:
+        style["params"]["yoke_front_offset"] = front_yoke_offset(row)        # 앞 이음선 = 의뢰 실측(사이즈마다 뒤와 같은 걸음으로 함께 움직인다)
     table = parametric.load_json(os.path.join(HERE, st["grade"]))
     bs, bnotes = base_size_of(row, table)
     sizes = sorted(dict.fromkeys(list(sizes or []) + [bs]), key=lambda s: SIZE_ORDER.index(s) if s in SIZE_ORDER else 99)
