@@ -1,7 +1,7 @@
 {
  "name": "럭비 저지 — 드롭숄더 · V넥 립 · 앞뒤 요크 · 립 커프스",
  "version": 2,
- "decisions": "2026-10-18~19 사장님 결정(output/rugby-jersey-pattern-20261016/결정기록_1018.md) ②③④⑤ 반영 2026-10-23 — ① V 인서트는 치수 대기. 10-16 초안 그대로는 rugby_jersey_1016.json",
+ "decisions": "2026-10-18~19 사장님 결정(output/rugby-jersey-pattern-20261016/결정기록_1018.md) ②③④⑤ 반영 2026-10-23 · ① V 인서트 2026-10-23(김현서 실측 높이 7·윗변 13·2겹·같은 원단). 10-16 초안 그대로는 rugby_jersey_1016.json",
  "source": "output/rugby-jersey-pattern-20261016/scripts/rugby_final.py (2026-10-16 최종 제도) 의 치수·수식을 그대로 옮김",
  "coords": "x 오른쪽 · y 아래쪽(+) · mm. 몸판·요크·소매는 반쪽을 그려 x=0 중심선으로 거울 펼침. 뒷목 중심 y=BND, 옆목점 y=0",
  "default_sa": "sa",
@@ -37,7 +37,8 @@
   "neck_c1_x": 50, "neck_c2_in": 8, "neck_c2_y": 12, "neck_c2_d": 15, "fn_c1": 0.45, "fn_c2": 30,
   "w25_drop": 25,
   "rib_front_ratio": 0.97, "rib_back_ratio": 0.92, "rib_inset": 0.35,
-  "yoke_front_offset": 0
+  "yoke_front_offset": 0,
+  "insert_h": 70, "insert_top_w": 130
  },
 
  "vars": {
@@ -52,6 +53,7 @@
   "V_ANG": "angle(HPS, VT) - V_ALPHA",
   "V_PHI": "V_ANG - 90",
   "RIB_E": "rib_width * tan(V_PHI)",
+  "INS_TOP_Y": "YOKE_Y_F - insert_h",
   "V_Y": "sqrt(v_depth*v_depth - NW*NW)",
   "SL": "sleeve_length - cuff_height",
   "HW": "sleeve_hem / 2",
@@ -82,6 +84,11 @@
   "VB": {"from": "HPS", "angle": "V_ANG", "dist": "YOKE_Y_F / sin(V_ANG)"},
   "FN_C1": {"from": "VB", "angle": "angle(VB, HPS)", "dist": "dist(VB, HPS) * fn_c1"},
   "FN_C2": {"from": "HPS", "angle": "angle(HPS, SP) + 90", "dist": "fn_c2"},
+  "INS_C": [0, "YOKE_Y_F"],
+  "INS_T": {"walk": "FRONT_NECK", "s": "length(INS_SIDE)"},
+  "INS_TL": ["0 - INS_T.x", "INS_T.y"],
+  "INS_B2": ["VB.x", "2 * INS_TOP_Y - YOKE_Y_F"],
+  "INS_C2": [0, "2 * INS_TOP_Y - YOKE_Y_F"],
   "BN0": [0, "BND"],
   "BN1": ["neck_c1_x", "BND"],
   "BN2": {"from": "HPS", "angle": "angle(HPS, SP) + 90", "dist": "neck_c2_d"},
@@ -122,6 +129,7 @@
   "ARM_LO_F":  {"split_y": "ARM", "y": "YOKE_Y_F", "part": "after"},
   "BACK_NECK": {"bezier": ["BN0", "BN1", "BN2", "HPS"], "n": 40},
   "FRONT_NECK": {"bezier": ["VB", "FN_C1", "FN_C2", "HPS"], "n": 40},
+  "INS_SIDE":  {"split_y": "FRONT_NECK", "y": "INS_TOP_Y", "part": "before"},
   "CAP":       {"bezier": ["CAP_TOP", "CAP_C1", "CAP_C2", "CAP_END"], "n": 120}
  },
 
@@ -148,6 +156,8 @@
    {"key": "shoulder", "ko": "어깨", "kind": "equal", "a": [["앞 요크", "HPS", "SP"]], "b": [["뒤 요크", "HPS", "SP"]]},
    {"key": "yoke_front", "ko": "앞 요크선", "kind": "equal", "a": [["앞 요크", "ARM_Y_F", "VB"]], "b": [["앞판", "@VB", "@ARM_Y_F"]]},
    {"key": "rib_end", "ko": "넥 립 끝 ↔ 앞 이음선", "kind": "equal", "same_sa": false, "a": [["넥 립", "RIB_5", "RIB_0"]], "b": [["앞판", "YOKE_C_F", "@VB"]]},
+   {"key": "insert_bottom", "ko": "V 인서트 아래 ↔ 앞 이음선", "kind": "equal", "a": [["V 인서트", "INS_C", "VB"]], "b": [["앞판", "YOKE_C_F", "@VB"]]},
+   {"key": "insert_side", "ko": "V 인서트 옆 ↔ 앞 요크 V선", "kind": "equal", "a": [["V 인서트", "VB", "INS_T"]], "b": [["앞 요크", "VB", "@INS_T"]]},
    {"key": "yoke_back", "ko": "뒤 요크선", "kind": "equal", "a": [["뒤 요크", "@ARM_Y", "YOKE_C"]], "b": [["뒤판", "YOKE_C", "@ARM_Y"]]},
    {"key": "side", "ko": "옆선", "kind": "equal", "a": [["앞판", "UA", "HEM"]], "b": [["뒤판", "UA", "HEM"]]},
    {"key": "armhole_front", "ko": "진동 ↔ 소매산(앞)", "kind": "ease", "min": -5, "max": 5, "notch_tol": 5,
@@ -175,7 +185,12 @@
           "outline": ["YOKE_C_F", "ARM_LO_F", "UA", {"ref": "HEM", "sa": "hem_sa"}, "HEM_C"],
           "notches": [{"at": "N_ARM_F", "side": "both"}, {"at": "YOKE_C_F"}, {"at": "VB", "side": "both"}]},
   "앞 요크": {"en_name": "FRONT YOKE", "qty": 2, "grain": "세로", "note": "좌우 2장 — V 가 앞 이음선까지 트여 둘로 나뉜다(결정 ③). 1장은 뒤집어 재단",
-            "outline": ["VB", "FRONT_NECK", "HPS", "SP", "ARM_UP_F", "ARM_Y_F"]},
+            "outline": ["VB", "FRONT_NECK", "HPS", "SP", "ARM_UP_F", "ARM_Y_F"],
+            "notches": [{"at": "INS_T"}]},
+  "V 인서트": {"en_name": "V INSERT", "qty": 1, "grain": "세로", "mirror_x": true,
+             "note": "2겹 — 윗변에서 접음 · 립 안쪽에 대고 양옆은 V 봉제선, 아래는 앞 이음선에 같이 박는다(결정 ①) · 몸판과 같은 원단",
+             "outline": ["INS_C", "VB", "INS_T", "INS_B2", "INS_C2"], "fold": ["INS_TL", "INS_T"],
+             "notches": [{"at": "INS_C"}]},
   "소매": {"en_name": "SLEEVE", "qty": 2, "grain": "세로", "mirror_x": true, "note": "오른쪽(x>0) = 앞, 왼쪽 = 뒤",
           "outline": ["CAP_TOP", "CAP", "CAP_END", "SLV_HEM", "SLV_HEM_C"],
           "notches": [{"at": "N_CAP_B1", "side": "left"}, {"at": "N_CAP_B2", "side": "left"}, {"at": "N_CAP_F", "side": "right"},

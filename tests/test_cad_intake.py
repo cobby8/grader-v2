@@ -102,8 +102,8 @@ class CadIntake(_Base, _Jobs):
             self.assertEqual(j["status"], "done", j)
             self.assertEqual(j["result"]["version"], want); self.assertEqual(j["result"]["sizes"], sizes)
             sm = j["result"]["seams"]                                           # 솔기 대조 요약 — 길이 짝은 다 맞음
-            self.assertEqual((sm["pairs"], sm["ok"], sm["bad"], sm["warn"]), (11, True, 0, 0))   # 결정 ②~⑤ 뒤 — 11쌍 모두 맞음
-            self.assertEqual(self.rows[self.ID]["data"]["build"]["seams"]["pairs"], 11)
+            self.assertEqual((sm["pairs"], sm["ok"], sm["bad"], sm["warn"]), (13, True, 0, 0))   # 결정 ①~⑤ 뒤 — 13쌍 모두 맞음
+            self.assertEqual(self.rows[self.ID]["data"]["build"]["seams"]["pairs"], 13)
             b = self.rows[self.ID]["data"]["build"]
             self.assertEqual((b["status"], b["ver"]), ("stored", want))
         self.assertTrue(any(k.startswith(f"{SID}/v2/") for k in self.store))

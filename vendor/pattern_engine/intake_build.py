@@ -214,8 +214,9 @@ def _md_table(rows, head):
     return "\n".join(lines)
 
 
-def confirm_md(row, st, conv, notes, table, sizes, values, measured, made_at, base_size, seams=None):
+def confirm_md(row, st, conv, notes, table, sizes, values, measured, made_at, base_size, seams=None, insert=None):
     d = table["delta"]
+    st_pieces, st_ins_x, st_ins_h, st_ins_w = (insert or {}).get("pieces"), (insert or {}).get("x"), (insert or {}).get("h"), (insert or {}).get("w")
     keys = list(values[sizes[0]].keys())
     label = {"length_cb": "총장", "shoulder_width": "어깨너비", "chest": "가슴둘레", "hem": "밑단둘레", "sleeve_length": "소매 길이",
              "cuff": "소매 입구 둘레", "armhole_depth": "진동 깊이", "sleeve_width_25": "소매통(단면)", "v_depth": "V 깊이(직선)",
@@ -257,10 +258,20 @@ def confirm_md(row, st, conv, notes, table, sizes, values, measured, made_at, ba
         items.append("·".join(far) + " 는 하키티(XS~XL)에 없어 L→XL 간격으로 늘렸다")
     if sizes == [base_size]:
         items.append(f"기준 사이즈 {base_size} 만 만들었다 — 다른 사이즈는 의뢰 화면에서 골라 그레이딩")
-    items.append("V 인서트 조각(결정 ①)은 아직 없다 — 인서트 높이·윗변 폭을 디자이너에게 받는 중(2026-10-23)")
+    if "V 인서트" in (st_pieces or {}):
+        w = 2 * st_ins_x
+        items.append(f"V 인서트 윗변 폭: 패턴 {w:.0f}mm(V선이 높이 {st_ins_h:g}mm 에서 벌어진 폭) · 실측 {st_ins_w:g}mm — "
+                     + ("거의 같다" if abs(w - st_ins_w) <= 5 else "차이가 크다, 실물 확인"))
     items += notes
     parts.append("\n".join(f"- [ ] {t}" for t in items))
     return "\n".join(parts) + "\n"
+
+
+def _insert_info(style, model):
+    """V 인서트가 있는 스타일이면 확인표용 — 패턴 윗변 반폭·높이·실측 윗변 폭"""
+    if not model or "V 인서트" not in (style.get("pieces") or {}):
+        return None
+    return {"pieces": style["pieces"], "x": model.get("INS_T")[0], "h": style["params"].get("insert_h"), "w": style["params"].get("insert_top_w")}
 
 
 def assumed_changed(table, sizes, values, base_size):
@@ -327,7 +338,8 @@ def build(row, out, sizes=None, style_id=None, export=True, progress=None):
              "measured": measured, "grade_source": table["source"],
              "assumed": sorted(assumed), "seams": seams, "made_at": made_at}
     with open(P["check"], "w", encoding="utf-8") as f: json.dump(check, f, ensure_ascii=False, indent=1)
-    with open(P["confirm"], "w", encoding="utf-8") as f: f.write(confirm_md(row, st, conv, notes, table, sizes, vals, measured, made_at, bs, seams))
+    with open(P["confirm"], "w", encoding="utf-8") as f: f.write(confirm_md(row, st, conv, notes, table, sizes, vals, measured, made_at, bs, seams,
+                                                                      insert=_insert_info(style, models.get(bs))))
     entries = [(P["check"], "check.json"), (P["confirm"], "confirm.md")]
     entries += [(os.path.join(out, "specs", f"spec_{s}.json"), f"specs/spec_{s}.json") for s in sizes] + extra
     files = []
