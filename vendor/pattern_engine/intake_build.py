@@ -23,6 +23,7 @@ if HERE not in sys.path: sys.path.insert(0, HERE)
 
 import cad_view
 import parametric
+import seam_check
 from piecespec import compute_cut
 
 FORMAT = "stiz-intake-build"; FORMAT_VERSION = 1
@@ -194,7 +195,7 @@ def _md_table(rows, head):
     return "\n".join(lines)
 
 
-def confirm_md(row, st, conv, notes, table, sizes, values, measured, made_at, base_size):
+def confirm_md(row, st, conv, notes, table, sizes, values, measured, made_at, base_size, seams=None):
     d = table["delta"]
     keys = list(values[sizes[0]].keys())
     label = {"length_cb": "총장", "shoulder_width": "어깨너비", "chest": "가슴둘레", "hem": "밑단둘레", "sleeve_length": "소매 길이",
@@ -220,8 +221,16 @@ def confirm_md(row, st, conv, notes, table, sizes, values, measured, made_at, ba
     parts.append(_md_table(size_rows, ["항목"] + sizes + ["증분 근거"]))
     parts.append("\n## 3. 만들어진 패턴 완성 치수 (mm, 재봉선 기준)\n")
     parts.append(_md_table(meas_rows, ["치수"] + sizes))
-    parts.append("\n## 4. 확인할 것\n")
+    if seams:
+        parts.append(f"\n## 4. 솔기 대조 — 꿰매지는 짝 {seams['seams']}쌍 (mm · ✖ 어긋남 · ⚠ 주의)\n")
+        parts.append("같음 짝은 길이 차(b−a) · 소매산은 여유(소매산−진동) · 립은 몸판 대비 길이(%). 왼쪽은 오른쪽의 거울이라 같다.\n")
+        parts.append(seam_check.md_section(seams, sizes))
+    parts.append("\n## 5. 확인할 것\n")
     items = []
+    if seams:
+        items += seam_check.md_issues(seams, sizes)
+        if not seams["bad"] and not seams["warn"]:
+            items.append(f"솔기 대조 {seams['seams']}쌍 모두 맞음 — 길이·시접·노치")
     if assumed:
         items.append("※ 가정한 증분(하키티에 없는 항목): " + ", ".join(label.get(k, k) for k in assumed) + " — 실제 사이즈 샘플로 확인")
     far = [s for s in sizes if s in ("2XL", "3XL") and s != base_size]
@@ -262,7 +271,7 @@ def build(row, out, sizes=None, style_id=None, export=True, progress=None):
     vals = grade_values(base, table, sizes, bs)
     step("grade")
     os.makedirs(os.path.join(out, "specs"), exist_ok=True)
-    specs, measured, extra = {}, {}, []
+    specs, measured, extra, models = {}, {}, [], {}
     name = f"{row.get('product_name') or st['ko']} ({code})"
     for s in sizes:
         meas = {"name": f"{name} {s}", "size": s, "unit": "mm", "values": vals[s]}
@@ -270,7 +279,7 @@ def build(row, out, sizes=None, style_id=None, export=True, progress=None):
             R = parametric.build(style, meas)
         except parametric.FormulaError as e:
             raise IntakeBuildError(f"{s} 사이즈 패턴을 그리지 못했습니다: {e}")
-        specs[s] = R["specs"]; measured[s] = parametric.measures(R, style)
+        specs[s] = R["specs"]; measured[s] = parametric.measures(R, style); models[s] = R["model"]
         with open(os.path.join(out, "specs", f"spec_{s}.json"), "w", encoding="utf-8") as f:
             json.dump({"format": "stiz-style-size", "size": s, "pieces": R["specs"]}, f, ensure_ascii=False, separators=(",", ":"))
         if export:
@@ -289,11 +298,15 @@ def build(row, out, sizes=None, style_id=None, export=True, progress=None):
                    "base_type": row.get("base_type"), "parts": _parts(row), "measures": _data(row).get("measures"),
                    "answers": _data(row).get("answers")}, f, ensure_ascii=False, indent=1)
     assumed = assumed_changed(table, sizes, vals, bs)
+    try:
+        seams = seam_check.check(specs, style["sewing"], models) if style.get("sewing") else None
+    except seam_check.SeamCheckError as e:
+        raise IntakeBuildError(f"솔기 대조를 하지 못했습니다: {e}")
     check = {"format": FORMAT, "version": FORMAT_VERSION, "style": st["key"], "base_size": bs, "base_values": base, "values": vals,
              "measured": measured, "grade_source": table["source"],
-             "assumed": sorted(assumed), "made_at": made_at}
+             "assumed": sorted(assumed), "seams": seams, "made_at": made_at}
     with open(P["check"], "w", encoding="utf-8") as f: json.dump(check, f, ensure_ascii=False, indent=1)
-    with open(P["confirm"], "w", encoding="utf-8") as f: f.write(confirm_md(row, st, conv, notes, table, sizes, vals, measured, made_at, bs))
+    with open(P["confirm"], "w", encoding="utf-8") as f: f.write(confirm_md(row, st, conv, notes, table, sizes, vals, measured, made_at, bs, seams))
     entries = [(P["check"], "check.json"), (P["confirm"], "confirm.md")]
     entries += [(os.path.join(out, "specs", f"spec_{s}.json"), f"specs/spec_{s}.json") for s in sizes] + extra
     files = []
@@ -324,7 +337,9 @@ def build(row, out, sizes=None, style_id=None, export=True, progress=None):
                           note=f"패턴 의뢰 {code} 치수로 자동 제작 · 하키티 증분 · 검토 대기")
     with open(P["view"], "w", encoding="utf-8") as f: json.dump(view, f, ensure_ascii=False, separators=(",", ":"))
     summary = {"style_id": sid, "style": st["key"], "sizes": sizes, "base_size": bs, "available": list(table["sizes"]),
-               "pieces": len(pieces), "intake": code, "assumed": check["assumed"], "made_at": made_at}
+               "pieces": len(pieces), "intake": code, "assumed": check["assumed"], "made_at": made_at,
+               "seams": {"pairs": seams["seams"], "ok": seams["ok"], "bad": len(seams["bad"]), "warn": len(seams["warn"]),
+                         "issues": [f"{s_} {ko}: {say}" for s_, ko, say in (seams["bad"] + seams["warn"])][:20]} if seams else None}
     return {"style_id": sid, "sizes": sizes, "base_size": bs, "pieces": pieces, "name": name, "paths": P, "summary": summary}
 
 

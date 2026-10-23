@@ -2190,6 +2190,7 @@ def _intake_thread(job_id: str, intake_id: str, code: str, work: str, admin: boo
             confirm = ""
         build = {"status": "built", "style_id": sid, "sizes": res.get("sizes"), "base_size": sm.get("base_size"),
                  "available": sm.get("available") or [], "pieces": len(res.get("pieces") or []),
+                 "seams": sm.get("seams"),                             # 솔기 대조 요약 {pairs, ok, bad, warn, issues}
                  "assumed": sm.get("assumed") or [], "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "by": email,
                  "engine": (res.get("engine") or {}).get("commit"), "confirm_md": confirm}
         ver = None
@@ -2210,7 +2211,7 @@ def _intake_thread(job_id: str, intake_id: str, code: str, work: str, admin: boo
         state.update_job(job_id, status="done", done=len(svc.INTAKE_STEPS), stage="done", stage_ko="끝",
                          result={"style_id": sid, "version": ver, "stored": ver is not None, "saved_to_intake": saved,
                                  "sizes": res.get("sizes"), "base_size": build["base_size"], "available": build["available"],
-                                 "pieces": build["pieces"], "assumed": build["assumed"], "confirm_md": confirm})
+                                 "pieces": build["pieces"], "assumed": build["assumed"], "seams": build["seams"], "confirm_md": confirm})
         _log(f"[cad] 의뢰 패턴 끝: {code} → {sid} {'v' + str(ver) if ver else '(저장 안 함 · 관리자 아님)'} · 의뢰 기록 {saved}"
              f" · 일꾼 최고 {res.get('peak_rss_mb')} MB · {res.get('wall_s')}초")
         shutil.rmtree(work, ignore_errors=True)

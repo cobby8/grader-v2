@@ -97,7 +97,8 @@
 
   "CUFF_0": [0, 0], "CUFF_1": ["CUFF_L", 0], "CUFF_2": ["CUFF_L", "CUFF_H"], "CUFF_3": [0, "CUFF_H"],
   "CUFF_N1": ["CUFF_L / 4", 0], "CUFF_N2": ["CUFF_L / 2", 0], "CUFF_N3": ["CUFF_L * 3 / 4", 0],
-  "CUFF_F0": [0, "CUFF_H / 2"], "CUFF_F1": ["CUFF_L", "CUFF_H / 2"]
+  "CUFF_F0": [0, "CUFF_H / 2"], "CUFF_F1": ["CUFF_L", "CUFF_H / 2"],
+  "ARM_Y": {"walk": "ARM", "s": "length(ARM_UP)"}
  },
 
  "paths": {
@@ -123,6 +124,28 @@
   "소매 밑선 길이": "dist(CAP_END, SLV_HEM)"
  },
 
+ "sewing": {
+  "note": "솔기 대조 짝(seam_check.py) — 오른쪽 반만 잰다(왼쪽은 거울). ARM_Y = 진동둘레와 요크선이 만나는 점",
+  "tol_mm": 1.0, "warn_mm": 3.0,
+  "seams": [
+   {"key": "shoulder", "ko": "어깨", "kind": "equal", "a": [["앞 요크", "HPS", "SP"]], "b": [["뒤 요크", "HPS", "SP"]]},
+   {"key": "yoke_front", "ko": "앞 요크선", "kind": "equal", "a": [["앞 요크", "@ARM_Y", "YOKE_C"]], "b": [["앞판", "YOKE_C", "@ARM_Y"]]},
+   {"key": "yoke_back", "ko": "뒤 요크선", "kind": "equal", "a": [["뒤 요크", "@ARM_Y", "YOKE_C"]], "b": [["뒤판", "YOKE_C", "@ARM_Y"]]},
+   {"key": "side", "ko": "옆선", "kind": "equal", "a": [["앞판", "UA", "HEM"]], "b": [["뒤판", "UA", "HEM"]]},
+   {"key": "armhole_front", "ko": "진동 ↔ 소매산(앞)", "kind": "ease", "min": 0, "max": 20,
+    "a": [["앞 요크", "SP", "@ARM_Y"], ["앞판", "@ARM_Y", "UA"]], "b": [["소매", "CAP_TOP", "CAP_END"]], "notches": [["N_ARM_F", "N_CAP_F"]]},
+   {"key": "armhole_back", "ko": "진동 ↔ 소매산(뒤)", "kind": "ease", "min": 0, "max": 20,
+    "a": [["뒤 요크", "SP", "@ARM_Y"], ["뒤판", "@ARM_Y", "UA"]], "b": [["소매", "CAP_TOP", "CAP_END_L", "rev"]],
+    "notches": [["N_ARM_B1", "N_CAP_B1"], ["N_ARM_B2", "N_CAP_B2"]]},
+   {"key": "underarm", "ko": "소매 밑선", "kind": "equal", "a": [["소매", "CAP_END", "SLV_HEM"]], "b": [["소매", "CAP_END_L", "SLV_HEM_L", "rev"]]},
+   {"key": "cuff", "ko": "소매 끝 ↔ 커프스", "kind": "ratio", "min": 0.4, "max": 1.0, "same_sa": false,
+    "a": [["소매", "SLV_HEM", "SLV_HEM_L"]], "b": [["커프스", "CUFF_0", "CUFF_1"]]},
+   {"key": "neck_front", "ko": "앞 목 ↔ 넥 립", "kind": "ratio", "min": 0.75, "max": 1.0, "same_sa": false,
+    "a": [["앞 요크", "V", "HPS"]], "b": [["넥 립", "RIB_0", "@RIB_N1"]]},
+   {"key": "neck_back", "ko": "뒷목 ↔ 넥 립", "kind": "ratio", "min": 0.75, "max": 1.0, "same_sa": false,
+    "a": [["뒤 요크", "HPS", "BN0", "rev"], ["뒤 요크", "BN0", "HPS_L", "rev"]], "b": [["넥 립", "@RIB_N1", "@RIB_N3"]]}
+  ]
+ },
  "pieces": {
   "뒤 요크": {"en_name": "BACK YOKE", "qty": 1, "grain": "세로", "mirror_x": true,
             "outline": ["BN0", "BACK_NECK", "HPS", "SP", "ARM_UP", "YOKE_C"],

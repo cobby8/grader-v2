@@ -101,6 +101,9 @@ class CadIntake(_Base, _Jobs):
             j = self.wait_job(r.json()["job_id"])
             self.assertEqual(j["status"], "done", j)
             self.assertEqual(j["result"]["version"], want); self.assertEqual(j["result"]["sizes"], sizes)
+            sm = j["result"]["seams"]                                           # 솔기 대조 요약 — 길이 짝은 다 맞음
+            self.assertEqual((sm["pairs"], sm["ok"], sm["bad"]), (10, True, 0))
+            self.assertEqual(self.rows[self.ID]["data"]["build"]["seams"]["pairs"], 10)
             b = self.rows[self.ID]["data"]["build"]
             self.assertEqual((b["status"], b["ver"]), ("stored", want))
         self.assertTrue(any(k.startswith(f"{SID}/v2/") for k in self.store))

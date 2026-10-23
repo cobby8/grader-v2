@@ -93,6 +93,8 @@
   .ik-pat--error { background: var(--ink-100); color: var(--red-700); }
   .ik-build { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--ink-100); }
   .ik-build__err { color: var(--red-700); font: var(--text-sm); margin: 4px 0 8px; }
+  .ik-build__seam { font: var(--text-sm); margin: 6px 0 0; }
+  .ik-build__seam ul { margin: 4px 0 0; padding-left: 18px; color: var(--text-muted); }
   .ik-build__md { white-space: pre-wrap; font: var(--text-sm); background: var(--ink-100); border-radius: 8px; padding: 10px; margin: 8px 0 0; max-height: 60vh; overflow: auto; }
 
   /* 단계 띠 */
@@ -1156,6 +1158,7 @@ function buildBox() {
     const as = (b.assumed || []).length, only = (b.sizes || []).length === 1;
     h += '<div class="ik-ok">' + (b.status === "stored" ? "재단 패턴 v" + esc(b.ver) + " 저장 · 검토 대기" : only ? "기준 사이즈 " + esc(b.base_size || b.sizes[0]) + " 패턴 완성" : "패턴 완성") + "</div>" +
       '<div class="ik-muted">' + esc((b.sizes || []).join("·")) + " · 조각 " + esc(b.pieces) + (as ? " · 가정한 증분 " + as + "칸(확인표 ※)" : "") + "</div>";
+    h += seamLine(b.seams);
     const st = b.status === "stored" ? b : b.last_stored;   // 직원이 다시 만들어도 관리자가 저장한 판은 남는다
     if (st && st.ver) h += (b.status === "stored" ? "" : '<div class="ik-muted">저장된 판: 재단 패턴 v' + esc(st.ver) + " · " + esc((st.sizes || []).join("·")) + "</div>") +
       '<button class="btn btn--secondary btn--block" style="margin-top:8px" type="button" id="patOpen" data-cad="' + esc(encodeURIComponent(st.style_id) + "/v" + encodeURIComponent(st.ver)) + '"><span class="material-symbols-outlined">straighten</span>재단 패턴 보기</button>';
@@ -1180,6 +1183,15 @@ function buildBox() {
     : (b && b.status === "stored" ? "" : done ? "같은 사이즈로 다시 만들기" : "패턴 만들기");
   if (label) h += '<button class="btn btn--' + (done ? "secondary" : "primary") + ' btn--block" style="margin-top:8px" type="button" id="patBuild" data-sizes="' + esc(again.join(" ")) + '">' + label + "</button>";
   return h + "</div>";
+}
+// 솔기 대조 — 꿰매지는 짝끼리 길이·시접·노치가 맞는지(엔진 seam_check) 한 줄 + 걸린 것 목록
+function seamLine(sm) {
+  if (!sm || !sm.pairs) return "";
+  const n = (sm.bad || 0) + (sm.warn || 0);
+  const head = sm.bad ? '<span style="color:var(--red-700)">솔기 대조 ' + sm.pairs + "쌍 · 어긋남 " + sm.bad + (sm.warn ? " · 주의 " + sm.warn : "") + "</span>"
+    : sm.warn ? '<span style="color:var(--amber-700)">솔기 대조 ' + sm.pairs + "쌍 · 길이는 맞음 · 주의 " + sm.warn + "</span>"
+    : '<span style="color:var(--green-700)">솔기 대조 ' + sm.pairs + "쌍 모두 맞음</span>";
+  return '<div class="ik-build__seam">' + head + (n ? "<ul>" + (sm.issues || []).slice(0, 6).map((t) => "<li>" + esc(t) + "</li>").join("") + "</ul>" : "") + "</div>";
 }
 function refreshBuild() {
   const box = $("#buildBox");
@@ -1208,7 +1220,7 @@ async function startBuild(sizes) {                     // sizes 없으면 기준
       if (j.status === "done") {
         const x = j.result || {};
         const b = { status: x.stored ? "stored" : "built", style_id: x.style_id, ver: x.version, sizes: x.sizes, pieces: x.pieces,
-          base_size: x.base_size, available: x.available || [], assumed: x.assumed || [], confirm_md: x.confirm_md || "", at: new Date().toISOString() };
+          base_size: x.base_size, available: x.available || [], assumed: x.assumed || [], seams: x.seams || null, confirm_md: x.confirm_md || "", at: new Date().toISOString() };
         BUILD = null;
         if (cur && cur.id === id) {
           const old = D.build || {};                       // 서버의 _merge_build 와 같은 규칙 — 관리자가 저장한 판은 남긴다
